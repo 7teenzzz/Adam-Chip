@@ -1,0 +1,13 @@
+{
+    "files.associations": {
+        "*.ino": "cpp",
+        "*.tpp": "cpp"
+    },
+    "adamchip.esp32.compilerPath": "C:/path/to/Arduino15/packages/esp32/tools/esp-x32/2601/bin/xtensa-esp32s3-elf-g++.exe",
+    "adamchip.esp32.arduinoCore": "C:/path/to/Arduino15/packages/esp32/hardware/esp32/3.3.8/cores/esp32",
+    "adamchip.esp32.variantPath": "C:/path/to/Arduino15/packages/esp32/hardware/esp32/3.3.8/variants/esp32s3",
+    "adamchip.esp32.arduinoLibraries": "C:/path/to/Arduino15/packages/esp32/hardware/esp32/3.3.8/libraries",
+    "adamchip.esp32.libsRoot": "C:/path/to/Arduino15/packages/esp32/tools/esp32s3-libs/3.3.8",
+    "adamchip.esp32.cameraInclude": "C:/path/to/Arduino15/packages/esp32/tools/esp32s3-libs/3.3.8/include/espressif__esp32-camera/driver/include",
+    "adamchip.esp32.sdkconfigInclude": "C:/path/to/Arduino15/packages/esp32/tools/esp32s3-libs/3.3.8/dio_qspi/include"
+}

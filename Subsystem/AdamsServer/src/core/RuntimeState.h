@@ -1,0 +1,82 @@
+#pragma once
+
+#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
+
+struct RuntimeState {
+  volatile uint32_t videoClients = 0;
+  volatile uint32_t audioClients = 0;
+  volatile uint32_t websocketClients = 0;
+  volatile uint32_t frameTimeMs = 0;
+  volatile uint32_t frameRateTimes10 = 0;
+  volatile uint32_t lastFrameSize = 0;
+  volatile uint32_t cameraConfigRevision = 0;
+  volatile uint32_t cameraGeneration = 0;
+  volatile bool cameraProducerRunning = false;
+  volatile uint32_t captureFrameTimeMs = 0;
+  volatile uint32_t captureFrameRateTimes10 = 0;
+  volatile uint32_t lastJpegSize = 0;
+  volatile uint32_t latestFrameSequence = 0;
+  volatile uint32_t streamRestarts = 0;
+  volatile uint32_t streamDrops = 0;
+  volatile uint32_t cameraReinitCount = 0;
+  volatile uint32_t streamSendTimeMs = 0;
+  volatile uint32_t audioWriteSequenceLow = 0;
+  volatile uint32_t audioWriteSequenceHigh = 0;
+  volatile uint32_t audioLastSampleMs = 0;
+  volatile uint32_t lightRaw = 0;
+  volatile float lightNorm = 0.0f;
+  volatile bool motion = false;
+  volatile uint32_t motionChangedAtMs = 0;
+  volatile bool cameraReady = false;
+  volatile bool audioReady = false;
+  volatile bool speakerReady = false;
+  volatile bool webReady = false;
+  volatile int8_t cameraFramesize = -1;
+  volatile int8_t cameraQuality = -1;
+  volatile int8_t cameraBrightness = 0;
+  volatile int8_t cameraContrast = 0;
+  volatile int8_t cameraSaturation = 0;
+  volatile int8_t cameraSharpness = 0;
+  volatile int8_t cameraDenoise = 0;
+  volatile int8_t cameraGainCeiling = 0;
+  volatile bool cameraAwb = true;
+  volatile bool cameraAgc = true;
+  volatile bool cameraAec = true;
+  volatile bool cameraHmirror = false;
+  volatile bool cameraVflip = false;
+  volatile bool speakerClientActive = false;
+  volatile uint32_t speakerBufferFill = 0;
+  volatile uint32_t speakerUnderruns = 0;
+  volatile uint32_t speakerOverflows = 0;
+  volatile bool sensorsReady = false;
+  volatile bool pca9685Ready = false;
+  volatile bool otaReady = false;
+  volatile bool otaInProgress = false;
+  volatile bool otaRebootPending = false;
+  volatile uint8_t otaProgressPercent = 0;
+  volatile uint32_t otaBytesReceived = 0;
+  volatile uint32_t otaTotalBytes = 0;
+  volatile bool wifiConnected = false;
+  volatile int32_t wifiRssi = 0;
+  volatile uint8_t pca9685Address = 0;
+  volatile uint16_t pca9685Frequency = 0;
+  volatile uint16_t pca9685Channels[16] = {0};
+  char bootStage[24] = "boot";
+  char lastInitError[64] = "";
+  char wifiIp[16] = "0.0.0.0";
+  char cameraPreset[16] = "balanced";
+  char activeScene[32] = "";
+  char lastCameraReinitReason[32] = "boot";
+  char otaLastError[64] = "";
+  char otaLastResult[32] = "idle";
+};
+
+extern RuntimeState gRuntimeState;
+extern portMUX_TYPE gRuntimeStateMux;
+
+void runtimeSetBootStage(const char *stage);
+void runtimeSetLastInitError(const char *error);
+void runtimeClearLastInitError();
+void runtimeSetWifiState(bool connected, int32_t rssi, const IPAddress &ip);
