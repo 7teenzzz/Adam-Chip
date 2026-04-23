@@ -57,6 +57,14 @@ struct CameraControlUpdate {
   bool vflip = false;
 };
 
+enum class LatestFrameCopyStatus : uint8_t {
+  Ok = 0,
+  InvalidArgs = 1,
+  MutexTimeout = 2,
+  NoNewFrame = 3,
+  CapacityTooSmall = 4
+};
+
 bool initCamera();
 sensor_t *getCameraSensor();
 camera_fb_t *captureCameraFrame();
@@ -69,7 +77,14 @@ uint32_t getCameraConfigRevision();
 uint32_t getCameraGeneration();
 uint32_t getLatestCameraFrameSequence();
 size_t getLatestCameraFrameSize();
-bool copyLatestCameraFrame(uint8_t *dst, size_t capacity, size_t &outLength, int64_t &outTimestampUs, uint32_t &outSequence, uint32_t minimumSequence = 0);
+bool copyLatestCameraFrame(
+  uint8_t *dst,
+  size_t capacity,
+  size_t &outLength,
+  int64_t &outTimestampUs,
+  uint32_t &outSequence,
+  uint32_t minimumSequence = 0,
+  LatestFrameCopyStatus *outStatus = nullptr);
 size_t getCameraPresetCount();
 bool getCameraPresetDescriptor(size_t index, CameraPresetDescriptor &descriptor);
 bool saveCameraPreset(const char *presetName);

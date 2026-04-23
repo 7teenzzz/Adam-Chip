@@ -16,6 +16,7 @@
 #include "../camera/CameraModule.h"
 #include "../io/Pca9685Module.h"
 #include "../core/RuntimeState.h"
+#include "../core/VideoLatencyMetrics.h"
 
 namespace {
 
@@ -28,6 +29,7 @@ constexpr char kStreamContentType[] = "multipart/x-mixed-replace;boundary=123456
 constexpr char kStreamBoundaryChunk[] = "\r\n--123456789000000000000987654321\r\n";
 constexpr char kAudioContentType[] = "audio/wav";
 constexpr size_t kOtaChunkBytes = 2048;
+constexpr uint32_t kStreamStaleFrameThresholdMs = 1000;
 
 struct WavHeader {
   char riff[4];
@@ -79,6 +81,87 @@ void appendCommonStatusFields(String &json) {
   json += String(ESP.getFreeHeap());
   json += ",\"psram_free\":";
   json += String(ESP.getFreePsram());
+}
+
+void appendLatencySummaryJson(String &json, const LatencyMetricSummary &summary) {
+  json += "{\"samples\":";
+  json += String(summary.samples);
+  json += ",\"min_ms\":";
+  json += String(summary.minMs);
+  json += ",\"avg_ms\":";
+  json += String(summary.avgMs);
+  json += ",\"p95_ms\":";
+  json += String(summary.p95Ms);
+  json += ",\"max_ms\":";
+  json += String(summary.maxMs);
+  json += "}";
+}
+
+void appendLatencySummaryUsJson(String &json, const LatencyMetricSummaryUs &summary) {
+  json += "{\"samples\":";
+  json += String(summary.samples);
+  json += ",\"min_us\":";
+  json += String(summary.minUs);
+  json += ",\"avg_us\":";
+  json += String(summary.avgUs);
+  json += ",\"p95_us\":";
+  json += String(summary.p95Us);
+  json += ",\"max_us\":";
+  json += String(summary.maxUs);
+  json += "}";
+}
+
+void appendVideoLatencyJson(String &json) {
+  VideoLatencySnapshot snapshot = {};
+  videoLatencyGetSnapshot(snapshot);
+
+  json += "\"video_latency\":{";
+  json += "\"window_sec\":60";
+
+  json += ",\"capture_wait_ms\":";
+  appendLatencySummaryJson(json, snapshot.captureWaitMs);
+  json += ",\"producer_copy_ms\":";
+  appendLatencySummaryJson(json, snapshot.producerCopyMs);
+  json += ",\"latest_lock_wait_ms\":";
+  appendLatencySummaryJson(json, snapshot.latestLockWaitMs);
+  json += ",\"frame_age_before_send_ms\":";
+  appendLatencySummaryJson(json, snapshot.frameAgeBeforeSendMs);
+  json += ",\"send_boundary_ms\":";
+  appendLatencySummaryJson(json, snapshot.sendBoundaryMs);
+  json += ",\"send_header_ms\":";
+  appendLatencySummaryJson(json, snapshot.sendHeaderMs);
+  json += ",\"send_payload_ms\":";
+  appendLatencySummaryJson(json, snapshot.sendPayloadMs);
+  json += ",\"producer_copy_us\":";
+  appendLatencySummaryUsJson(json, snapshot.producerCopyUs);
+  json += ",\"latest_lock_wait_us\":";
+  appendLatencySummaryUsJson(json, snapshot.latestLockWaitUs);
+  json += ",\"send_boundary_us\":";
+  appendLatencySummaryUsJson(json, snapshot.sendBoundaryUs);
+  json += ",\"send_header_us\":";
+  appendLatencySummaryUsJson(json, snapshot.sendHeaderUs);
+  json += ",\"send_payload_us\":";
+  appendLatencySummaryUsJson(json, snapshot.sendPayloadUs);
+  json += ",\"stream_loop_ms\":";
+  appendLatencySummaryJson(json, snapshot.streamLoopMs);
+  json += ",\"e2e_estimate_ms\":";
+  appendLatencySummaryJson(json, snapshot.e2eEstimateMs);
+
+  json += ",\"counters\":{";
+  json += "\"copy_frame_miss_count\":";
+  json += String(snapshot.copyFrameMissCount);
+  json += ",\"no_new_frame_poll_count\":";
+  json += String(snapshot.noNewFramePollCount);
+  json += ",\"latest_mutex_timeout_count\":";
+  json += String(snapshot.latestMutexTimeoutCount);
+  json += ",\"slow_send_strike_count\":";
+  json += String(snapshot.slowSendStrikeCount);
+  json += ",\"buffer_realloc_count\":";
+  json += String(snapshot.bufferReallocCount);
+  json += ",\"frame_skipped_due_stale\":";
+  json += String(snapshot.frameSkippedDueStale);
+  json += "}";
+  json += "}";
 }
 
 void appendPcaJson(String &json) {
@@ -416,6 +499,8 @@ void buildStatusJson(String &json) {
   json += ",\"last_camera_reinit_reason\":\"";
   json += lastReinitReason;
   json += "\",";
+  appendVideoLatencyJson(json);
+  json += ",";
   appendCameraJson(json);
   json += ",";
   appendOtaJson(json);
@@ -608,7 +693,7 @@ void buildDashboardJson(String &json) {
   lastStreamError[sizeof(lastStreamError) - 1] = '\0';
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
-  json.reserve(1024);
+  json.reserve(2048);
   json = "{";
   appendCommonStatusFields(json);
   json += ",\"wifi_connected\":";
@@ -652,6 +737,16 @@ void buildDashboardJson(String &json) {
   json += ",\"last_stream_error\":\"";
   json += lastStreamError;
   json += "\"";
+  VideoLatencySnapshot latency = {};
+  videoLatencyGetSnapshot(latency);
+  json += ",\"video_e2e_p95_ms\":";
+  json += String(latency.e2eEstimateMs.p95Ms);
+  json += ",\"video_e2e_avg_ms\":";
+  json += String(latency.e2eEstimateMs.avgMs);
+  json += ",\"video_send_payload_p95_ms\":";
+  json += String(latency.sendPayloadMs.p95Ms);
+  json += ",";
+  appendVideoLatencyJson(json);
   json += ",\"audio_ready\":";
   json += audioReady ? "true" : "false";
   json += ",\"speaker_ready\":";
@@ -1182,15 +1277,67 @@ const char kLivePage[] PROGMEM =
   if (embedded) document.getElementById('topbar').classList.add('hidden');
   const img=document.getElementById('video'); const ov=document.getElementById('ov'); const meta=document.getElementById('meta');
   let mode='stream'; let fails=0; let timer=null; let capturePollMs=700;
+  let telemetryTimer=null; let serverE2eP95Ms=0; let liveFps=0;
+  let serverClockOffsetMs=null; let clientE2eMs=0; let blobUrl='';
   function streamUrl(){ return `http://${location.hostname}:81/stream?ts=${Date.now()}`; }
   function captureUrl(){ return `/capture?ts=${Date.now()}`; }
-  function setOverlay(text){ ov.textContent=text; meta.textContent=text; }
+  function tsHeaderToMs(ts){
+    if(!ts || typeof ts!=='string') return null;
+    const parts=ts.split('.');
+    if(parts.length!==2) return null;
+    const sec=Number(parts[0]); const usec=Number(parts[1]);
+    if(Number.isNaN(sec) || Number.isNaN(usec)) return null;
+    return sec*1000 + usec/1000;
+  }
+  function overlayText(base){
+    const fpsText = liveFps>0 ? `FPS ${liveFps.toFixed(1)}` : 'FPS n/a';
+    const serverText = serverE2eP95Ms>0 ? `srv E2E p95 ${serverE2eP95Ms} ms` : 'srv E2E n/a';
+    const clientText = mode==='capture' && clientE2eMs>0 ? ` | cli E2E ${Math.round(clientE2eMs)} ms` : '';
+    return `${base} | ${fpsText} | ${serverText}${clientText}`;
+  }
+  function setOverlay(text){ const v=overlayText(text); ov.textContent=v; meta.textContent=v; }
   function clearTimer(){ if(timer){ clearTimeout(timer); timer=null; } }
   function schedule(ms){ clearTimer(); timer=setTimeout(load, ms); }
+  async function refreshTelemetry(){
+    try{
+      const r=await fetch('/api/dashboard',{cache:'no-store'});
+      if(!r.ok) return;
+      const d=await r.json();
+      liveFps=Number(d.fps||0);
+      if(d.video_latency && d.video_latency.e2e_estimate_ms){
+        serverE2eP95Ms=Number(d.video_latency.e2e_estimate_ms.p95_ms||0);
+      }else{
+        serverE2eP95Ms=Number(d.video_e2e_p95_ms||0);
+      }
+    }catch(_e){}
+  }
+  function applyCaptureTimestamp(tsHeader){
+    const serverTsMs=tsHeaderToMs(tsHeader);
+    if(serverTsMs===null) return;
+    const nowMs=Date.now();
+    const rawOffset=nowMs-serverTsMs;
+    if(serverClockOffsetMs===null){
+      serverClockOffsetMs=rawOffset;
+    }else{
+      serverClockOffsetMs=(serverClockOffsetMs*0.9)+(rawOffset*0.1);
+    }
+    clientE2eMs=Math.max(0, nowMs-(serverTsMs+serverClockOffsetMs));
+  }
+  async function loadCaptureFrame(){
+    const response=await fetch(captureUrl(),{cache:'no-store'});
+    if(!response.ok) throw new Error(`capture ${response.status}`);
+    applyCaptureTimestamp(response.headers.get('X-Timestamp'));
+    const frameBlob=await response.blob();
+    const nextUrl=URL.createObjectURL(frameBlob);
+    const oldUrl=blobUrl;
+    blobUrl=nextUrl;
+    img.src=nextUrl;
+    if(oldUrl){ URL.revokeObjectURL(oldUrl); }
+  }
   function load(){
     if(mode==='stream'){ setOverlay(`stream mode | retries ${fails}`); img.src=streamUrl(); return; }
     setOverlay(`capture fallback | ${capturePollMs} ms`);
-    img.src=captureUrl();
+    loadCaptureFrame().catch(()=>{ if(typeof img.onerror==='function'){ img.onerror(); } });
   }
   img.onload=()=>{ fails=0; if(mode==='capture'){ schedule(capturePollMs); } else { setOverlay('stream ok'); } };
   img.onerror=()=>{
@@ -1202,6 +1349,8 @@ const char kLivePage[] PROGMEM =
     schedule(capturePollMs);
   };
   document.getElementById('reload-live').onclick=()=>{ mode='stream'; fails=0; load(); };
+  refreshTelemetry();
+  telemetryTimer=setInterval(()=>{refreshTelemetry();},1000);
   load();
   </script></body></html>)HTML";
 
@@ -1558,6 +1707,14 @@ esp_err_t dashboardHandler(httpd_req_t *req) {
   return sendJson(req, json);
 }
 
+esp_err_t videoLatencyResetHandler(httpd_req_t *req) {
+  videoLatencyReset();
+  String json;
+  json.reserve(64);
+  json = "{\"ok\":true,\"message\":\"video_latency_reset\"}";
+  return sendJson(req, json);
+}
+
 
 esp_err_t pcaStatusHandler(httpd_req_t *req) {
   String json;
@@ -1860,8 +2017,8 @@ esp_err_t streamHandler(httpd_req_t *req) {
 
   esp_err_t result = ESP_OK;
   int64_t lastFrameAtUs = 0;
-  uint8_t *frameBuffer = nullptr;
-  size_t frameBufferCapacity = 0;
+  uint8_t *frameBuffer = static_cast<uint8_t *>(malloc(kStreamFrameBufferReserveBytes));
+  size_t frameBufferCapacity = frameBuffer == nullptr ? 0 : kStreamFrameBufferReserveBytes;
   uint32_t lastSentSequence = 0;
   uint8_t slowSendStrikes = 0;
   const char *streamErrorCode = "client_closed";
@@ -1869,6 +2026,7 @@ esp_err_t streamHandler(httpd_req_t *req) {
   bool clientResetLikely = false;
 
   while (result == ESP_OK) {
+    const int64_t loopStartedUs = esp_timer_get_time();
     noteCameraStreamDemand();
     portENTER_CRITICAL(&gRuntimeStateMux);
     const uint32_t currentGeneration = gRuntimeState.cameraGeneration;
@@ -1896,21 +2054,50 @@ esp_err_t streamHandler(httpd_req_t *req) {
       }
       frameBuffer = newBuffer;
       frameBufferCapacity = requiredFrameBytes;
+      videoLatencyIncrementBufferRealloc();
     }
 
     size_t frameLength = 0;
     int64_t timestampUs = 0;
     uint32_t frameSequence = 0;
-    if (!copyLatestCameraFrame(frameBuffer, frameBufferCapacity, frameLength, timestampUs, frameSequence, lastSentSequence)) {
-      if (frameLength > frameBufferCapacity) {
+    LatestFrameCopyStatus copyStatus = LatestFrameCopyStatus::InvalidArgs;
+    if (!copyLatestCameraFrame(
+        frameBuffer,
+        frameBufferCapacity,
+        frameLength,
+        timestampUs,
+        frameSequence,
+        lastSentSequence,
+        &copyStatus)) {
+      if (copyStatus == LatestFrameCopyStatus::NoNewFrame) {
+        videoLatencyIncrementNoNewFramePoll();
+        vTaskDelay(pdMS_TO_TICKS(5));
         continue;
+      }
+      if (copyStatus == LatestFrameCopyStatus::CapacityTooSmall || frameLength > frameBufferCapacity) {
+        continue;
+      }
+      if (copyStatus == LatestFrameCopyStatus::MutexTimeout || copyStatus == LatestFrameCopyStatus::InvalidArgs) {
+        videoLatencyIncrementCopyFrameMiss();
       }
       vTaskDelay(pdMS_TO_TICKS(5));
       continue;
     }
 
+    const int64_t frameCopiedAtUs = esp_timer_get_time();
+    const uint32_t frameAgeBeforeSendMs = static_cast<uint32_t>((frameCopiedAtUs - timestampUs) / 1000);
+    videoLatencyRecordFrameAgeBeforeSendMs(frameAgeBeforeSendMs);
+    if (frameAgeBeforeSendMs >= kStreamStaleFrameThresholdMs) {
+      videoLatencyIncrementFrameSkippedDueStale();
+      continue;
+    }
+
     const int64_t sendStartedUs = esp_timer_get_time();
+    const int64_t boundaryStartedUs = sendStartedUs;
     result = httpd_resp_send_chunk(req, kStreamBoundaryChunk, strlen(kStreamBoundaryChunk));
+    const uint32_t boundaryUs = static_cast<uint32_t>(esp_timer_get_time() - boundaryStartedUs);
+    videoLatencyRecordSendBoundaryMs(boundaryUs / 1000);
+    videoLatencyRecordSendBoundaryUs(boundaryUs);
     if (result != ESP_OK) {
       sendFailed = true;
       clientResetLikely = true;
@@ -1930,7 +2117,11 @@ esp_err_t streamHandler(httpd_req_t *req) {
         tsSec,
         tsUsec
       );
+      const int64_t headerStartedUs = esp_timer_get_time();
       result = httpd_resp_send_chunk(req, header, headerLen);
+      const uint32_t headerUs = static_cast<uint32_t>(esp_timer_get_time() - headerStartedUs);
+      videoLatencyRecordSendHeaderMs(headerUs / 1000);
+      videoLatencyRecordSendHeaderUs(headerUs);
       if (result != ESP_OK) {
         sendFailed = true;
         clientResetLikely = true;
@@ -1939,7 +2130,11 @@ esp_err_t streamHandler(httpd_req_t *req) {
       }
     }
     if (result == ESP_OK) {
+      const int64_t payloadStartedUs = esp_timer_get_time();
       result = httpd_resp_send_chunk(req, reinterpret_cast<const char *>(frameBuffer), frameLength);
+      const uint32_t payloadUs = static_cast<uint32_t>(esp_timer_get_time() - payloadStartedUs);
+      videoLatencyRecordSendPayloadMs(payloadUs / 1000);
+      videoLatencyRecordSendPayloadUs(payloadUs);
       if (result != ESP_OK) {
         sendFailed = true;
         clientResetLikely = true;
@@ -1956,6 +2151,9 @@ esp_err_t streamHandler(httpd_req_t *req) {
       ? (frameSequence - lastSentSequence - 1)
       : 0;
     lastSentSequence = frameSequence;
+    const uint32_t e2eEstimateMs = static_cast<uint32_t>((nowUs - timestampUs) / 1000);
+    videoLatencyRecordE2eEstimateMs(e2eEstimateMs);
+    videoLatencyRecordStreamLoopMs(static_cast<uint32_t>((nowUs - loopStartedUs) / 1000));
     portENTER_CRITICAL(&gRuntimeStateMux);
     gRuntimeState.streamSendTimeMs = sendTimeMs;
     gRuntimeState.frameTimeMs = frameTimeMs;
@@ -1969,6 +2167,7 @@ esp_err_t streamHandler(httpd_req_t *req) {
 
     if (sendTimeMs >= kStreamSlowSendThresholdMs) {
       slowSendStrikes = static_cast<uint8_t>(slowSendStrikes + 1);
+      videoLatencyIncrementSlowSendStrike();
       if (slowSendStrikes >= kStreamSlowSendStrikeLimit) {
         result = ESP_ERR_TIMEOUT;
         portENTER_CRITICAL(&gRuntimeStateMux);
@@ -2372,6 +2571,7 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_uri_t sensorsUri = makeHttpUri("/api/sensors", HTTP_GET, sensorsHandler);
   httpd_uri_t statusUri = makeHttpUri("/api/status", HTTP_GET, statusHandler);
   httpd_uri_t dashboardUri = makeHttpUri("/api/dashboard", HTTP_GET, dashboardHandler);
+  httpd_uri_t videoLatencyResetUri = makeHttpUri("/api/video_latency/reset", HTTP_POST, videoLatencyResetHandler);
   httpd_uri_t otaStatusUri = makeHttpUri("/api/ota", HTTP_GET, otaStatusHandler);
   httpd_uri_t otaUploadUri = makeHttpUri("/api/ota/upload", HTTP_POST, otaUploadHandler);
   httpd_uri_t pcaStatusUri = makeHttpUri("/api/pca9685", HTTP_GET, pcaStatusHandler);
@@ -2412,6 +2612,7 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_register_uri_handler(server, &sensorsUri);
   httpd_register_uri_handler(server, &statusUri);
   httpd_register_uri_handler(server, &dashboardUri);
+  httpd_register_uri_handler(server, &videoLatencyResetUri);
   httpd_register_uri_handler(server, &otaStatusUri);
   httpd_register_uri_handler(server, &otaUploadUri);
   httpd_register_uri_handler(server, &pcaStatusUri);

@@ -58,6 +58,7 @@ inline constexpr uint32_t kCameraProducerWarmFrameIntervalMs = 180;
 inline constexpr uint32_t kCameraProducerFastGraceMs = 4000;
 inline constexpr uint32_t kStreamSlowSendThresholdMs = 900;
 inline constexpr uint8_t kStreamSlowSendStrikeLimit = 5;
+inline constexpr size_t kStreamFrameBufferReserveBytes = 196608;
 
 inline constexpr uint32_t kAudioSampleRate = 16000;
 inline constexpr uint8_t kAudioBitsPerSample = 16;

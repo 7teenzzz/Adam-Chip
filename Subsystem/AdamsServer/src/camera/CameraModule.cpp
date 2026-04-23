@@ -12,6 +12,7 @@
 #include "../../config/AdamsConfig.h"
 #include "../core/BootDiagnostics.h"
 #include "../core/RuntimeState.h"
+#include "../core/VideoLatencyMetrics.h"
 
 namespace {
 
@@ -48,76 +49,47 @@ size_t sLatestFrameLength = 0;
 int64_t sLatestFrameTimestampUs = 0;
 uint32_t sLatestFrameSequence = 0;
 
-constexpr CameraControlUpdate kRealtimePreset = {
-  true, FRAMESIZE_QVGA,
-  true, 20,
-  true, 0,
-  true, 0,
-  true, 0,
-  true, 1,
-  true, 0,
-  true, 1,
-  true, true,
-  true, true,
-  true, true,
-  true, false,
-  true, true
-};
+#define CAMERA_BALANCED_PRESET(FRAME_SIZE, JPEG_QUALITY) { \
+  true, FRAME_SIZE, \
+  true, JPEG_QUALITY, \
+  true, 0, \
+  true, 0, \
+  true, 0, \
+  true, 1, \
+  true, 1, \
+  true, 2, \
+  true, true, \
+  true, true, \
+  true, true, \
+  true, false, \
+  true, true \
+}
 
-constexpr CameraControlUpdate kQualityVgaPreset = {
-  true, FRAMESIZE_VGA,
-  true, 12,
-  true, 0,
-  true, 0,
-  true, 0,
-  true, 2,
-  true, 1,
-  true, 2,
-  true, true,
-  true, true,
-  true, true,
-  true, false,
-  true, true
-};
-
-constexpr CameraControlUpdate kQualitySvgaPreset = {
-  true, FRAMESIZE_SVGA,
-  true, 9,
-  true, 0,
-  true, 0,
-  true, 1,
-  true, 3,
-  true, 2,
-  true, 3,
-  true, true,
-  true, true,
-  true, true,
-  true, false,
-  true, true
-};
-
-constexpr CameraControlUpdate kQualityXgaPreset = {
-  true, FRAMESIZE_XGA,
-  true, 8,
-  true, 0,
-  true, 0,
-  true, 1,
-  true, 3,
-  true, 1,
-  true, 4,
-  true, true,
-  true, true,
-  true, true,
-  true, false,
-  true, true
-};
+constexpr CameraControlUpdate kPresetQqvga = CAMERA_BALANCED_PRESET(FRAMESIZE_QQVGA, 18);
+constexpr CameraControlUpdate kPresetHqvga = CAMERA_BALANCED_PRESET(FRAMESIZE_HQVGA, 18);
+constexpr CameraControlUpdate kPresetQvga = CAMERA_BALANCED_PRESET(FRAMESIZE_QVGA, 18);
+constexpr CameraControlUpdate kPresetCif = CAMERA_BALANCED_PRESET(FRAMESIZE_CIF, 14);
+constexpr CameraControlUpdate kPresetVga = CAMERA_BALANCED_PRESET(FRAMESIZE_VGA, 14);
+constexpr CameraControlUpdate kPresetSvga = CAMERA_BALANCED_PRESET(FRAMESIZE_SVGA, 11);
+constexpr CameraControlUpdate kPresetXga = CAMERA_BALANCED_PRESET(FRAMESIZE_XGA, 11);
+constexpr CameraControlUpdate kPresetHd = CAMERA_BALANCED_PRESET(FRAMESIZE_HD, 9);
+constexpr CameraControlUpdate kPresetSxga = CAMERA_BALANCED_PRESET(FRAMESIZE_SXGA, 9);
+constexpr CameraControlUpdate kPresetUxga = CAMERA_BALANCED_PRESET(FRAMESIZE_UXGA, 8);
 
 constexpr BuiltInCameraPreset kBuiltInCameraPresets[] = {
-  {"realtime", kRealtimePreset},
-  {"quality_vga", kQualityVgaPreset},
-  {"quality_svga", kQualitySvgaPreset},
-  {"quality_xga", kQualityXgaPreset},
+  {"qqvga", kPresetQqvga},
+  {"hqvga", kPresetHqvga},
+  {"qvga", kPresetQvga},
+  {"cif", kPresetCif},
+  {"vga", kPresetVga},
+  {"svga", kPresetSvga},
+  {"xga", kPresetXga},
+  {"hd", kPresetHd},
+  {"sxga", kPresetSxga},
+  {"uxga", kPresetUxga},
 };
+
+#undef CAMERA_BALANCED_PRESET
 
 constexpr size_t kBuiltInCameraPresetCount = sizeof(kBuiltInCameraPresets) / sizeof(kBuiltInCameraPresets[0]);
 
@@ -203,7 +175,7 @@ camera_config_t buildCameraConfig(const CameraControlState &state) {
 void fillStateFromSensor(sensor_t *sensor, CameraControlState &state) {
   memset(&state, 0, sizeof(state));
   if (sensor == nullptr) {
-    copyPresetName(state.preset, sizeof(state.preset), "realtime");
+    copyPresetName(state.preset, sizeof(state.preset), "hd");
     return;
   }
 
@@ -444,7 +416,10 @@ void cameraProducerTask(void *parameter) {
       continue;
     }
 
+    const int64_t captureWaitStartedUs = esp_timer_get_time();
     camera_fb_t *fb = esp_camera_fb_get();
+    const uint32_t captureWaitMs = static_cast<uint32_t>((esp_timer_get_time() - captureWaitStartedUs) / 1000);
+    videoLatencyRecordCaptureWaitMs(captureWaitMs);
     if (fb == nullptr) {
       if (sCameraMutex != nullptr) {
         xSemaphoreGive(sCameraMutex);
@@ -481,7 +456,12 @@ void cameraProducerTask(void *parameter) {
       continue;
     }
 
+    const int64_t copyStartedUs = esp_timer_get_time();
     memcpy(sLatestFrameBuffers[writeIndex], fb->buf, fb->len);
+    const uint32_t copyUs = static_cast<uint32_t>(esp_timer_get_time() - copyStartedUs);
+    const uint32_t copyMs = copyUs / 1000;
+    videoLatencyRecordProducerCopyMs(copyMs);
+    videoLatencyRecordProducerCopyUs(copyUs);
     const size_t frameLength = fb->len;
     const int64_t timestampUs = frameTimestampUs(fb);
     esp_camera_fb_return(fb);
@@ -662,7 +642,7 @@ bool initCamera() {
 
   memset(sStoredPresets, 0, sizeof(sStoredPresets));
 
-  const BuiltInCameraPreset *bootPreset = findBuiltInPreset("realtime");
+  const BuiltInCameraPreset *bootPreset = findBuiltInPreset("hd");
   const CameraControlUpdate bootUpdate = bootPreset == nullptr ? CameraControlUpdate{} : bootPreset->update;
 
   CameraControlState state = {};
@@ -679,8 +659,8 @@ bool initCamera() {
   state.aec = true;
   state.hmirror = false;
   state.vflip = true;
-  copyPresetName(state.preset, sizeof(state.preset), "realtime");
-  mergeState(state, bootUpdate, "realtime");
+  copyPresetName(state.preset, sizeof(state.preset), "hd");
+  mergeState(state, bootUpdate, "hd");
 
   if (!reinitializeCamera(state, "boot")) {
     return false;
@@ -832,23 +812,52 @@ size_t getLatestCameraFrameSize() {
   return length;
 }
 
-bool copyLatestCameraFrame(uint8_t *dst, size_t capacity, size_t &outLength, int64_t &outTimestampUs, uint32_t &outSequence, uint32_t minimumSequence) {
+bool copyLatestCameraFrame(
+  uint8_t *dst,
+  size_t capacity,
+  size_t &outLength,
+  int64_t &outTimestampUs,
+  uint32_t &outSequence,
+  uint32_t minimumSequence,
+  LatestFrameCopyStatus *outStatus) {
   outLength = 0;
   outTimestampUs = 0;
   outSequence = 0;
+  if (outStatus != nullptr) {
+    *outStatus = LatestFrameCopyStatus::InvalidArgs;
+  }
   if (dst == nullptr || capacity == 0 || sLatestFrameMutex == nullptr) {
     return false;
   }
 
+  const int64_t lockWaitStartedUs = esp_timer_get_time();
   if (xSemaphoreTake(sLatestFrameMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    const uint32_t waitUs = static_cast<uint32_t>(esp_timer_get_time() - lockWaitStartedUs);
+    const uint32_t waitMs = waitUs / 1000;
+    videoLatencyRecordLatestLockWaitMs(waitMs);
+    videoLatencyRecordLatestLockWaitUs(waitUs);
+    videoLatencyIncrementLatestMutexTimeout();
+    if (outStatus != nullptr) {
+      *outStatus = LatestFrameCopyStatus::MutexTimeout;
+    }
     return false;
   }
+  const uint32_t lockWaitUs = static_cast<uint32_t>(esp_timer_get_time() - lockWaitStartedUs);
+  const uint32_t lockWaitMs = lockWaitUs / 1000;
+  videoLatencyRecordLatestLockWaitMs(lockWaitMs);
+  videoLatencyRecordLatestLockWaitUs(lockWaitUs);
   if (!sLatestFrameReady || sLatestFrameSequence <= minimumSequence) {
+    if (outStatus != nullptr) {
+      *outStatus = LatestFrameCopyStatus::NoNewFrame;
+    }
     xSemaphoreGive(sLatestFrameMutex);
     return false;
   }
   if (capacity < sLatestFrameLength) {
     outLength = sLatestFrameLength;
+    if (outStatus != nullptr) {
+      *outStatus = LatestFrameCopyStatus::CapacityTooSmall;
+    }
     xSemaphoreGive(sLatestFrameMutex);
     return false;
   }
@@ -857,6 +866,9 @@ bool copyLatestCameraFrame(uint8_t *dst, size_t capacity, size_t &outLength, int
   outLength = sLatestFrameLength;
   outTimestampUs = sLatestFrameTimestampUs;
   outSequence = sLatestFrameSequence;
+  if (outStatus != nullptr) {
+    *outStatus = LatestFrameCopyStatus::Ok;
+  }
   xSemaphoreGive(sLatestFrameMutex);
   return true;
 }
@@ -942,7 +954,7 @@ bool deleteCameraPreset(const char *presetName) {
   const bool wasActive = strcmp(gRuntimeState.cameraPreset, presetName) == 0;
   portEXIT_CRITICAL(&gRuntimeStateMux);
   if (wasActive) {
-    setPresetName("realtime");
+    setPresetName("hd");
   }
   return true;
 }

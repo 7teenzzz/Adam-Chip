@@ -69,7 +69,7 @@ struct RuntimeState {
   char bootStage[24] = "boot";
   char lastInitError[64] = "";
   char wifiIp[16] = "0.0.0.0";
-  char cameraPreset[16] = "realtime";
+  char cameraPreset[16] = "hd";
   char activeScene[32] = "";
   char lastCameraReinitReason[32] = "boot";
   char lastStreamError[32] = "none";
