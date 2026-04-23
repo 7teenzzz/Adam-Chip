@@ -44,12 +44,7 @@ bool readRegister(uint8_t reg, uint8_t &value) {
   return true;
 }
 
-bool writeChannelRaw(uint8_t channel, uint16_t duty) {
-  if (channel >= 16) {
-    return false;
-  }
-
-  uint8_t payload[4] = {};
+void fillChannelPayload(uint16_t duty, uint8_t *payload) {
   if (duty == 0) {
     payload[0] = 0;
     payload[1] = 0;
@@ -66,6 +61,15 @@ bool writeChannelRaw(uint8_t channel, uint16_t duty) {
     payload[2] = duty & 0xFF;
     payload[3] = (duty >> 8) & 0x0F;
   }
+}
+
+bool writeChannelRaw(uint8_t channel, uint16_t duty) {
+  if (channel >= 16) {
+    return false;
+  }
+
+  uint8_t payload[4] = {};
+  fillChannelPayload(duty, payload);
 
   if (!writeRegisters(kLed0OnLowReg + (channel * 4), payload, sizeof(payload))) {
     return false;
@@ -75,6 +79,47 @@ bool writeChannelRaw(uint8_t channel, uint16_t duty) {
   gRuntimeState.pca9685Channels[channel] = duty;
   portEXIT_CRITICAL(&gRuntimeStateMux);
   return true;
+}
+
+bool writeAllChannelsRaw(const uint16_t *duties) {
+  if (duties == nullptr) {
+    return false;
+  }
+
+  uint8_t payload[16 * 4] = {};
+  for (uint8_t channel = 0; channel < 16; ++channel) {
+    fillChannelPayload(duties[channel], payload + (channel * 4));
+  }
+  if (!writeRegisters(kLed0OnLowReg, payload, sizeof(payload))) {
+    return false;
+  }
+
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  for (uint8_t channel = 0; channel < 16; ++channel) {
+    gRuntimeState.pca9685Channels[channel] = duties[channel];
+  }
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+  return true;
+}
+
+bool resolveDutyFromUpdate(const Pca9685ChannelUpdate &update, uint16_t &duty) {
+  if (update.channel >= 16) {
+    return false;
+  }
+
+  if (strcmp(update.mode, "off") == 0) {
+    duty = 0;
+    return true;
+  }
+  if (strcmp(update.mode, "on") == 0) {
+    duty = 4095;
+    return true;
+  }
+  if (strcmp(update.mode, "pwm") == 0) {
+    duty = min<uint16_t>(4095, update.value);
+    return true;
+  }
+  return false;
 }
 
 const Pca9685SceneConfig *findScene(const char *name) {
@@ -120,7 +165,15 @@ bool initPca9685() {
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
   bootLogf("pca9685", "ready, address=0x%02x, frequency=%u", kPca9685Address, kPca9685DefaultFrequency);
-  return applyPca9685Scene(kPca9685BootScene);
+  if (!applyPca9685Scene(kPca9685BootScene)) {
+    portENTER_CRITICAL(&gRuntimeStateMux);
+    gRuntimeState.pca9685Ready = false;
+    portEXIT_CRITICAL(&gRuntimeStateMux);
+    bootLogf("pca9685", "failed to apply boot scene '%s'", kPca9685BootScene);
+    return false;
+  }
+
+  return true;
 }
 
 bool setPca9685Frequency(uint16_t frequency) {
@@ -159,14 +212,8 @@ bool setPca9685Frequency(uint16_t frequency) {
 }
 
 bool applyPca9685Update(const Pca9685ChannelUpdate &update) {
-  uint16_t duty = update.value;
-  if (strcmp(update.mode, "off") == 0) {
-    duty = 0;
-  } else if (strcmp(update.mode, "on") == 0) {
-    duty = 4095;
-  } else if (strcmp(update.mode, "pwm") == 0) {
-    duty = min<uint16_t>(4095, update.value);
-  } else {
+  uint16_t duty = 0;
+  if (!resolveDutyFromUpdate(update, duty)) {
     return false;
   }
 
@@ -181,14 +228,32 @@ bool applyPca9685Update(const Pca9685ChannelUpdate &update) {
 }
 
 bool applyPca9685Updates(const Pca9685ChannelUpdate *updates, size_t count) {
-  if (updates == nullptr) {
+  if (updates == nullptr || count == 0) {
     return false;
   }
+
+  uint16_t duties[16] = {};
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  for (size_t i = 0; i < 16; ++i) {
+    duties[i] = gRuntimeState.pca9685Channels[i];
+  }
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+
   for (size_t i = 0; i < count; ++i) {
-    if (!applyPca9685Update(updates[i])) {
+    uint16_t duty = 0;
+    if (!resolveDutyFromUpdate(updates[i], duty)) {
       return false;
     }
+    duties[updates[i].channel] = duty;
   }
+  if (!writeAllChannelsRaw(duties)) {
+    return false;
+  }
+
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  strncpy(gRuntimeState.activeScene, "manual", sizeof(gRuntimeState.activeScene) - 1);
+  gRuntimeState.activeScene[sizeof(gRuntimeState.activeScene) - 1] = '\0';
+  portEXIT_CRITICAL(&gRuntimeStateMux);
   return true;
 }
 
@@ -198,10 +263,8 @@ bool applyPca9685Scene(const char *sceneName) {
     return false;
   }
 
-  for (uint8_t channel = 0; channel < 16; ++channel) {
-    if (!writeChannelRaw(channel, scene->values[channel])) {
-      return false;
-    }
+  if (!writeAllChannelsRaw(scene->values)) {
+    return false;
   }
 
   portENTER_CRITICAL(&gRuntimeStateMux);

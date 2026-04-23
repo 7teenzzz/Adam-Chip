@@ -24,6 +24,8 @@ struct CameraPresetDescriptor {
   char name[16];
   bool builtin;
   bool exists;
+  bool hasFramesize;
+  int framesize;
 };
 
 struct CameraControlUpdate {
@@ -55,16 +57,6 @@ struct CameraControlUpdate {
   bool vflip = false;
 };
 
-struct CameraFrameView {
-  const uint8_t *data = nullptr;
-  size_t length = 0;
-  uint32_t sequence = 0;
-  uint32_t generation = 0;
-  int64_t timestampUs = 0;
-  int cacheIndex = -1;
-  bool valid = false;
-};
-
 bool initCamera();
 sensor_t *getCameraSensor();
 camera_fb_t *captureCameraFrame();
@@ -72,12 +64,12 @@ void releaseCameraFrame(camera_fb_t *fb);
 bool getCameraControlState(CameraControlState &state);
 bool applyCameraControlUpdate(const CameraControlUpdate &update, const char *presetName = nullptr);
 bool applyCameraPreset(const char *presetName);
+void noteCameraStreamDemand();
 uint32_t getCameraConfigRevision();
 uint32_t getCameraGeneration();
 uint32_t getLatestCameraFrameSequence();
-bool getLatestCameraFrameView(CameraFrameView &view, uint32_t minimumSequence = 0);
-void releaseCameraFrameView(const CameraFrameView &view);
-bool copyLatestCameraFrame(uint8_t *dst, size_t capacity, size_t &outLength, int64_t &outTimestampUs, uint32_t &outSequence);
+size_t getLatestCameraFrameSize();
+bool copyLatestCameraFrame(uint8_t *dst, size_t capacity, size_t &outLength, int64_t &outTimestampUs, uint32_t &outSequence, uint32_t minimumSequence = 0);
 size_t getCameraPresetCount();
 bool getCameraPresetDescriptor(size_t index, CameraPresetDescriptor &descriptor);
 bool saveCameraPreset(const char *presetName);

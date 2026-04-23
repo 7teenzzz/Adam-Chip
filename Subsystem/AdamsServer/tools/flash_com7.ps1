@@ -166,6 +166,10 @@ if (-not $resolvedUploadPort) {
 
 $resolvedMonitorPort = Resolve-MonitorPort -Ports $ports -RequestedPort $MonitorPort -FallbackPort $resolvedUploadPort
 
+Write-Host "Selected upload port (effective): $resolvedUploadPort"
+Write-Host "Selected monitor port (effective): $resolvedMonitorPort"
+Write-Host ""
+
 Write-Host "Project root: $projectRoot"
 Write-Host "Subsystem dir: $subsystemDir"
 Write-Host "Sketch path : $sketchPath"
@@ -212,10 +216,12 @@ try {
 
     if ($Monitor) {
         Write-Host ""
+        Write-Host "Upload succeeded on $resolvedUploadPort."
         Write-Host "Opening serial monitor on $resolvedMonitorPort"
         & $arduinoCli monitor -p $resolvedMonitorPort -c baudrate=115200
     } else {
         Write-Host ""
+        Write-Host "Upload succeeded on $resolvedUploadPort."
         Write-Host "Flash completed. To open monitor, run:"
         Write-Host "powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1 -Monitor"
     }

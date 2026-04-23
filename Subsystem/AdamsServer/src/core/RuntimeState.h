@@ -22,6 +22,9 @@ struct RuntimeState {
   volatile uint32_t streamDrops = 0;
   volatile uint32_t cameraReinitCount = 0;
   volatile uint32_t streamSendTimeMs = 0;
+  volatile uint32_t streamTimeoutCloses = 0;
+  volatile uint32_t streamSendFailures = 0;
+  volatile uint32_t streamClientResets = 0;
   volatile uint32_t audioWriteSequenceLow = 0;
   volatile uint32_t audioWriteSequenceHigh = 0;
   volatile uint32_t audioLastSampleMs = 0;
@@ -66,9 +69,10 @@ struct RuntimeState {
   char bootStage[24] = "boot";
   char lastInitError[64] = "";
   char wifiIp[16] = "0.0.0.0";
-  char cameraPreset[16] = "balanced";
+  char cameraPreset[16] = "realtime";
   char activeScene[32] = "";
   char lastCameraReinitReason[32] = "boot";
+  char lastStreamError[32] = "none";
   char otaLastError[64] = "";
   char otaLastResult[32] = "idle";
 };

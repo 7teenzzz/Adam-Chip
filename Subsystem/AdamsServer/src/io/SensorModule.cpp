@@ -4,7 +4,6 @@
 
 #include "../../config/AdamsConfig.h"
 #include "../core/RuntimeState.h"
-#include "../web/WebServerModule.h"
 
 namespace {
 
@@ -15,16 +14,11 @@ float sLightEma = 0.0f;
 bool sMotionStable = false;
 bool sMotionLastRead = false;
 uint32_t sMotionLastEdgeAt = 0;
-uint32_t sLastTelemetryAt = 0;
 
 void sensorTask(void *parameter) {
   (void)parameter;
   while (true) {
     readSensors();
-    if (millis() - sLastTelemetryAt >= kTelemetryBroadcastMs) {
-      broadcastTelemetry();
-      sLastTelemetryAt = millis();
-    }
     vTaskDelay(pdMS_TO_TICKS(kSensorPollMs));
   }
 }
@@ -36,6 +30,7 @@ bool initSensors() {
   pinMode(LIGHT_SENSOR_PIN, INPUT);
   pinMode(MOTION_SENSOR_PIN, INPUT);
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(kI2cClockHz);
 
   portENTER_CRITICAL(&gRuntimeStateMux);
   gRuntimeState.motionChangedAtMs = millis();

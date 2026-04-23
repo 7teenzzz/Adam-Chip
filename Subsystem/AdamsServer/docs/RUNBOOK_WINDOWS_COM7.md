@@ -76,7 +76,8 @@ cd F:\Adam-Chip
 - `http://ESP32_IP/live`
 - `http://ESP32_IP/ota`
 - `http://ESP32_IP:81/stream`
-- `http://ESP32_IP/audio`
+- `http://ESP32_IP:82/audio`
+- `http://ESP32_IP:83/speaker`
 - `http://ESP32_IP/api/audio`
 - `http://ESP32_IP/api/audio/clip?ms=2000`
 - `http://ESP32_IP/api/ota`
@@ -130,14 +131,14 @@ curl.exe -X POST ^
 
 В прошивке есть два независимых аудиоканала:
 
-- `INMP441` = вход / микрофон / `GET /audio`
-- `PCM5102` = выход / playback / `POST /speaker`
+- `INMP441` = вход / микрофон / `GET :82/audio`
+- `PCM5102` = выход / playback / `POST :83/speaker`
 
 `PCM5102` не участвует в микрофонном capture-тракте.
 
 ## Как диагностировать микрофон
 
-### 1. Сначала смотреть JSON, а не слушать бесконечный `/audio` в браузере
+### 1. Сначала смотреть JSON, а не слушать бесконечный `:82/audio` в браузере
 
 ```powershell
 curl.exe http://ESP32_IP/api/audio
@@ -181,7 +182,7 @@ curl.exe -X POST http://ESP32_IP/api/audio ^
 ### 4. Машинная проверка бесконечного потока
 
 ```powershell
-ffmpeg -i http://ESP32_IP/audio -f null -
+ffmpeg -i http://ESP32_IP:82/audio -f null -
 ```
 
 ## Видео и go2rtc
@@ -192,7 +193,7 @@ ffmpeg -i http://ESP32_IP/audio -f null -
 streams:
   adams_cam:
     - ffmpeg:http://ESP32_IP:81/stream#video=mjpeg
-    - ffmpeg:http://ESP32_IP/audio#audio=pcm_s16le#audio=16000
+    - ffmpeg:http://ESP32_IP:82/audio#audio=pcm_s16le#audio=16000
 ```
 
 Локальная проверка видео:
@@ -206,13 +207,13 @@ ffmpeg -fflags nobuffer -flags low_delay -f mjpeg -i http://ESP32_IP:81/stream -
 WAV-файл:
 
 ```powershell
-curl.exe --data-binary "@input.wav" -H "Content-Type: audio/wav" http://ESP32_IP/speaker
+curl.exe --data-binary "@input.wav" -H "Content-Type: audio/wav" http://ESP32_IP:83/speaker
 ```
 
 Поток через `ffmpeg`:
 
 ```powershell
-ffmpeg -re -i input.wav -f s16le -acodec pcm_s16le -ac 1 -ar 16000 -chunked_post 0 http://ESP32_IP/speaker
+ffmpeg -re -i input.wav -f s16le -acodec pcm_s16le -ac 1 -ar 16000 -chunked_post 0 http://ESP32_IP:83/speaker
 ```
 
 ## PCA9685
@@ -234,3 +235,18 @@ curl.exe -X POST http://ESP32_IP/api/pca9685/channel -H "Content-Type: applicati
 ```powershell
 curl.exe -X POST http://ESP32_IP/api/pca9685/scene -H "Content-Type: application/json" -d "{\"scene\":\"all_on\"}"
 ```
+## Аварийное восстановление при `reset/empty-reply`
+
+Если `ping` проходит, но API часто отвечает `connection reset` или `empty reply`:
+
+1. Сначала переподключите питание или нажмите `EN/RESET`.
+2. Если не помогло, выполните чистую USB-прошивку через `COM7`:
+
+```powershell
+cd F:\Adam-Chip
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1 -Port COM7
+```
+
+3. После прошивки проверьте стабильность:
+- `http://ESP32_IP/api/status`
+- `http://ESP32_IP:81/stream`

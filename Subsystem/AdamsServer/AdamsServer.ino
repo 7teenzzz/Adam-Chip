@@ -58,7 +58,6 @@ void updateWifiRuntime(bool logTransitions) {
     } else {
       bootLog("wifi", "disconnected");
     }
-    broadcastTelemetry();
   }
 
   if (logTransitions && connected && ip != sLastLoggedIp) {
@@ -172,7 +171,6 @@ void tryStartWebServer() {
       bootLogf("web", "open http://%s", WiFi.localIP().toString().c_str());
     }
     bootSetStage("running");
-    broadcastTelemetry();
     return;
   }
 

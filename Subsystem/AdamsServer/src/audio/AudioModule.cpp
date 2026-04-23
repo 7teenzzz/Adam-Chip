@@ -174,8 +174,11 @@ void appendAudioBytes(const uint8_t *src, size_t length) {
 
   portENTER_CRITICAL(&sAudioMux);
   uint64_t sequence = sAudioWriteSequence;
-  for (size_t i = 0; i < length; ++i) {
-    sAudioRing[(sequence + i) % kAudioRingBufferBytes] = src[i];
+  size_t writeIndex = static_cast<size_t>(sequence % kAudioRingBufferBytes);
+  size_t firstCopy = min(length, kAudioRingBufferBytes - writeIndex);
+  memcpy(sAudioRing + writeIndex, src, firstCopy);
+  if (firstCopy < length) {
+    memcpy(sAudioRing, src + firstCopy, length - firstCopy);
   }
   sAudioWriteSequence += length;
   sAudioLastSampleMs = millis();
@@ -524,8 +527,11 @@ void speakerPlaybackTask(void *parameter) {
     const size_t wantedBytes = kSpeakerTxChunkSamples * sizeof(int16_t);
     const size_t bytesToRead = min(availableBytes, wantedBytes);
 
-    for (size_t i = 0; i < bytesToRead; ++i) {
-      reinterpret_cast<uint8_t *>(monoSamples)[i] = sSpeakerRing[(sSpeakerReadIndex + i) % kSpeakerRingBufferBytes];
+    uint8_t *monoBytes = reinterpret_cast<uint8_t *>(monoSamples);
+    const size_t firstCopy = min(bytesToRead, kSpeakerRingBufferBytes - sSpeakerReadIndex);
+    memcpy(monoBytes, sSpeakerRing + sSpeakerReadIndex, firstCopy);
+    if (firstCopy < bytesToRead) {
+      memcpy(monoBytes + firstCopy, sSpeakerRing, bytesToRead - firstCopy);
     }
     sSpeakerReadIndex = (sSpeakerReadIndex + bytesToRead) % kSpeakerRingBufferBytes;
     sSpeakerFillCount -= bytesToRead;
@@ -538,7 +544,7 @@ void speakerPlaybackTask(void *parameter) {
 
     if (bytesToRead < wantedBytes) {
       portENTER_CRITICAL(&gRuntimeStateMux);
-      gRuntimeState.speakerUnderruns++;
+      gRuntimeState.speakerUnderruns = gRuntimeState.speakerUnderruns + 1;
       portEXIT_CRITICAL(&gRuntimeStateMux);
     }
 
@@ -667,8 +673,11 @@ bool readAudioChunk(uint8_t *dst, size_t maxBytes, size_t &outBytes, uint64_t &c
 
   const size_t available = static_cast<size_t>(writeSequence - cursor);
   const size_t toCopy = min(maxBytes, available);
-  for (size_t i = 0; i < toCopy; ++i) {
-    dst[i] = sAudioRing[(cursor + i) % kAudioRingBufferBytes];
+  const size_t readIndex = static_cast<size_t>(cursor % kAudioRingBufferBytes);
+  const size_t firstCopy = min(toCopy, kAudioRingBufferBytes - readIndex);
+  memcpy(dst, sAudioRing + readIndex, firstCopy);
+  if (firstCopy < toCopy) {
+    memcpy(dst + firstCopy, sAudioRing, toCopy - firstCopy);
   }
   cursor += toCopy;
   outBytes = toCopy;
@@ -808,7 +817,7 @@ bool getAudioProfileName(size_t index, char *dst, size_t dstSize) {
 }
 
 size_t getAudioClipBytesForDurationMs(uint32_t durationMs) {
-  const uint32_t clampedMs = constrain(durationMs, 250UL, 5000UL);
+  const uint32_t clampedMs = constrain(durationMs, 250UL, 4000UL);
   const uint64_t bytes = (static_cast<uint64_t>(kAudioSampleRate) * kAudioChannels * (kAudioBitsPerSample / 8) * clampedMs) / 1000ULL;
   return static_cast<size_t>(min<uint64_t>(bytes, kAudioRingBufferBytes));
 }
@@ -832,8 +841,11 @@ bool copyRecentAudioClip(uint32_t durationMs, uint8_t *dst, size_t capacity, siz
     startSequence = earliestSequence;
   }
   outBytes = static_cast<size_t>(writeSequence - startSequence);
-  for (size_t i = 0; i < outBytes; ++i) {
-    dst[i] = sAudioRing[(startSequence + i) % kAudioRingBufferBytes];
+  const size_t readIndex = static_cast<size_t>(startSequence % kAudioRingBufferBytes);
+  const size_t firstCopy = min(outBytes, kAudioRingBufferBytes - readIndex);
+  memcpy(dst, sAudioRing + readIndex, firstCopy);
+  if (firstCopy < outBytes) {
+    memcpy(dst + firstCopy, sAudioRing, outBytes - firstCopy);
   }
   portEXIT_CRITICAL(&sAudioMux);
   return outBytes > 0;
@@ -877,17 +889,20 @@ size_t writeSpeakerData(const uint8_t *data, size_t len) {
 
   size_t written = 0;
   portENTER_CRITICAL(&sSpeakerMux);
-  while (written < len && sSpeakerFillCount < kSpeakerRingBufferBytes) {
-    sSpeakerRing[sSpeakerWriteIndex] = data[written];
-    sSpeakerWriteIndex = (sSpeakerWriteIndex + 1) % kSpeakerRingBufferBytes;
-    sSpeakerFillCount++;
-    written++;
+  const size_t availableSpace = kSpeakerRingBufferBytes - sSpeakerFillCount;
+  written = min(len, availableSpace);
+  const size_t firstCopy = min(written, kSpeakerRingBufferBytes - sSpeakerWriteIndex);
+  memcpy(sSpeakerRing + sSpeakerWriteIndex, data, firstCopy);
+  if (firstCopy < written) {
+    memcpy(sSpeakerRing, data + firstCopy, written - firstCopy);
   }
+  sSpeakerWriteIndex = (sSpeakerWriteIndex + written) % kSpeakerRingBufferBytes;
+  sSpeakerFillCount = sSpeakerFillCount + written;
   portEXIT_CRITICAL(&sSpeakerMux);
 
   if (written < len) {
     portENTER_CRITICAL(&gRuntimeStateMux);
-    gRuntimeState.speakerOverflows++;
+    gRuntimeState.speakerOverflows = gRuntimeState.speakerOverflows + 1;
     portEXIT_CRITICAL(&gRuntimeStateMux);
   }
 

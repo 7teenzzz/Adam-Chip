@@ -37,6 +37,8 @@ inline constexpr uint8_t kWifiSubnet[4] = {kWifiSubnetMask[0], kWifiSubnetMask[1
 
 inline constexpr uint16_t kHttpPort = 80;
 inline constexpr uint16_t kStreamPort = 81;
+inline constexpr uint16_t kAudioPort = 82;
+inline constexpr uint16_t kSpeakerPort = 83;
 inline constexpr uint32_t kSerialBaudRate = 115200;
 // Keep UART0 diagnostics disabled by default because this pin map uses GPIO43/44 for I2C.
 inline constexpr bool kEnableUart0Diagnostics = false;
@@ -51,6 +53,11 @@ inline constexpr pixformat_t kDefaultPixelFormat = PIXFORMAT_JPEG;
 inline constexpr int kDefaultJpegQuality = 18;
 inline constexpr int kPsramJpegQuality = 18;
 inline constexpr uint32_t kXclkFrequencyHz = 20000000;
+inline constexpr uint32_t kCameraProducerFrameIntervalMs = 66;
+inline constexpr uint32_t kCameraProducerWarmFrameIntervalMs = 180;
+inline constexpr uint32_t kCameraProducerFastGraceMs = 4000;
+inline constexpr uint32_t kStreamSlowSendThresholdMs = 900;
+inline constexpr uint8_t kStreamSlowSendStrikeLimit = 5;
 
 inline constexpr uint32_t kAudioSampleRate = 16000;
 inline constexpr uint8_t kAudioBitsPerSample = 16;
@@ -68,7 +75,7 @@ inline constexpr size_t kSpeakerHttpChunkBytes = 1024;
 inline constexpr uint32_t kSensorPollMs = 100;
 inline constexpr uint32_t kMotionDebounceMs = 60;
 inline constexpr float kLightAlpha = 0.18f;
-inline constexpr uint32_t kTelemetryBroadcastMs = 1000;
+inline constexpr uint32_t kI2cClockHz = 400000;
 
 inline constexpr uint8_t kPca9685Address = 0x40;
 inline constexpr uint16_t kPca9685DefaultFrequency = 1000;

@@ -21,6 +21,8 @@ namespace {
 
 httpd_handle_t sControlServer = nullptr;
 httpd_handle_t sStreamServer = nullptr;
+httpd_handle_t sAudioServer = nullptr;
+httpd_handle_t sSpeakerServer = nullptr;
 
 constexpr char kStreamContentType[] = "multipart/x-mixed-replace;boundary=123456789000000000000987654321";
 constexpr char kStreamBoundaryChunk[] = "\r\n--123456789000000000000987654321\r\n";
@@ -44,6 +46,29 @@ struct WavHeader {
 };
 
 WavHeader makeWavHeader(uint32_t dataBytes = 0xFFFFFFFFUL);
+
+httpd_uri_t makeHttpUri(const char *uri, httpd_method_t method, esp_err_t (*handler)(httpd_req_t *)) {
+  httpd_uri_t route = {};
+  route.uri = uri;
+  route.method = method;
+  route.handler = handler;
+  route.user_ctx = nullptr;
+  return route;
+}
+
+httpd_uri_t makeWebSocketUri(const char *uri, esp_err_t (*handler)(httpd_req_t *)) {
+  httpd_uri_t route = makeHttpUri(uri, HTTP_GET, handler);
+  route.is_websocket = true;
+  route.handle_ws_control_frames = false;
+  route.supported_subprotocol = nullptr;
+  return route;
+}
+
+void setLastStreamErrorLocked(const char *code) {
+  const char *value = code == nullptr ? "unknown" : code;
+  strncpy(gRuntimeState.lastStreamError, value, sizeof(gRuntimeState.lastStreamError) - 1);
+  gRuntimeState.lastStreamError[sizeof(gRuntimeState.lastStreamError) - 1] = '\0';
+}
 
 void appendCommonStatusFields(String &json) {
   json += "\"uptime_ms\":";
@@ -186,6 +211,10 @@ void appendCameraJson(String &json) {
     json += descriptor.name;
     json += "\",\"builtin\":";
     json += descriptor.builtin ? "true" : "false";
+    json += ",\"has_framesize\":";
+    json += descriptor.hasFramesize ? "true" : "false";
+    json += ",\"framesize\":";
+    json += String(descriptor.framesize);
     json += "}";
   }
   json += "]";
@@ -194,7 +223,30 @@ void appendCameraJson(String &json) {
   json += String(FRAMESIZE_QQVGA);
   json += ",\"max\":";
   json += String(FRAMESIZE_QSXGA);
-  json += "},\"quality\":{\"supported\":true,\"min\":4,\"max\":63}";
+  json += "},\"framesize_options\":[";
+  bool firstFramesizeOption = true;
+  auto appendFramesizeOption = [&](const char *name, int value) {
+    if (!firstFramesizeOption) {
+      json += ",";
+    }
+    firstFramesizeOption = false;
+    json += "{\"name\":\"";
+    json += name;
+    json += "\",\"value\":";
+    json += String(value);
+    json += "}";
+  };
+  appendFramesizeOption("QQVGA", FRAMESIZE_QQVGA);
+  appendFramesizeOption("HQVGA", FRAMESIZE_HQVGA);
+  appendFramesizeOption("QVGA", FRAMESIZE_QVGA);
+  appendFramesizeOption("CIF", FRAMESIZE_CIF);
+  appendFramesizeOption("VGA", FRAMESIZE_VGA);
+  appendFramesizeOption("SVGA", FRAMESIZE_SVGA);
+  appendFramesizeOption("XGA", FRAMESIZE_XGA);
+  appendFramesizeOption("HD", FRAMESIZE_HD);
+  appendFramesizeOption("SXGA", FRAMESIZE_SXGA);
+  appendFramesizeOption("UXGA", FRAMESIZE_UXGA);
+  json += "],\"quality\":{\"supported\":true,\"min\":4,\"max\":63}";
   json += ",\"brightness\":{\"supported\":true,\"min\":-2,\"max\":2}";
   json += ",\"contrast\":{\"supported\":true,\"min\":-2,\"max\":2}";
   json += ",\"saturation\":{\"supported\":true,\"min\":-2,\"max\":2}";
@@ -264,6 +316,9 @@ void buildStatusJson(String &json) {
   const uint32_t streamDrops = gRuntimeState.streamDrops;
   const uint32_t cameraReinitCount = gRuntimeState.cameraReinitCount;
   const uint32_t streamSendTimeMs = gRuntimeState.streamSendTimeMs;
+  const uint32_t streamTimeoutCloses = gRuntimeState.streamTimeoutCloses;
+  const uint32_t streamSendFailures = gRuntimeState.streamSendFailures;
+  const uint32_t streamClientResets = gRuntimeState.streamClientResets;
   char bootStage[sizeof(gRuntimeState.bootStage)];
   strncpy(bootStage, gRuntimeState.bootStage, sizeof(bootStage) - 1);
   bootStage[sizeof(bootStage) - 1] = '\0';
@@ -276,6 +331,9 @@ void buildStatusJson(String &json) {
   char lastReinitReason[sizeof(gRuntimeState.lastCameraReinitReason)];
   strncpy(lastReinitReason, gRuntimeState.lastCameraReinitReason, sizeof(lastReinitReason) - 1);
   lastReinitReason[sizeof(lastReinitReason) - 1] = '\0';
+  char lastStreamError[sizeof(gRuntimeState.lastStreamError)];
+  strncpy(lastStreamError, gRuntimeState.lastStreamError, sizeof(lastStreamError) - 1);
+  lastStreamError[sizeof(lastStreamError) - 1] = '\0';
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
   json.reserve(kStatusJsonCapacity);
@@ -346,6 +404,15 @@ void buildStatusJson(String &json) {
   json += String(cameraReinitCount);
   json += ",\"stream_send_time_ms\":";
   json += String(streamSendTimeMs);
+  json += ",\"stream_timeout_closes\":";
+  json += String(streamTimeoutCloses);
+  json += ",\"stream_send_failures\":";
+  json += String(streamSendFailures);
+  json += ",\"stream_client_resets\":";
+  json += String(streamClientResets);
+  json += ",\"last_stream_error\":\"";
+  json += lastStreamError;
+  json += "\"";
   json += ",\"last_camera_reinit_reason\":\"";
   json += lastReinitReason;
   json += "\",";
@@ -509,6 +576,10 @@ void buildDashboardJson(String &json) {
   const uint32_t captureFrameTimeMs = gRuntimeState.captureFrameTimeMs;
   const uint32_t captureFpsTimes10 = gRuntimeState.captureFrameRateTimes10;
   const uint32_t lastJpegSize = gRuntimeState.lastJpegSize;
+  const uint32_t streamSendTimeMs = gRuntimeState.streamSendTimeMs;
+  const uint32_t streamTimeoutCloses = gRuntimeState.streamTimeoutCloses;
+  const uint32_t streamSendFailures = gRuntimeState.streamSendFailures;
+  const uint32_t streamClientResets = gRuntimeState.streamClientResets;
   const uint32_t videoClients = gRuntimeState.videoClients;
   const bool audioReady = gRuntimeState.audioReady;
   const bool speakerReady = gRuntimeState.speakerReady;
@@ -532,9 +603,12 @@ void buildDashboardJson(String &json) {
   char cameraPreset[sizeof(gRuntimeState.cameraPreset)];
   strncpy(cameraPreset, gRuntimeState.cameraPreset, sizeof(cameraPreset) - 1);
   cameraPreset[sizeof(cameraPreset) - 1] = '\0';
+  char lastStreamError[sizeof(gRuntimeState.lastStreamError)];
+  strncpy(lastStreamError, gRuntimeState.lastStreamError, sizeof(lastStreamError) - 1);
+  lastStreamError[sizeof(lastStreamError) - 1] = '\0';
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
-  json.reserve(768);
+  json.reserve(1024);
   json = "{";
   appendCommonStatusFields(json);
   json += ",\"wifi_connected\":";
@@ -567,6 +641,17 @@ void buildDashboardJson(String &json) {
   json += String(captureFrameTimeMs);
   json += ",\"last_frame_size\":";
   json += String(lastJpegSize);
+  json += ",\"stream_send_time_ms\":";
+  json += String(streamSendTimeMs);
+  json += ",\"stream_timeout_closes\":";
+  json += String(streamTimeoutCloses);
+  json += ",\"stream_send_failures\":";
+  json += String(streamSendFailures);
+  json += ",\"stream_client_resets\":";
+  json += String(streamClientResets);
+  json += ",\"last_stream_error\":\"";
+  json += lastStreamError;
+  json += "\"";
   json += ",\"audio_ready\":";
   json += audioReady ? "true" : "false";
   json += ",\"speaker_ready\":";
@@ -601,6 +686,43 @@ esp_err_t sendError(httpd_req_t *req, const char *status, const char *message) {
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, message, HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t sendMovedEndpoint(httpd_req_t *req, uint16_t port, const char *path) {
+  const String location = String("http://") + WiFi.localIP().toString() + ":" + String(port) + path;
+  char body[192];
+  snprintf(
+    body,
+    sizeof(body),
+    "{\"error\":\"endpoint_moved\",\"url\":\"%s\"}",
+    location.c_str());
+  httpd_resp_set_status(req, "308 Permanent Redirect");
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Location", location.c_str());
+  return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t sendLocalRedirect(httpd_req_t *req, const char *path) {
+  const char *target = (path == nullptr || path[0] == '\0') ? "/" : path;
+  char body[192];
+  snprintf(body, sizeof(body), "{\"redirect\":\"%s\"}", target);
+  httpd_resp_set_status(req, "302 Found");
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Location", target);
+  return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+template <size_t N>
+esp_err_t sendProgmemHtml(httpd_req_t *req, const char (&page)[N]) {
+  httpd_resp_set_type(req, "text/html");
+  return httpd_resp_send(req, page, N - 1);
+}
+
+esp_err_t sendHtml(httpd_req_t *req, const char *page) {
+  httpd_resp_set_type(req, "text/html");
+  return httpd_resp_send(req, page, HTTPD_RESP_USE_STRLEN);
 }
 
 bool readHeaderValue(httpd_req_t *req, const char *name, String &value) {
@@ -882,302 +1004,209 @@ bool parseAudioRuntimeUpdate(const String &body, AudioRuntimeUpdate &update, Str
   return update.hasProfile || update.hasSoftwareGain || update.hasDcBlock || update.hasSlotOverride || update.hasShiftOverride;
 }
 
-String formatDashboardPage() {
-  String html;
-  html.reserve(18000);
-  html += R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>AdamS Server</title><meta name="viewport" content="width=device-width,initial-scale=1">)HTML";
-  html += R"HTML(<style>
-  :root{--bg:#0b1117;--panel:#131b24;--panel2:#192432;--line:#2a3949;--text:#e7edf4;--muted:#93a4b4;--accent:#65c9ff;--good:#4fd59d;--warn:#f4c26b;--bad:#ff837b}
-  *{box-sizing:border-box} body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(180deg,#091017,#0f1720 55%,#0d141b);color:var(--text)}
-  .wrap{max-width:1280px;margin:0 auto;padding:18px}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}.span-12{grid-column:span 12}.span-8{grid-column:span 8}.span-6{grid-column:span 6}.span-4{grid-column:span 4}.span-3{grid-column:span 3}
-  .card{background:rgba(19,27,36,.94);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 10px 26px rgba(0,0,0,.26)}
-  .hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px}.hero h1{margin:0;font-size:28px}.hero p{margin:6px 0 0;color:var(--muted)}
-  .badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.ok{background:rgba(79,213,157,.14);color:var(--good)}.warn{background:rgba(244,194,107,.14);color:var(--warn)}.bad{background:rgba(255,131,123,.14);color:var(--bad)}
-  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.kpi{padding:14px;border-radius:14px;background:var(--panel2);border:1px solid var(--line)}.kpi .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}.kpi .value{margin-top:6px;font-size:22px;font-weight:700}
-  .video{width:100%;aspect-ratio:4/3;background:#06090d;border:1px solid var(--line);border-radius:14px;display:block;object-fit:contain}
-  .meta,.muted{color:var(--muted)} .list{display:flex;flex-direction:column;gap:10px}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid rgba(42,57,73,.45)}.row:last-child{border-bottom:none}
-  .controls{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-  input,select,button{font:inherit} input,select{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#0f151c;color:var(--text)}
-  .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.btn{padding:10px 14px;border-radius:12px;border:1px solid var(--line);background:#102130;color:var(--text);cursor:pointer}.btn.secondary{background:#111820}.btn:hover{border-color:var(--accent)}
-  .links{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px}.links a{color:var(--accent);text-decoration:none}.mono{font-family:Consolas,Menlo,monospace} details{margin-top:12px} pre{margin:8px 0 0;padding:12px;border-radius:12px;background:#0c1218;border:1px solid var(--line);white-space:pre-wrap;word-break:break-word}
-  @media (max-width:980px){.span-8,.span-6,.span-4,.span-3{grid-column:span 12}.kpis{grid-template-columns:repeat(2,1fr)}.controls{grid-template-columns:1fr}}
+const char kDashboardPage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>Панель AdamS</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  :root{--bg:#0b0d10;--card:#14181f;--sub:#10141a;--text:#e8edf4;--muted:#9aa7b8;--line:#273142;--ok:#22c55e;--bad:#ef4444;--link:#4ade80}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}
+  .wrap{max-width:1320px;margin:0 auto;padding:16px}
+  .hero{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+  .hero h1{margin:0}
+  .hero p{margin:6px 0 0;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+  .span-12{grid-column:span 12}.span-8{grid-column:span 8}.span-6{grid-column:span 6}.span-4{grid-column:span 4}.span-3{grid-column:span 3}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+  .block{background:var(--sub);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .card h2,.card h3{margin:0 0 10px 0;font-size:16px}
+  .status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .status-k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .status-v{margin-top:4px;font-weight:700}
+  .split{display:grid;grid-template-columns:2fr 1fr;gap:10px}
+  .stream-meta{color:var(--muted);font-size:13px}
+  .video-frame{width:100%;aspect-ratio:4/3;border:1px solid var(--line);background:#000;border-radius:10px;display:block}
+  .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:#1b2330;color:var(--text);border:1px solid #324055;border-radius:10px;padding:9px 12px;cursor:pointer;text-decoration:none}
+  .btn.secondary{background:#111827}.btn:hover{border-color:#4a5b75}
+  .controls{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  input,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #334156;background:#0f141d;color:var(--text)}
+  .list{display:flex;flex-direction:column;gap:8px}
+  .row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #223042}
+  .row:last-child{border-bottom:none}
+  .badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:700}
+  .ok{background:#113223;color:var(--ok)}.bad{background:#3a1518;color:var(--bad)}
+  .mono{font-family:Consolas,Menlo,monospace}.muted{color:var(--muted)}
+  .ico{width:16px;height:16px;stroke:currentColor;stroke-width:1.75;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  pre{margin:8px 0 0;padding:10px;border-radius:8px;background:#0f141d;border:1px solid #2e3a4f;color:#dbe4ef;white-space:pre-wrap;word-break:break-word}
+  details{margin-top:10px}
+  summary{cursor:pointer;color:#b8c5d8}
+  .preset-quick{display:flex;flex-wrap:wrap;gap:8px}
+  .preset-chip{padding:7px 10px;border-radius:999px;border:1px solid #37556f;background:#122131;color:#d4e3f5;cursor:pointer}
+  .preset-chip.active{border-color:#1fbf5f;color:#b8ffd2}
+  a{color:var(--link);text-decoration:none}
+  @media (max-width:980px){.span-8,.span-6,.span-4,.span-3{grid-column:span 12}.split{grid-template-columns:1fr}.controls{grid-template-columns:1fr}.status-grid{grid-template-columns:1fr 1fr}}
   </style></head><body><div class="wrap">
-  <div class="hero"><div><h1>AdamS Server</h1><p>Диагностическая панель ESP32-S3. Микрофон `INMP441` и playback на `PCM5102` показаны отдельно, чтобы не путать независимые аудиоканалы.</p></div><div class="muted">ESP32-S3 AV + telemetry</div></div>
+  <div class="hero"><div><h1>Панель управления AdamS</h1><p>Системная телеметрия обновляется автоматически (1с), сенсоры — по кнопке.</p></div><div class="actions" style="margin-top:0"><button class="btn" id="refresh-telemetry">Обновить сенсоры</button><a class="btn secondary" href="/ctrldash" target="_blank">Тех. панель</a></div></div>
+  <section class="card span-12" style="margin-bottom:12px"><h2>Ключевые статусы</h2><div class="status-grid">
+    <div class="block"><div class="status-k">Система</div><div class="status-v" id="top-system">загрузка...</div></div>
+    <div class="block"><div class="status-k">Видео</div><div class="status-v" id="top-video">загрузка...</div></div>
+    <div class="block"><div class="status-k">Аудио</div><div class="status-v" id="top-audio">загрузка...</div></div>
+    <div class="block"><div class="status-k">Сенсоры</div><div class="status-v" id="top-sensors">по запросу</div></div>
+  </div><div class="muted" id="telemetry-feedback" style="margin-top:8px">сенсоры не запрошены</div></section>
   <div class="grid">
-    <section class="card span-12"><div class="kpis" id="top-kpis"></div></section>
-    <section class="card span-8"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px"><div><h2 style="margin:0">Видео</h2><div class="meta" id="video-meta">ожидание потока</div></div><div class="links"><a href="/live" target="_blank">/live</a><a href="/stream" target="_blank">/stream</a><a href="javascript:void(0)" id="reload-video">перезагрузить поток</a><a href="javascript:void(0)" id="refresh-camera">обновить камеру</a></div></div><img id="video-stream" class="video" alt="Live stream"><div class="links muted"><a href="/capture" target="_blank">/capture</a><a href="/api/dashboard" target="_blank">/api/dashboard</a><a href="/api/status" target="_blank">/api/status</a><a href="/api/camera" target="_blank">/api/camera</a></div></section>
-    <section class="card span-4"><h2 style="margin-top:0">Состояние</h2><div class="list" id="runtime-card"></div></section>
-    <section class="card span-3"><h2 style="margin-top:0">Сеть</h2><div class="list" id="network-card"></div></section>
-    <section class="card span-3"><h2 style="margin-top:0">Камера</h2><div class="list" id="camera-card"></div></section>
-    <section class="card span-3"><h2 style="margin-top:0">Микрофон</h2><div class="list" id="mic-card"></div></section>
-    <section class="card span-3"><h2 style="margin-top:0">Выход PCM5102</h2><div class="list" id="speaker-card"></div></section>
-    <section class="card span-4"><h2 style="margin-top:0">Сенсоры</h2><div class="list" id="sensor-card"></div></section>
-    <section class="card span-4"><h2 style="margin-top:0">PCA9685</h2><div class="list" id="pca-card"></div></section>
-    <section class="card span-4"><h2 style="margin-top:0">Эндпоинты</h2><div class="links" id="endpoint-links"></div></section>
-    <section class="card span-6"><h2 style="margin-top:0">Настройки камеры</h2><div class="controls">
-      <div class="field"><label>Пресет</label><select id="preset"></select></div>
-      <div class="field"><label>Имя пресета</label><input id="preset_name" type="text" placeholder="my_preset"></div>
-      <div class="field"><label>Framesize</label><select id="framesize"></select></div>
-      <div class="field"><label>JPEG Quality</label><input id="quality" type="number" min="4" max="63"></div>
-      <div class="field"><label>Яркость</label><input id="brightness" type="number" min="-2" max="2"></div>
-      <div class="field"><label>Контраст</label><input id="contrast" type="number" min="-2" max="2"></div>
-      <div class="field"><label>Насыщенность</label><input id="saturation" type="number" min="-2" max="2"></div>
-      <div class="field"><label>Резкость</label><input id="sharpness" type="number" min="-2" max="2"></div>
-      <div class="field"><label>Denoise</label><input id="denoise" type="number" min="0" max="1"></div>
-      <div class="field"><label>Gain Ceiling</label><input id="gain_ceiling" type="number" min="0" max="6"></div>
-      <div class="field"><label>AWB</label><select id="awb"><option value="true">включено</option><option value="false">выключено</option></select></div>
-      <div class="field"><label>AGC</label><select id="agc"><option value="true">включено</option><option value="false">выключено</option></select></div>
-      <div class="field"><label>AEC</label><select id="aec"><option value="true">включено</option><option value="false">выключено</option></select></div>
-      <div class="field"><label>Зеркало</label><select id="hmirror"><option value="false">выключено</option><option value="true">включено</option></select></div>
-      <div class="field"><label>Переворот</label><select id="vflip"><option value="true">включено</option><option value="false">выключено</option></select></div>
-    </div><div class="actions"><button class="btn" id="apply-preset">Применить</button><button class="btn secondary" id="save-preset">Сохранить новый/текущий</button><button class="btn secondary" id="reset-presets">Сбросить встроенные</button><button class="btn secondary" id="delete-preset">Удалить пресет</button></div><div id="camera-feedback" class="muted" style="margin-top:10px"></div></section>
-    <section class="card span-6"><h2 style="margin-top:0">Расширенная аудиодиагностика</h2><div class="controls">
-      <div class="field"><label>Capture profile</label><select id="audio_profile"></select></div>
-      <div class="field"><label>Software gain</label><input id="audio_gain" type="number" min="0.25" max="32" step="0.25"></div>
+    <section class="card span-12"><h2>Стримы</h2><div class="split">
+      <div class="block"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px"><div><strong>Камера</strong><div class="stream-meta" id="video-meta">ожидание потока</div></div><div class="actions" style="margin:0"><button class="btn secondary" id="reload-video">Перезапуск</button><button class="btn secondary" id="open-live">Открыть /live</button></div></div><iframe id="video-live-frame" class="video-frame" title="Live video" loading="eager"></iframe></div>
+      <div class="block"><strong>Аудио</strong><div class="list" id="audio-stream-card" style="margin-top:8px"></div><div class="actions"><a class="btn secondary" id="audio_stream_link" href="/audio" target="_blank">:82/audio</a><a class="btn secondary" id="audio_clip_link" href="/api/audio/clip?ms=2000" target="_blank">WAV тест</a></div></div>
+    </div></section>
+    <section class="card span-6"><h2>Камера</h2><div class="block"><div class="list" id="camera-card"></div></div><div class="block" style="margin-top:10px">
+      <div class="field"><label>Быстрая смена пресета</label><div id="preset-quick" class="preset-quick"></div></div>
+      <div class="controls" style="margin-top:10px">
+        <div class="field"><label>Текущий пресет</label><select id="preset"></select></div>
+        <div class="field"><label>Имя пресета</label><input id="preset_name" type="text" placeholder="my_preset"></div>
+      </div>
+      <div class="actions"><button class="btn secondary" id="apply-preset">Применить пресет</button><button class="btn secondary" id="save-preset">Сохранить</button><button class="btn secondary" id="delete-preset">Удалить</button><button class="btn secondary" id="reset-presets">Сбросить встроенные</button></div>
+      <details><summary>Дополнительные настройки камеры</summary><div class="controls" style="margin-top:10px">
+        <div class="field"><label>Framesize</label><select id="framesize"></select></div>
+        <div class="field"><label>JPEG Quality</label><input id="quality" type="number" min="4" max="63"></div>
+        <div class="field"><label>Яркость</label><input id="brightness" type="number" min="-2" max="2"></div>
+        <div class="field"><label>Контраст</label><input id="contrast" type="number" min="-2" max="2"></div>
+        <div class="field"><label>Насыщенность</label><input id="saturation" type="number" min="-2" max="2"></div>
+        <div class="field"><label>Резкость</label><input id="sharpness" type="number" min="-2" max="2"></div>
+        <div class="field"><label>Denoise</label><input id="denoise" type="number" min="0" max="1"></div>
+        <div class="field"><label>Gain Ceiling</label><input id="gain_ceiling" type="number" min="0" max="6"></div>
+        <div class="field"><label>AWB</label><select id="awb"><option value="true">включено</option><option value="false">выключено</option></select></div>
+        <div class="field"><label>AGC</label><select id="agc"><option value="true">включено</option><option value="false">выключено</option></select></div>
+        <div class="field"><label>AEC</label><select id="aec"><option value="true">включено</option><option value="false">выключено</option></select></div>
+        <div class="field"><label>Зеркало</label><select id="hmirror"><option value="false">выключено</option><option value="true">включено</option></select></div>
+        <div class="field"><label>Переворот</label><select id="vflip"><option value="true">включено</option><option value="false">выключено</option></select></div>
+      </div><div class="actions"><button class="btn" id="apply-camera">Применить доп. настройки</button></div></details>
+      <div id="camera-feedback" class="muted" style="margin-top:10px"></div></div></section>
+    <section class="card span-6"><h2>Аудио и сенсоры</h2><div class="block"><div class="list" id="mic-card"></div></div><div class="block" style="margin-top:10px"><div class="controls">
+      <div class="field"><label>Профиль захвата</label><select id="audio_profile"></select></div>
+      <div class="field"><label>Программное усиление</label><input id="audio_gain" type="number" min="0.25" max="32" step="0.25"></div>
       <div class="field"><label>DC block</label><select id="audio_dc_block"><option value="true">включено</option><option value="false">выключено</option></select></div>
       <div class="field"><label>Слот</label><select id="audio_slot"><option value="1">left</option><option value="2">right</option></select></div>
       <div class="field"><label>Shift</label><input id="audio_shift" type="number" min="0" max="24"></div>
-      <div class="field"><label>Длина тест-клипа, мс</label><input id="audio_clip_ms" type="number" min="250" max="5000" step="250" value="2000"></div>
-    </div><div class="actions"><button class="btn" id="apply-audio">Применить аудио-настройки</button><a class="btn secondary" id="audio_clip_link" href="/api/audio/clip?ms=2000" target="_blank">Открыть тестовый WAV</a><a class="btn secondary" href="/audio" target="_blank">Открыть бесконечный /audio</a></div><div id="audio-feedback" class="muted" style="margin-top:10px"></div><details><summary class="muted">Сырые аудио-данные</summary><pre id="raw-audio"></pre></details></section>
-    <section class="card span-12"><h2 style="margin-top:0">Детали</h2><details><summary class="muted">Показать raw dashboard JSON</summary><pre id="raw-dashboard"></pre></details><details><summary class="muted">Подсказки для go2rtc / ffmpeg</summary><pre class="mono">go2rtc:
-  streams:
-    adams_cam: ffmpeg:http://ESP32_IP:81/stream#video=h264
-
-ffmpeg test:
-  ffmpeg -fflags nobuffer -flags low_delay -f mjpeg -i http://ESP32_IP:81/stream -f null -
-
-audio clip:
-  http://ESP32_IP/api/audio/clip?ms=2000
-
-audio stream:
-  ffmpeg -i http://ESP32_IP/audio -f null -</pre></details></section>
-  </div>)HTML";
-  html += R"HTML(<script>
-  const state={dashboard:null,camera:null,audio:null,pca:null};
-  const frameOptions=[
-    {value:0,label:'QQVGA'},{value:3,label:'HQVGA'},{value:5,label:'QVGA'},{value:6,label:'CIF'},
-    {value:8,label:'VGA'},{value:9,label:'SVGA'},{value:10,label:'XGA'},{value:11,label:'HD'},{value:12,label:'SXGA'},{value:13,label:'UXGA'}
-  ];
-  const framesizeSelect=document.getElementById('framesize');
-  const presetSelect=document.getElementById('preset');
-  const videoEl=document.getElementById('video-stream');
-  let videoBackoffMs=500;
-  let videoReloadTimer=null;
-  let lastGeneration=-1;
-  frameOptions.forEach(opt=>{const el=document.createElement('option');el.value=opt.value;el.textContent=`${opt.label} (${opt.value})`;framesizeSelect.appendChild(el);});
-  function badge(text,kind){return `<span class="badge ${kind}">${text}</span>`;}
+      <div class="field"><label>Длина WAV, мс</label><input id="audio_clip_ms" type="number" min="250" max="4000" step="250" value="2000"></div>
+    </div><div class="actions"><button class="btn" id="apply-audio">Применить аудио</button></div><div id="audio-feedback" class="muted" style="margin-top:10px"></div></div>
+    <div class="block" style="margin-top:10px"><h3>Сенсоры</h3><div class="list" id="sensor-card"></div></div></section>
+  </div><script>
+  const state={dashboard:null,status:null,camera:null,audio:null,pca:null,sensors:null};
+  const framesizeSelect=document.getElementById('framesize'); const presetSelect=document.getElementById('preset'); const videoFrameEl=document.getElementById('video-live-frame');
+  const presetExpectedFramesize={};
+  let videoBackoffMs=500; let videoReloadTimer=null; let lastGeneration=-1;
+  function setFramesizeOptions(c){
+    const options = (c && c.capabilities && Array.isArray(c.capabilities.framesize_options)) ? c.capabilities.framesize_options : [];
+    const current = c && c.framesize !== undefined ? Number(c.framesize) : NaN;
+    framesizeSelect.innerHTML='';
+    options.forEach(opt=>{
+      const value = Number(opt.value);
+      if(Number.isNaN(value)) return;
+      const el=document.createElement('option');
+      el.value=String(value);
+      el.textContent=`${opt.name||'FS'} (${value})`;
+      framesizeSelect.appendChild(el);
+    });
+    if(framesizeSelect.options.length===0){
+      const fallback=document.createElement('option');
+      fallback.value=String(Number.isNaN(current)?0:current);
+      fallback.textContent=`AUTO (${fallback.value})`;
+      framesizeSelect.appendChild(fallback);
+    }
+    if(!Number.isNaN(current)){ framesizeSelect.value=String(current); }
+  }
+  function refreshPresetExpectedFramesize(c){
+    Object.keys(presetExpectedFramesize).forEach(k=>{ delete presetExpectedFramesize[k]; });
+    const presets=Array.isArray(c && c.presets) ? c.presets : [];
+    presets.forEach(p=>{
+      if(p && p.name && p.has_framesize && p.framesize !== undefined){
+        presetExpectedFramesize[p.name]=Number(p.framesize);
+      }
+    });
+  }
+  function icon(name){const p={apply:'M5 12l4 4 10-10',save:'M4 4h12l4 4v12H4z M8 4v6h8',del:'M4 7h16 M8 7V4h8v3 M9 7v10 M15 7v10',reset:'M4 4v5h5 M20 20v-5h-5 M6 14a6 6 0 0 0 10 4 M18 10a6 6 0 0 0-10-4',refresh:'M20 4v5h-5 M4 20v-5h5 M6 9a7 7 0 0 1 12-2 M18 15a7 7 0 0 1-12 2',stream:'M3 12s3-5 9-5 9 5 9 5-3 5-9 5-9-5-9-5z M12 10v4',status:'M4 12h16 M12 4v16'};return `<svg class="ico" viewBox="0 0 24 24"><path d="${p[name]||p.status}"/></svg>`;}
+  function decorateButtons(){const m=[['refresh-telemetry','refresh'],['reload-video','refresh'],['open-live','stream'],['apply-camera','apply'],['apply-preset','apply'],['save-preset','save'],['reset-presets','reset'],['delete-preset','del'],['apply-audio','apply']];m.forEach(([id,i])=>{const el=document.getElementById(id);if(el){el.innerHTML=`${icon(i)} ${el.textContent}`;}});}
+  function badge(text,ok=true){return `<span class="badge ${ok?'ok':'bad'}">${text}</span>`;}
   function fmtMs(ms){if(ms===undefined||ms===null) return 'n/a'; if(ms<1000) return `${ms} ms`; return `${(ms/1000).toFixed(1)} s`;}
   function fmtPct(v){return `${(v*100).toFixed(1)}%`;}
   function fmtBytes(v){if(!v) return '0 KB'; if(v>=1024*1024) return `${(v/1024/1024).toFixed(2)} MB`; return `${(v/1024).toFixed(0)} KB`;}
   async function fetchJson(url){const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} -> ${r.status}`); return r.json();}
   async function postJson(url,payload){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); if(!r.ok) throw new Error(await r.text()); return r.json();}
-  function currentPayload(){
-    return {
-      framesize:Number(document.getElementById('framesize').value),
-      quality:Number(document.getElementById('quality').value),
-      brightness:Number(document.getElementById('brightness').value),
-      contrast:Number(document.getElementById('contrast').value),
-      saturation:Number(document.getElementById('saturation').value),
-      sharpness:Number(document.getElementById('sharpness').value),
-      denoise:Number(document.getElementById('denoise').value),
-      gain_ceiling:Number(document.getElementById('gain_ceiling').value),
-      awb:document.getElementById('awb').value==='true',
-      agc:document.getElementById('agc').value==='true',
-      aec:document.getElementById('aec').value==='true',
-      hmirror:document.getElementById('hmirror').value==='true',
-      vflip:document.getElementById('vflip').value==='true'
-    };
-  }
-  function fillCameraControls(){
-    const c=(state.camera&&state.camera.camera)?state.camera.camera:state.camera||{};
-    const presets=Array.isArray(c.presets)?c.presets:[];
-    presetSelect.innerHTML='';
-    presets.forEach(p=>{const opt=document.createElement('option');opt.value=p.name;opt.textContent=p.builtin?`${p.name} [builtin]`:p.name;presetSelect.appendChild(opt);});
-    if(c.preset) presetSelect.value=c.preset;
-    document.getElementById('preset_name').value=c.preset||'';
-    if(c.framesize!==undefined) document.getElementById('framesize').value=String(c.framesize);
-    if(c.quality!==undefined) document.getElementById('quality').value=c.quality;
-    if(c.brightness!==undefined) document.getElementById('brightness').value=c.brightness;
-    if(c.contrast!==undefined) document.getElementById('contrast').value=c.contrast;
-    if(c.saturation!==undefined) document.getElementById('saturation').value=c.saturation;
-    if(c.sharpness!==undefined) document.getElementById('sharpness').value=c.sharpness;
-    if(c.denoise!==undefined) document.getElementById('denoise').value=c.denoise;
-    if(c.gain_ceiling!==undefined) document.getElementById('gain_ceiling').value=c.gain_ceiling;
-    if(c.awb!==undefined) document.getElementById('awb').value=String(!!c.awb);
-    if(c.agc!==undefined) document.getElementById('agc').value=String(!!c.agc);
-    if(c.aec!==undefined) document.getElementById('aec').value=String(!!c.aec);
-    if(c.hmirror!==undefined) document.getElementById('hmirror').value=String(!!c.hmirror);
-    if(c.vflip!==undefined) document.getElementById('vflip').value=String(!!c.vflip);
-  }
-  function fillAudioControls(){
-    const a=state.audio&&state.audio.capture?state.audio.capture:{};
-    const profiles=Array.isArray(a.profiles)?a.profiles:[];
-    const select=document.getElementById('audio_profile');
-    select.innerHTML='';
-    profiles.forEach(name=>{const opt=document.createElement('option');opt.value=name;opt.textContent=name;select.appendChild(opt);});
-    if(a.profile) select.value=a.profile;
-    document.getElementById('audio_gain').value=a.software_gain!==undefined?Number(a.software_gain).toFixed(2):'1.00';
-    document.getElementById('audio_dc_block').value=String(!!a.dc_block);
-    document.getElementById('audio_slot').value=String(a.preferred_slot||1);
-    document.getElementById('audio_shift').value=a.sample_shift!==undefined?a.sample_shift:0;
-    updateAudioClipLink();
-  }
-  function updateAudioClipLink(){
-    const clipMs=Math.max(250,Math.min(5000,Number(document.getElementById('audio_clip_ms').value||2000)));
-    document.getElementById('audio_clip_link').href=`/api/audio/clip?ms=${clipMs}`;
-  }
-  function render(){
-    const d=state.dashboard||{};
-    const c=(state.camera&&state.camera.camera)?state.camera.camera:state.camera||{};
-    const a=state.audio&&state.audio.capture?state.audio.capture:{};
-    const playback=state.audio&&state.audio.playback?state.audio.playback:{};
-    const p=(state.pca&&state.pca.pca9685)?state.pca.pca9685:(state.pca||{}).pca9685||{};
-    document.getElementById('top-kpis').innerHTML=[
-      ['Сеть', d.wifi_connected? 'подключена':'повтор', d.wifi_connected ? 'ok':'warn'],
-      ['Камера', d.camera_ready? 'готова':'ошибка', d.camera_ready ? 'ok':'bad'],
-      ['Микрофон', d.audio_ready? 'готов':'ошибка', d.audio_ready ? 'ok':'bad'],
-      ['PCM5102', d.speaker_ready? 'готов':'ошибка', d.speaker_ready ? 'ok':'bad']
-    ].map(([label,val,kind])=>`<div class="kpi"><div class="label">${label}</div><div class="value">${val}</div><div style="margin-top:8px">${badge(val,kind)}</div></div>`).join('');
-    document.getElementById('runtime-card').innerHTML=`
-      <div class="row"><span>IP</span><span class="mono">${d.ip||'0.0.0.0'}</span></div>
-      <div class="row"><span>Стадия загрузки</span><span>${d.boot_stage||'unknown'}</span></div>
-      <div class="row"><span>Последняя ошибка</span><span class="mono">${d.last_init_error||'нет'}</span></div>
-      <div class="row"><span>OTA</span><span>${d.ota_in_progress ? badge(`обновление ${d.ota_progress_pct||0}%`,'warn') : (d.ota_ready ? badge('готово','ok') : badge('выкл','bad'))}</span></div>
-      <div class="row"><span>Пресет / поколение</span><span>${d.camera_preset||'custom'} / ${d.camera_generation||0}</span></div>
-      <div class="row"><span>FPS / кадр</span><span>${d.fps||0} fps / ${fmtMs(d.frame_time_ms)}</span></div>
-      <div class="row"><span>Последний JPEG / зрители</span><span>${fmtBytes(d.last_frame_size||0)} / ${d.video_clients||0}</span></div>
-      <div class="row"><span>Heap / PSRAM</span><span>${fmtBytes(d.heap_free||0)} / ${fmtBytes(d.psram_free||0)}</span></div>`;
-    document.getElementById('network-card').innerHTML=`
-      <div class="row"><span>Wi‑Fi</span><span>${d.wifi_connected ? badge('подключено','ok') : badge('повтор','warn')}</span></div>
-      <div class="row"><span>RSSI</span><span>${d.wifi_rssi_cached ?? d.wifi_rssi ?? 'n/a'}</span></div>
-      <div class="row"><span>API</span><span><a href="/api/status" target="_blank">/api/status</a></span></div>`;
-    document.getElementById('camera-card').innerHTML=`
-      <div class="row"><span>Состояние</span><span>${d.camera_ready ? badge('готова','ok') : badge('ошибка','bad')}</span></div>
-      <div class="row"><span>Producer</span><span>${d.camera_producer_running ? badge('идёт','ok') : badge('стоп','warn')}</span></div>
-      <div class="row"><span>Пресет</span><span>${d.camera_preset||'balanced'}</span></div>
-      <div class="row"><span>Поток</span><span><a href="/stream" target="_blank">/stream</a></span></div>`;
-    document.getElementById('mic-card').innerHTML=`
-      <div class="row"><span>Состояние</span><span>${a.ready ? badge('готов','ok') : badge('ошибка','bad')}</span></div>
-      <div class="row"><span>Профиль</span><span class="mono">${a.profile||'n/a'}</span></div>
-      <div class="row"><span>Уровень</span><span>${a.selected_peak||0} / avg ${a.average_level||0}</span></div>
-      <div class="row"><span>Сигнал</span><span>${badge(a.signal_state||'silence', (a.signal_state==='active')?'ok':((a.signal_state==='weak'||a.signal_state==='silence')?'warn':'bad'))}</span></div>
-      <div class="row"><span>Тестовый поток</span><span><a href="/audio" target="_blank">/audio</a></span></div>`;
-    document.getElementById('speaker-card').innerHTML=`
-      <div class="row"><span>Состояние</span><span>${playback.ready ? badge('готов','ok') : badge('ошибка','bad')}</span></div>
-      <div class="row"><span>Клиент</span><span>${playback.client_active ? badge('активен','warn') : badge('нет','ok')}</span></div>
-      <div class="row"><span>Буфер</span><span>${fmtBytes(playback.buffer_fill||0)}</span></div>
-      <div class="row"><span>Underruns / overflows</span><span>${playback.underruns||0} / ${playback.overflows||0}</span></div>`;
-    document.getElementById('sensor-card').innerHTML=`
-      <div class="row"><span>Движение</span><span>${d.motion ? badge('обнаружено','warn') : badge('нет','ok')}</span></div>
-      <div class="row"><span>Свет raw</span><span>${d.light_raw ?? 'n/a'}</span></div>
-      <div class="row"><span>Свет нормализованный</span><span>${d.light_norm!==undefined ? fmtPct(d.light_norm) : 'n/a'}</span></div>
-      <div class="row"><span>Изменение движения</span><span>${fmtMs(d.motion_changed_ms_ago)}</span></div>`;
-    document.getElementById('pca-card').innerHTML=`
-      <div class="row"><span>Состояние</span><span>${d.pca9685_ready ? badge('готов','ok') : badge('ошибка','bad')}</span></div>
-      <div class="row"><span>Адрес</span><span>${p.address!==undefined ? '0x'+Number(p.address).toString(16) : 'n/a'}</span></div>
-      <div class="row"><span>Частота</span><span>${p.frequency||0} Hz</span></div>
-      <div class="row"><span>Сцена</span><span>${p.active_scene||'n/a'}</span></div>
-      <div class="row"><span>Активные каналы</span><span>${p.active_channels||0}</span></div>`;
-    document.getElementById('endpoint-links').innerHTML=['/','/live','/ota','/capture','/stream','/audio','/speaker','/api/dashboard','/api/status','/api/audio','/api/audio/clip?ms=2000','/api/camera','/api/sensors','/api/pca9685','/api/ota','/ws']
-      .map(url=>`<a href="${url}" target="_blank">${url}</a>`).join('');
-    document.getElementById('video-meta').textContent=`${d.camera_preset||'balanced'} | ${d.fps||0} FPS | ${fmtMs(d.frame_time_ms)} | gen ${d.camera_generation||0}`;
-    document.getElementById('raw-dashboard').textContent=JSON.stringify({dashboard:d,camera:state.camera,audio:state.audio,pca:state.pca},null,2);
-    document.getElementById('raw-audio').textContent=JSON.stringify(state.audio,null,2);
-  }
-  function streamUrl(){return `http://${location.hostname}:81/stream?gen=${lastGeneration}&ts=${Date.now()}`;}
-  function attachVideo(force=false){
-    if(force || !videoEl.src || !videoEl.src.includes(`/stream?gen=${lastGeneration}`)){ videoEl.src=streamUrl(); }
-  }
-  function scheduleVideoReload(force=false){
-    if(videoReloadTimer){ clearTimeout(videoReloadTimer); }
-    videoReloadTimer=setTimeout(()=>{ attachVideo(true); }, force ? 120 : videoBackoffMs);
-  }
-  videoEl.onload=()=>{ videoBackoffMs=500; };
-  videoEl.onerror=()=>{ videoBackoffMs=Math.min(videoBackoffMs*2,2000); scheduleVideoReload(false); };
-  async function refreshDashboard(maybeReload=false){
-    const [dashboard,audio,pca]=await Promise.all([fetchJson('/api/dashboard'),fetchJson('/api/audio'),fetchJson('/api/pca9685')]);
-    state.dashboard=dashboard; state.audio=audio; state.pca=pca;
-    if(lastGeneration!==dashboard.camera_generation){ const changed=lastGeneration!==-1; lastGeneration=dashboard.camera_generation||0; if(changed || maybeReload){ scheduleVideoReload(true); } else { attachVideo(true); } }
-    fillAudioControls();
-    render();
-  }
-  async function loadCamera(){ state.camera=await fetchJson('/api/camera'); fillCameraControls(); fillAudioControls(); render(); }
-  async function runCameraAction(action){
-    try{
-      await action();
-      await loadCamera();
-      await refreshDashboard(true);
-      document.getElementById('camera-feedback').textContent='Настройки камеры применены';
-    }catch(err){
-      document.getElementById('camera-feedback').textContent=String(err);
-    }
-  }
-  async function runAudioAction(action){
-    try{
-      await action();
-      await refreshDashboard(false);
-      fillAudioControls();
-      render();
-      document.getElementById('audio-feedback').textContent='Настройки аудио применены';
-    }catch(err){
-      document.getElementById('audio-feedback').textContent=String(err);
-    }
-  }
-  document.getElementById('apply-preset').onclick=()=>runCameraAction(async()=>{
-    await postJson('/api/camera/preset/apply',{preset:presetSelect.value});
-  });
-  document.getElementById('save-preset').onclick=()=>runCameraAction(async()=>{
-    const name=document.getElementById('preset_name').value.trim();
-    if(!name) throw new Error('Введите имя пресета');
-    await postJson('/api/camera', currentPayload());
-    await postJson('/api/camera/preset/save',{preset:name});
-  });
-  document.getElementById('reset-presets').onclick=()=>runCameraAction(async()=>{
-    await postJson('/api/camera/preset/resetdefaults',{});
-  });
-  document.getElementById('delete-preset').onclick=()=>runCameraAction(async()=>{
-    await postJson('/api/camera/preset/delete',{preset:presetSelect.value});
-  });
-  document.getElementById('refresh-camera').onclick=async()=>{ await loadCamera(); };
+  function liveUrl(){return `/live?embed=1&gen=${lastGeneration}&ts=${Date.now()}`;} function audioStreamUrl(){return `http://${location.hostname}:82/audio`;}
+  function currentPayload(){return{framesize:Number(document.getElementById('framesize').value),quality:Number(document.getElementById('quality').value),brightness:Number(document.getElementById('brightness').value),contrast:Number(document.getElementById('contrast').value),saturation:Number(document.getElementById('saturation').value),sharpness:Number(document.getElementById('sharpness').value),denoise:Number(document.getElementById('denoise').value),gain_ceiling:Number(document.getElementById('gain_ceiling').value),awb:document.getElementById('awb').value==='true',agc:document.getElementById('agc').value==='true',aec:document.getElementById('aec').value==='true',hmirror:document.getElementById('hmirror').value==='true',vflip:document.getElementById('vflip').value==='true'};}
+  function renderQuickPresets(c){const root=document.getElementById('preset-quick'); const presets=Array.isArray(c.presets)?c.presets:[]; root.innerHTML=''; presets.forEach(p=>{const b=document.createElement('button'); b.className=`preset-chip${c.preset===p.name?' active':''}`; b.textContent=p.name; b.onclick=()=>runCameraAction(async()=>{await postJson('/api/camera/preset/apply',{preset:p.name}); const cameraState=await fetchJson('/api/camera'); const cs=(cameraState&&cameraState.camera)?cameraState.camera:cameraState||{}; const expected=presetExpectedFramesize[p.name]; if(expected!==undefined&&Number(cs.framesize)!==expected){throw new Error(`Пресет ${p.name} применился частично: framesize=${cs.framesize}, ожидался ${expected}`);}}); root.appendChild(b);});}
+  function fillCameraControls(){const c=(state.camera&&state.camera.camera)?state.camera.camera:state.camera||{}; const presets=Array.isArray(c.presets)?c.presets:[]; presetSelect.innerHTML=''; presets.forEach(p=>{const opt=document.createElement('option');opt.value=p.name;opt.textContent=p.builtin?`${p.name} [builtin]`:p.name;presetSelect.appendChild(opt);}); if(c.preset) presetSelect.value=c.preset; document.getElementById('preset_name').value=c.preset||''; setFramesizeOptions(c); refreshPresetExpectedFramesize(c); ['quality','brightness','contrast','saturation','sharpness','denoise','gain_ceiling'].forEach(k=>{if(c[k]!==undefined) document.getElementById(k).value=String(c[k]);}); if(c.awb!==undefined) document.getElementById('awb').value=String(!!c.awb); if(c.agc!==undefined) document.getElementById('agc').value=String(!!c.agc); if(c.aec!==undefined) document.getElementById('aec').value=String(!!c.aec); if(c.hmirror!==undefined) document.getElementById('hmirror').value=String(!!c.hmirror); if(c.vflip!==undefined) document.getElementById('vflip').value=String(!!c.vflip); renderQuickPresets(c);}
+  function fillAudioControls(){const a=state.audio&&state.audio.capture?state.audio.capture:{}; const profiles=Array.isArray(a.profiles)?a.profiles:[]; const sel=document.getElementById('audio_profile'); sel.innerHTML=''; profiles.forEach(name=>{const opt=document.createElement('option');opt.value=name;opt.textContent=name;sel.appendChild(opt);}); if(a.profile) sel.value=a.profile; document.getElementById('audio_gain').value=a.software_gain!==undefined?Number(a.software_gain).toFixed(2):'1.00'; document.getElementById('audio_dc_block').value=String(!!a.dc_block); document.getElementById('audio_slot').value=String(a.preferred_slot||1); document.getElementById('audio_shift').value=a.sample_shift!==undefined?a.sample_shift:0; updateAudioClipLink();}
+  function updateAudioClipLink(){const clipMs=Math.max(250,Math.min(4000,Number(document.getElementById('audio_clip_ms').value||2000))); document.getElementById('audio_clip_link').href=`/api/audio/clip?ms=${clipMs}`; document.getElementById('audio_stream_link').href=audioStreamUrl();}
+  function renderTopStatus(){const d=state.dashboard||{};const s=state.status||{};const a=state.audio&&state.audio.capture?state.audio.capture:{};document.getElementById('top-system').innerHTML=`${d.wifi_connected?badge('Wi‑Fi OK',true):badge('Wi‑Fi down',false)} | RSSI ${d.wifi_rssi_cached??d.wifi_rssi??'n/a'} | Heap ${fmtBytes(s.heap_free||0)}`;document.getElementById('top-video').innerHTML=`${d.camera_ready?badge('камера ок',true):badge('камера fail',false)} | ${d.fps||0} FPS | ${fmtMs(d.frame_time_ms)}`;document.getElementById('top-audio').innerHTML=`${d.audio_ready?badge('аудио ок',true):badge('аудио fail',false)} | профиль ${a.profile||'n/a'}`;}
+  function renderSystem(){const d=state.dashboard||{}; const s=state.status||{}; const a=state.audio&&state.audio.capture?state.audio.capture:{}; const playback=state.audio&&state.audio.playback?state.audio.playback:{}; document.getElementById('video-meta').textContent=`${d.camera_preset||'realtime'} | ${d.fps||0} FPS | ${fmtMs(d.frame_time_ms)} | gen ${d.camera_generation||0}`; document.getElementById('audio-stream-card').innerHTML=`<div class="row"><span>Capture</span><span>${d.audio_ready?badge('ok',true):badge('fail',false)}</span></div><div class="row"><span>PCM5102</span><span>${d.speaker_ready?badge('ok',true):badge('fail',false)}</span></div><div class="row"><span>Профиль</span><span class="mono">${a.profile||'n/a'}</span></div><div class="row"><span>Сигнал</span><span>${badge(a.signal_state||'n/a',a.signal_state==='active')}</span></div><div class="row"><span>Playback client</span><span>${playback.client_active?badge('active',false):badge('idle',true)}</span></div>`; document.getElementById('camera-card').innerHTML=`<div class="row"><span>Состояние</span><span>${d.camera_ready?badge('ok',true):badge('fail',false)}</span></div><div class="row"><span>Producer</span><span>${d.camera_producer_running?badge('run',true):badge('stop',false)}</span></div><div class="row"><span>Поколение</span><span>${d.camera_generation||0}</span></div><div class="row"><span>Пресет</span><span>${d.camera_preset||'realtime'}</span></div><div class="row"><span>Зрители</span><span>${d.video_clients||0}</span></div><div class="row"><span>Ошибки стрима</span><span>${d.last_stream_error||'none'}</span></div>`; document.getElementById('mic-card').innerHTML=`<div class="row"><span>Состояние</span><span>${a.ready?badge('ok',true):badge('fail',false)}</span></div><div class="row"><span>Peak / Avg</span><span>${a.selected_peak||0} / ${a.average_level||0}</span></div><div class="row"><span>DC block</span><span>${a.dc_block?'on':'off'}</span></div><div class="row"><span>Shift / slot</span><span>${a.sample_shift||0} / ${a.preferred_slot||1}</span></div><div class="row"><span>PSRAM</span><span>${fmtBytes(s.psram_free||0)}</span></div>`; renderTopStatus();}
+  function renderSensors(){const s=state.sensors||{}; document.getElementById('sensor-card').innerHTML=`<div class="row"><span>Движение</span><span>${s.motion?badge('detected',false):badge('none',true)}</span></div><div class="row"><span>Свет raw</span><span>${s.light_raw??'n/a'}</span></div><div class="row"><span>Свет norm</span><span>${s.light_norm!==undefined?fmtPct(s.light_norm):'n/a'}</span></div><div class="row"><span>Изменение</span><span>${fmtMs(s.motion_changed_ms_ago)}</span></div>`; document.getElementById('top-sensors').innerHTML=`${s.motion?badge('движение',false):badge('спокойно',true)} | light ${s.light_raw??'n/a'}`;}
+  function attachVideo(force=false){if(force||!videoFrameEl.src||!videoFrameEl.src.includes(`/live?embed=1&gen=${lastGeneration}`)){videoFrameEl.src=liveUrl();}}
+  function scheduleVideoReload(force=false){if(videoReloadTimer){clearTimeout(videoReloadTimer);} videoReloadTimer=setTimeout(()=>{attachVideo(true);},force?120:videoBackoffMs);}
+  videoFrameEl.onload=()=>{videoBackoffMs=500;}; videoFrameEl.onerror=()=>{videoBackoffMs=Math.min(videoBackoffMs*2,2000); scheduleVideoReload(false);};
+  async function refreshSystemTelemetry(maybeReload=false){const [dashboardRes,statusRes]=await Promise.allSettled([fetchJson('/api/dashboard'),fetchJson('/api/status')]); if(dashboardRes.status==='fulfilled'){state.dashboard=dashboardRes.value;} if(statusRes.status==='fulfilled'){state.status=statusRes.value;} if(state.dashboard){if(lastGeneration!==state.dashboard.camera_generation){const changed=lastGeneration!==-1;lastGeneration=state.dashboard.camera_generation||0;if(changed||maybeReload){scheduleVideoReload(true);}else{attachVideo(true);}}} renderSystem();}
+  async function refreshSensorTelemetry(){const feedback=document.getElementById('telemetry-feedback'); feedback.textContent='обновление сенсоров...'; try{state.sensors=await fetchJson('/api/sensors'); renderSensors(); feedback.textContent=`сенсоры обновлены: ${new Date().toLocaleTimeString()}`;}catch(err){feedback.textContent=String(err);}}
+  async function loadCamera(){state.camera=await fetchJson('/api/camera'); fillCameraControls(); renderSystem();}
+  async function loadAudio(){state.audio=await fetchJson('/api/audio'); fillAudioControls(); renderSystem();}
+  async function runCameraAction(action){try{await action(); await loadCamera(); await refreshSystemTelemetry(true); document.getElementById('camera-feedback').textContent='Настройки камеры применены';}catch(err){document.getElementById('camera-feedback').textContent=String(err);}}
+  async function runAudioAction(action){try{await action(); await loadAudio(); await refreshSystemTelemetry(false); document.getElementById('audio-feedback').textContent='Настройки аудио применены';}catch(err){document.getElementById('audio-feedback').textContent=String(err);}}
+  document.getElementById('apply-camera').onclick=()=>runCameraAction(async()=>{await postJson('/api/camera',currentPayload());});
+  document.getElementById('apply-preset').onclick=()=>runCameraAction(async()=>{const selectedPreset=presetSelect.value;await postJson('/api/camera/preset/apply',{preset:selectedPreset}); const cameraState=await fetchJson('/api/camera'); const c=(cameraState&&cameraState.camera)?cameraState.camera:cameraState||{}; const expected=presetExpectedFramesize[selectedPreset]; if(expected!==undefined&&Number(c.framesize)!==expected){throw new Error(`Пресет ${selectedPreset} применился частично: framesize=${c.framesize}, ожидался ${expected}`);}});
+  document.getElementById('save-preset').onclick=()=>runCameraAction(async()=>{const name=document.getElementById('preset_name').value.trim(); if(!name) throw new Error('Введите имя пресета'); await postJson('/api/camera',currentPayload()); await postJson('/api/camera/preset/save',{preset:name});});
+  document.getElementById('reset-presets').onclick=()=>runCameraAction(async()=>{await postJson('/api/camera/preset/resetdefaults',{});});
+  document.getElementById('delete-preset').onclick=()=>runCameraAction(async()=>{await postJson('/api/camera/preset/delete',{preset:presetSelect.value});});
   document.getElementById('reload-video').onclick=()=>scheduleVideoReload(true);
-  document.getElementById('apply-audio').onclick=()=>runAudioAction(async()=>{
-    await postJson('/api/audio',{
-      profile:document.getElementById('audio_profile').value,
-      software_gain:Number(document.getElementById('audio_gain').value),
-      dc_block:document.getElementById('audio_dc_block').value==='true',
-      slot:Number(document.getElementById('audio_slot').value),
-      shift:Number(document.getElementById('audio_shift').value)
-    });
-  });
+  document.getElementById('open-live').onclick=()=>{window.open('/live','_blank');};
+  document.getElementById('refresh-telemetry').onclick=refreshSensorTelemetry;
+  document.getElementById('apply-audio').onclick=()=>runAudioAction(async()=>{await postJson('/api/audio',{profile:document.getElementById('audio_profile').value,software_gain:Number(document.getElementById('audio_gain').value),dc_block:document.getElementById('audio_dc_block').value==='true',slot:Number(document.getElementById('audio_slot').value),shift:Number(document.getElementById('audio_shift').value)});});
   document.getElementById('audio_clip_ms').oninput=updateAudioClipLink;
-  Promise.all([loadCamera(),refreshDashboard(false)]).catch(err=>{document.getElementById('camera-feedback').textContent=String(err);document.getElementById('audio-feedback').textContent=String(err);});
-  setInterval(()=>{ refreshDashboard(false).catch(err=>{document.getElementById('camera-feedback').textContent=String(err); }); }, 2000);
+  decorateButtons(); updateAudioClipLink();
+  Promise.all([loadCamera(),loadAudio(),refreshSystemTelemetry(false),refreshSensorTelemetry()]).catch(err=>{document.getElementById('camera-feedback').textContent=String(err);document.getElementById('audio-feedback').textContent=String(err);});
+  setInterval(()=>{refreshSystemTelemetry(false).catch(()=>{});},1000);
   </script></div></body></html>)HTML";
-  return html;
-}
 
-String formatLivePage() {
-  String html;
-  html.reserve(2200);
-  html += R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>AdamS Live</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
-  body{margin:0;background:#05080c;color:#e7edf4;font-family:Segoe UI,Arial,sans-serif;display:flex;flex-direction:column;gap:12px;min-height:100vh}
-  .bar{padding:12px 16px;display:flex;justify-content:space-between;gap:12px;align-items:center;background:#0d141b;border-bottom:1px solid #23313f}.meta{color:#9aabba;font-size:14px}.video{width:min(100vw,960px);aspect-ratio:4/3;object-fit:contain;margin:0 auto;border:1px solid #23313f;background:#000}
-  a{color:#65c9ff;text-decoration:none}
-  </style></head><body><div class="bar"><div><strong>AdamS Live</strong> <span class="meta" id="meta">ожидание потока</span></div><div><a href="/" target="_blank">панель</a></div></div><img id="video" class="video" alt="live"><script>
-  const img=document.getElementById('video'); const meta=document.getElementById('meta'); let generation=0; let backoff=500; let timer=null;
-  function reload(force=false){ if(timer) clearTimeout(timer); timer=setTimeout(()=>{ img.src=`http://${location.hostname}:81/stream?gen=${generation}&ts=${Date.now()}`; }, force?100:backoff); }
-  img.onload=()=>{ backoff=500; };
-  img.onerror=()=>{ backoff=Math.min(backoff*2,2000); reload(false); };
-  async function refresh(){ try{ const r=await fetch('/api/dashboard',{cache:'no-store'}); const d=await r.json(); meta.textContent=`${d.camera_preset||'balanced'} | ${d.fps||0} FPS | ${(d.frame_time_ms||0)} ms | gen ${d.camera_generation||0}`; if(generation!==d.camera_generation){ generation=d.camera_generation||0; reload(true); } }catch(_err){} }
-  refresh(); reload(true); setInterval(refresh,2000);
+const char kLivePage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>AdamS Live</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body{margin:0;background:#060606;color:#f3f3f3;font-family:Segoe UI,Arial,sans-serif;display:flex;flex-direction:column;min-height:100vh}
+  .bar{padding:10px 14px;display:flex;justify-content:space-between;gap:12px;align-items:center;background:#101010;color:#fff;border-bottom:1px solid #2a2a2a}
+  .video-wrap{width:min(100vw,960px);aspect-ratio:4/3;position:relative;margin:10px auto;border:1px solid #2a2a2a;border-radius:10px;background:#000;overflow:hidden}
+  .video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  .overlay{position:absolute;left:0;right:0;bottom:0;padding:6px 8px;background:rgba(0,0,0,.6);font-size:12px;color:#d0d0d0}
+  a{color:#1ba73a;text-decoration:none}button{background:#fff;color:#000;border:1px solid #555;border-radius:10px;padding:8px 12px;cursor:pointer}
+  .hidden{display:none}
+  </style></head><body><div class="bar" id="topbar"><div><strong>AdamS Live</strong> <span id="meta">init...</span></div><div style="display:flex;gap:12px;align-items:center"><button id="reload-live">reload stream</button><a href="/dashboard" target="_blank">dashboard</a></div></div>
+  <div class="video-wrap"><img id="video" class="video" alt="live"><div class="overlay" id="ov">Connecting...</div></div><script>
+  const params = new URLSearchParams(location.search);
+  const embedded = params.get('embed') === '1';
+  if (embedded) document.getElementById('topbar').classList.add('hidden');
+  const img=document.getElementById('video'); const ov=document.getElementById('ov'); const meta=document.getElementById('meta');
+  let mode='stream'; let fails=0; let timer=null; let capturePollMs=700;
+  function streamUrl(){ return `http://${location.hostname}:81/stream?ts=${Date.now()}`; }
+  function captureUrl(){ return `/capture?ts=${Date.now()}`; }
+  function setOverlay(text){ ov.textContent=text; meta.textContent=text; }
+  function clearTimer(){ if(timer){ clearTimeout(timer); timer=null; } }
+  function schedule(ms){ clearTimer(); timer=setTimeout(load, ms); }
+  function load(){
+    if(mode==='stream'){ setOverlay(`stream mode | retries ${fails}`); img.src=streamUrl(); return; }
+    setOverlay(`capture fallback | ${capturePollMs} ms`);
+    img.src=captureUrl();
+  }
+  img.onload=()=>{ fails=0; if(mode==='capture'){ schedule(capturePollMs); } else { setOverlay('stream ok'); } };
+  img.onerror=()=>{
+    fails++;
+    if(mode==='stream' && fails>=6){ mode='capture'; capturePollMs=700; setOverlay('switch to capture fallback'); schedule(120); return; }
+    if(mode==='stream'){ schedule(Math.min(2000, 250*fails)); return; }
+    capturePollMs=Math.min(2000, capturePollMs+100);
+    if(fails%15===0){ mode='stream'; setOverlay('retry stream...'); schedule(120); return; }
+    schedule(capturePollMs);
+  };
+  document.getElementById('reload-live').onclick=()=>{ mode='stream'; fails=0; load(); };
+  load();
   </script></body></html>)HTML";
-  return html;
-}
 
-String formatOtaPage() {
-  String html;
-  html.reserve(5200);
-  html += R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>AdamS OTA</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+const char kOtaPage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>AdamS OTA</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
   body{margin:0;background:#0b1016;color:#e7edf4;font-family:Segoe UI,Arial,sans-serif}
   .wrap{max-width:840px;margin:0 auto;padding:24px}
   .card{background:#111923;border:1px solid #23313f;border-radius:16px;padding:20px;box-shadow:0 16px 40px rgba(0,0,0,.22)}
@@ -1248,25 +1277,267 @@ String formatOtaPage() {
   refresh();
   setInterval(refresh,1500);
   </script></body></html>)HTML";
-  return html;
-}
+
+const char kRootV2Page[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>AdamS Technical Dashboard</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  :root{--bg:#090d14;--card:#121827;--line:#2a3850;--text:#e9eef7;--muted:#9fb0c7;--ok:#22c55e;--bad:#ef4444}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Segoe UI,Arial,sans-serif}
+  .wrap{max-width:1320px;margin:0 auto;padding:16px}
+  .head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+  .row{display:flex;justify-content:space-between;gap:10px}
+  .grid{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .links{display:flex;flex-wrap:wrap;gap:8px}
+  .links a{color:var(--ok);text-decoration:none;border:1px solid #2f5e45;padding:6px 10px;border-radius:999px}
+  .group{margin-bottom:10px}.group h4{margin:0 0 6px 0;color:#c2d0e4}
+  .endpoint{display:inline-block;margin:4px 6px 0 0;padding:5px 9px;border-radius:999px;border:1px solid #33506d;color:var(--ok);text-decoration:none}
+  .endpoint.down{border-color:#6d3338;color:var(--bad)}
+  pre{margin:8px 0 0;background:#0d1422;border:1px solid #2a3850;border-radius:10px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto}
+  .muted{color:var(--muted)} .mono{font-family:Consolas,monospace}
+  @media (max-width:980px){.grid{grid-template-columns:1fr}}
+  </style></head><body><div class="wrap">
+    <div class="head"><div><h1 style="margin:0">Technical Dashboard</h1><div class="muted">Endpoints, health checks and raw module states (legacy API preserved).</div></div><div class="links"><a href="/dashboard" target="_blank">/dashboard</a><a href="/live" target="_blank">/live</a><a href="/ota" target="_blank">/ota</a></div></div>
+    <div class="grid">
+      <section class="card"><h3 style="margin:0 0 10px 0">Endpoint Categories</h3><div id="endpoints"></div></section>
+      <section class="card"><h3 style="margin:0 0 10px 0">Quick Status</h3><div id="quick" class="muted">loading...</div></section>
+    </div>
+    <div class="grid">
+      <section class="card"><h3 style="margin:0 0 10px 0">Raw: /api/dashboard</h3><pre id="raw-dashboard">loading...</pre></section>
+      <section class="card"><h3 style="margin:0 0 10px 0">Raw: /api/status</h3><pre id="raw-status">loading...</pre></section>
+    </div>
+    <div class="grid">
+      <section class="card"><h3 style="margin:0 0 10px 0">Raw: /api/camera</h3><pre id="raw-camera">loading...</pre></section>
+      <section class="card"><h3 style="margin:0 0 10px 0">Raw: /api/audio</h3><pre id="raw-audio">loading...</pre></section>
+    </div>
+  </div><script>
+  const groups=[
+    {name:'UI',items:[['/dashboard','/dashboard'],['/live','/live'],['/ota','/ota']]},
+    {name:'Video',items:[['/capture','/capture'],[':81/stream',()=>`http://${location.hostname}:81/stream`],['/api/camera','/api/camera'],['/api/camera/preset/apply','/api/camera/preset/apply']]},
+    {name:'Audio',items:[[':82/audio',()=>`http://${location.hostname}:82/audio`],[':83/speaker',()=>`http://${location.hostname}:83/speaker`],['/api/audio','/api/audio'],['/api/audio/clip?ms=2000','/api/audio/clip?ms=2000']]},
+    {name:'System',items:[['/api/status','/api/status'],['/api/dashboard','/api/dashboard'],['/api/sensors','/api/sensors'],['/api/pca9685','/api/pca9685'],['/api/ota','/api/ota'],['/ws','/ws']]}
+  ];
+  const state={health:{}};
+  function endpointUrl(v){return typeof v==='function'?v():v;}
+  function key(label,url){return `${label}|${url}`;}
+  async function j(url){const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`${url} -> ${r.status}`); return r.json();}
+  async function check(label,url){
+    if(label.includes(':81/stream')) return true;
+    if(label.includes(':82/audio')) return true;
+    if(label.includes(':83/speaker')) return true;
+    if(label==='/ws') return true;
+    const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(),900);
+    try{ const r=await fetch(url,{cache:'no-store',signal:ctl.signal}); clearTimeout(t); return r.ok; }catch(_e){ clearTimeout(t); return false; }
+  }
+  function renderEndpoints(){
+    const root=document.getElementById('endpoints');
+    root.innerHTML=groups.map(g=>`<div class="group"><h4>${g.name}</h4>${g.items.map(([label,u])=>{const url=endpointUrl(u);const down=state.health[key(label,url)]===false?'down':'';return `<a class="endpoint ${down}" href="${url}" target="_blank">${label}</a>`;}).join('')}</div>`).join('');
+  }
+  async function refreshHealth(){
+    const tasks=[];
+    groups.forEach(g=>g.items.forEach(([label,u])=>{const url=endpointUrl(u);tasks.push(check(label,url).then(ok=>{state.health[key(label,url)]=ok;}));}));
+    await Promise.allSettled(tasks);
+    renderEndpoints();
+  }
+  function pretty(data){return JSON.stringify(data,null,2);}
+  async function refreshRaw(){
+    try{
+      const [status,dashboard,camera,audio,sensors]=await Promise.all([j('/api/status'),j('/api/dashboard'),j('/api/camera'),j('/api/audio'),j('/api/sensors')]);
+      document.getElementById('raw-status').textContent=pretty(status);
+      document.getElementById('raw-dashboard').textContent=pretty(dashboard);
+      document.getElementById('raw-camera').textContent=pretty(camera);
+      document.getElementById('raw-audio').textContent=pretty(audio);
+      document.getElementById('quick').innerHTML=`<div class="row"><span>IP</span><span class="mono">${status.ip||'0.0.0.0'}</span></div><div class="row"><span>Wi-Fi</span><span>${dashboard.wifi_connected?'up':'down'}</span></div><div class="row"><span>FPS</span><span>${dashboard.fps||0}</span></div><div class="row"><span>Camera preset</span><span>${dashboard.camera_preset||'n/a'}</span></div><div class="row"><span>Audio profile</span><span>${audio.capture?.profile||'n/a'}</span></div><div class="row"><span>Motion</span><span>${sensors.motion?'detected':'none'}</span></div>`;
+    }catch(e){
+      document.getElementById('quick').textContent=String(e);
+    }
+  }
+  renderEndpoints();
+  refreshRaw().catch(()=>{});
+  refreshHealth().catch(()=>{});
+  setInterval(()=>{refreshRaw().catch(()=>{});},1200);
+  setInterval(()=>{refreshHealth().catch(()=>{});},3500);
+  </script></body></html>)HTML";
+
+const char kVisionPage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>Vision</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body{margin:0;background:#060606;color:#f3f3f3;font:15px Segoe UI,Arial,sans-serif}.wrap{max-width:1200px;margin:0 auto;padding:14px}
+  .card{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:12px;margin-top:10px}.links a{color:#1eba4f;text-decoration:none;margin-right:10px}
+  iframe{width:100%;aspect-ratio:4/3;border:1px solid #2a2a2a;border-radius:10px;background:#000}.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1f1f1f}
+  </style></head><body><div class="wrap"><h1 style="margin:0">/vision</h1><div class="links"><a href="/">/</a><a href="/vision/live">/vision/live</a></div>
+  <div class="card"><iframe src="/live?embed=1"></iframe></div><div class="card"><div id="status">loading...</div></div>
+  <script>async function j(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error(r.status);return r.json();} function row(k,v){return `<div class="row"><span>${k}</span><span>${v}</span></div>`;}
+  async function refresh(){const s=await j('/api/v1/vision/status');const c=s.camera||{};const d=s.dashboard||{};document.getElementById('status').innerHTML=row('Preset',c.preset||'n/a')+row('Framesize',String(c.framesize??'n/a'))+row('FPS',String(d.fps??0))+row('Clients',String(d.video_clients??0))+row('Last err',d.last_stream_error||'none');}
+  refresh();setInterval(()=>refresh().catch(()=>{}),1000);</script></div></body></html>)HTML";
+
+const char kHearingPage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>Hearing</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body{margin:0;background:#060606;color:#f3f3f3;font:15px Segoe UI,Arial,sans-serif}.wrap{max-width:1100px;margin:0 auto;padding:14px}.card{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:12px;margin-top:10px}.links a{color:#1eba4f;text-decoration:none;margin-right:10px}.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1f1f1f}
+  </style></head><body><div class="wrap"><h1 style="margin:0">/hearing</h1><div class="links"><a href="/">/</a><a href="/hearing/live">/hearing/live</a></div>
+  <div class="card"><a style="color:#1eba4f" href="" id="astream" target="_blank">Открыть аудиопоток :82/audio</a></div><div class="card"><div id="status">loading...</div></div>
+  <script>document.getElementById('astream').href=`http://${location.hostname}:82/audio`;async function j(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error(r.status);return r.json();} function row(k,v){return `<div class="row"><span>${k}</span><span>${v}</span></div>`;}
+  async function refresh(){const s=await j('/api/v1/hearing/status');const a=s.audio||{};const c=a.capture||{};document.getElementById('status').innerHTML=row('Ready',String(c.ready??false))+row('Profile',c.profile||'n/a')+row('Signal',c.signal_state||'n/a')+row('Peak',String(c.selected_peak??0))+row('Avg',String(c.average_level??0));}
+  refresh();setInterval(()=>refresh().catch(()=>{}),1000);</script></div></body></html>)HTML";
+
+const char kSensoricsPage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>Sensorics</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body{margin:0;background:#060606;color:#f3f3f3;font:15px Segoe UI,Arial,sans-serif}.wrap{max-width:900px;margin:0 auto;padding:14px}.card{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:12px;margin-top:10px}.links a{color:#1eba4f;text-decoration:none;margin-right:10px}.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1f1f1f}
+  </style></head><body><div class="wrap"><h1 style="margin:0">/sensorics</h1><div class="links"><a href="/">/</a><a href="/sensorics/live">/sensorics/live</a></div><div class="card" id="status">loading...</div>
+  <script>async function j(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error(r.status);return r.json();} function row(k,v){return `<div class="row"><span>${k}</span><span>${v}</span></div>`;}
+  async function refresh(){const s=await j('/api/v1/sensorics/status');document.getElementById('status').innerHTML=row('Motion',String(s.motion??false))+row('Light raw',String(s.light_raw??'n/a'))+row('Light norm',s.light_norm!==undefined?Number(s.light_norm).toFixed(3):'n/a')+row('Changed',`${s.motion_changed_ms_ago??0} ms ago`);}
+  refresh();setInterval(()=>refresh().catch(()=>{}),1000);</script></div></body></html>)HTML";
+
+const char kMotorSkillsPage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>Motor Skills</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body{margin:0;background:#060606;color:#f3f3f3;font:15px Segoe UI,Arial,sans-serif}.wrap{max-width:980px;margin:0 auto;padding:14px}.card{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:12px;margin-top:10px}.links a{color:#1eba4f;text-decoration:none;margin-right:10px}.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1f1f1f} input,select{width:100%;padding:8px;background:#000;color:#fff;border:1px solid #333;border-radius:8px}
+  </style></head><body><div class="wrap"><h1 style="margin:0">/motor_skills</h1><div class="links"><a href="/">/</a><a href="/api/v1/motor_skills/status" target="_blank">status json</a></div>
+  <div class="card"><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px"><input id="channel" type="number" min="0" max="15" placeholder="channel"><input id="value" type="number" min="0" max="4095" placeholder="value"><button id="apply">apply channel</button></div><div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px"><input id="scene" type="text" placeholder="scene"><button id="apply-scene">apply scene</button></div><div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px"><input id="freq" type="number" min="40" max="1600" placeholder="frequency"><button id="apply-freq">apply frequency</button></div></div>
+  <div class="card" id="status">loading...</div>
+  <script>async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return r.json();} function row(k,v){return `<div class="row"><span>${k}</span><span>${v}</span></div>`;}
+  async function refresh(){const s=await j('/api/v1/motor_skills/status',{cache:'no-store'});const p=s.pca9685||{};document.getElementById('status').innerHTML=row('Ready',String(p.ready??false))+row('Address',String(p.address??'n/a'))+row('Frequency',String(p.frequency??'n/a'))+row('Scene',p.active_scene||'none')+row('Active',String(p.active_channels??0));}
+  document.getElementById('apply').onclick=async()=>{await j('/api/v1/motor_skills/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channel:Number(channel.value),mode:'pwm',value:Number(value.value)})});refresh();};
+  document.getElementById('apply-scene').onclick=async()=>{await j('/api/v1/motor_skills/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene:scene.value})});refresh();};
+  document.getElementById('apply-freq').onclick=async()=>{await j('/api/v1/motor_skills/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({frequency:Number(freq.value)})});refresh();};
+  refresh();setInterval(()=>refresh().catch(()=>{}),1000);</script></div></body></html>)HTML";
+
+const char kSystemPage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>System</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body{margin:0;background:#060606;color:#f3f3f3;font:15px Segoe UI,Arial,sans-serif}.wrap{max-width:900px;margin:0 auto;padding:14px}.card{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:12px;margin-top:10px}.links a{color:#1eba4f;text-decoration:none;margin-right:10px}.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1f1f1f}
+  </style></head><body><div class="wrap"><h1 style="margin:0">/system</h1><div class="links"><a href="/">/</a><a href="/system/status">/system/status</a><a href="/system/ota">/system/ota</a></div><div class="card" id="status">loading...</div>
+  <script>async function j(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error(r.status);return r.json();} function row(k,v){return `<div class="row"><span>${k}</span><span>${v}</span></div>`;}
+  async function refresh(){const s=await j('/api/v1/system/status');document.getElementById('status').innerHTML=row('IP',s.ip||'0.0.0.0')+row('Boot',s.boot_stage||'unknown')+row('Heap',String(s.heap_free??0))+row('PSRAM',String(s.psram_free??0))+row('Web',String(s.web_ready??false));}
+  refresh();setInterval(()=>refresh().catch(()=>{}),1000);</script></div></body></html>)HTML";
+
+const char kVisionLivePage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>Vision Live</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body{margin:0;background:#060606;color:#f3f3f3;font:15px Segoe UI,Arial,sans-serif}.wrap{max-width:1100px;margin:0 auto;padding:14px}.card{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:12px;margin-top:10px}
+  .video{width:100%;aspect-ratio:4/3;object-fit:contain;border:1px solid #2a2a2a;border-radius:10px;background:#000}.links a{color:#1eba4f;text-decoration:none;margin-right:10px}
+  select,input,button{padding:8px;background:#000;color:#fff;border:1px solid #333;border-radius:8px}
+  </style></head><body><div class="wrap"><h1 style="margin:0">/vision/live</h1><div class="links"><a href="/vision">/vision</a><a href="/">/</a></div>
+  <div class="card" style="position:relative"><img id="v" class="video" alt="vision"><div id="vmeta" style="position:absolute;left:22px;right:22px;bottom:18px;background:rgba(0,0,0,.6);padding:6px 8px;font-size:12px;color:#d0d0d0;border-radius:6px">init...</div></div>
+  <div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap"><select id="preset"></select><button id="ap">apply preset</button><input id="fs" type="number" min="0" max="13" placeholder="framesize"><input id="q" type="number" min="4" max="63" placeholder="quality"><button id="ac">apply controls</button></div><div id="msg" style="margin-top:8px;color:#9f9f9f"></div></div>
+  <script>const img=document.getElementById('v'); const vmeta=document.getElementById('vmeta'); let streamPaused=false; let streamRetryTimer=null;
+  let mode='stream'; let fails=0; let capturePollMs=500; let applyInProgress=false; let stabilizeUntilMs=0;
+  function setMeta(t){vmeta.textContent=t;}
+  function streamUrl(){return `http://${location.hostname}:81/stream?ts=${Date.now()}`;}
+  function captureUrl(){return `/api/v1/vision/capture?ts=${Date.now()}`;}
+  function load(){if(streamPaused) return; img.src=(mode==='stream'?streamUrl():captureUrl()); setMeta(mode==='stream'?`stream mode | retries ${fails}`:`capture fallback | ${capturePollMs} ms`);}
+  function scheduleReload(delayMs){if(streamPaused) return; if(streamRetryTimer){clearTimeout(streamRetryTimer);} streamRetryTimer=setTimeout(load,delayMs);}
+  img.onerror=()=>{
+    if(applyInProgress){ setMeta('applying preset...'); return scheduleReload(280); }
+    fails++;
+    if(mode==='stream'&&fails>=6){mode='capture';capturePollMs=500;setMeta('switch to capture fallback');return scheduleReload(120);}
+    if(mode==='stream'){return scheduleReload(Math.min(2200,250*fails));}
+    capturePollMs=Math.min(2000,capturePollMs+100);
+    if(Date.now()<stabilizeUntilMs){ return scheduleReload(capturePollMs); }
+    if(fails%20===0){mode='stream';setMeta('retry stream...'); return scheduleReload(120);}
+    scheduleReload(capturePollMs);
+  };
+  img.onload=()=>{fails=0; if(mode==='capture'){scheduleReload(capturePollMs);} else {setMeta('stream ok');}};
+  async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return r.json();}
+  async function fill(){const s=await j('/api/v1/vision/camera');const c=s.camera||{};const p=(c.presets||[]);const sel=document.getElementById('preset');sel.innerHTML='';p.forEach(x=>{const o=document.createElement('option');o.value=x.name;o.textContent=x.name;sel.appendChild(o);}); if(c.preset) sel.value=c.preset; fs.value=c.framesize??''; q.value=c.quality??'';}
+  ap.onclick=async()=>{
+    try{
+      applyInProgress=true; streamPaused=true; setMeta('applying preset...');
+      await j('/api/v1/vision/preset/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preset:preset.value})});
+      msg.textContent='preset applied';
+      await fill();
+      mode='capture'; fails=0; capturePollMs=500; stabilizeUntilMs=Date.now()+2200;
+      streamPaused=false; applyInProgress=false; scheduleReload(120);
+    }catch(e){applyInProgress=false; streamPaused=false; msg.textContent=String(e);}
+  };
+  ac.onclick=async()=>{
+    try{
+      applyInProgress=true; streamPaused=true; setMeta('applying controls...');
+      await j('/api/v1/vision/camera',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({framesize:Number(fs.value),quality:Number(q.value)})});
+      msg.textContent='controls applied';
+      await fill();
+      mode='capture'; fails=0; capturePollMs=500; stabilizeUntilMs=Date.now()+1800;
+      streamPaused=false; applyInProgress=false; scheduleReload(120);
+    }catch(e){applyInProgress=false; streamPaused=false; msg.textContent=String(e);}
+  };
+  function lockStream(){streamPaused=true;} function unlockStream(){streamPaused=false; scheduleReload(80);}
+  ['preset','fs','q'].forEach(id=>{const el=document.getElementById(id); if(el){el.addEventListener('focus',lockStream); el.addEventListener('blur',unlockStream);}});
+  fill().catch(e=>{msg.textContent=String(e);}); load();</script></div></body></html>)HTML";
+
+const char kHearingLivePage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>Hearing Live</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body{margin:0;background:#060606;color:#f3f3f3;font:15px Segoe UI,Arial,sans-serif}.wrap{max-width:980px;margin:0 auto;padding:14px}.card{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:12px;margin-top:10px}.links a{color:#1eba4f;text-decoration:none;margin-right:10px}
+  input,select,button{padding:8px;background:#000;color:#fff;border:1px solid #333;border-radius:8px}
+  </style></head><body><div class="wrap"><h1 style="margin:0">/hearing/live</h1><div class="links"><a href="/hearing">/hearing</a><a href="/">/</a></div>
+  <div class="card"><a id="audio" target="_blank" style="color:#1eba4f"></a></div><div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap"><select id="profile"></select><input id="gain" type="number" min="0.25" max="32" step="0.25"><select id="dc"><option value="true">dc on</option><option value="false">dc off</option></select><select id="slot"><option value="1">left</option><option value="2">right</option></select><input id="shift" type="number" min="0" max="24"><button id="apply">apply</button></div><div id="msg" style="margin-top:8px;color:#9f9f9f"></div></div>
+  <script>audio.href=`http://${location.hostname}:82/audio`;audio.textContent=audio.href;
+  async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return r.json();}
+  async function fill(){const a=await j('/api/v1/hearing/audio');const c=a.audio?.capture||{};profile.innerHTML='';(c.profiles||[]).forEach(p=>{const o=document.createElement('option');o.value=p;o.textContent=p;profile.appendChild(o);});if(c.profile)profile.value=c.profile;gain.value=Number(c.software_gain??1).toFixed(2);dc.value=String(!!c.dc_block);slot.value=String(c.preferred_slot||1);shift.value=c.sample_shift??0;}
+  apply.onclick=async()=>{try{await j('/api/v1/hearing/audio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:profile.value,software_gain:Number(gain.value),dc_block:dc.value==='true',slot:Number(slot.value),shift:Number(shift.value)})}); msg.textContent='applied'; await fill();}catch(e){msg.textContent=String(e);}};
+  fill().catch(e=>msg.textContent=String(e));</script></div></body></html>)HTML";
+
+const char kSensoricsLivePage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>Sensorics Live</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body{margin:0;background:#060606;color:#f3f3f3;font:15px Segoe UI,Arial,sans-serif}.wrap{max-width:860px;margin:0 auto;padding:14px}.card{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:12px;margin-top:10px}.links a{color:#1eba4f;text-decoration:none;margin-right:10px} pre{background:#000;border:1px solid #2a2a2a;padding:10px;border-radius:10px;white-space:pre-wrap}
+  </style></head><body><div class="wrap"><h1 style="margin:0">/sensorics/live</h1><div class="links"><a href="/sensorics">/sensorics</a><a href="/">/</a></div><div class="card"><pre id="raw">loading...</pre></div>
+  <script>async function tick(){try{const r=await fetch('/api/v1/sensorics/status',{cache:'no-store'});document.getElementById('raw').textContent=JSON.stringify(await r.json(),null,2);}catch(e){document.getElementById('raw').textContent=String(e);}} tick(); setInterval(tick,1000);</script></div></body></html>)HTML";
+
+const char kSystemStatusPage[] PROGMEM =
+  R"HTML(<!doctype html><html><head><meta charset="utf-8"><title>System Status</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#060606;color:#f3f3f3;font:15px Segoe UI,Arial,sans-serif}.wrap{max-width:900px;margin:0 auto;padding:14px}pre{background:#000;border:1px solid #2a2a2a;padding:10px;border-radius:10px;white-space:pre-wrap}</style></head><body><div class="wrap"><h1>/system/status</h1><pre id="raw">loading...</pre></div><script>async function t(){const r=await fetch('/api/v1/system/status',{cache:'no-store'});raw.textContent=JSON.stringify(await r.json(),null,2);} t(); setInterval(()=>t().catch(()=>{}),1000);</script></body></html>)HTML";
 
 esp_err_t indexHandler(httpd_req_t *req) {
-  const String html = formatDashboardPage();
-  httpd_resp_set_type(req, "text/html");
-  return httpd_resp_send(req, html.c_str(), html.length());
+  return sendLocalRedirect(req, "/dashboard");
+}
+
+esp_err_t dashboardPageHandler(httpd_req_t *req) {
+  return sendProgmemHtml(req, kDashboardPage);
+}
+
+esp_err_t ctrlDashHandler(httpd_req_t *req) {
+  return sendProgmemHtml(req, kRootV2Page);
 }
 
 esp_err_t liveHandler(httpd_req_t *req) {
-  const String html = formatLivePage();
-  httpd_resp_set_type(req, "text/html");
-  return httpd_resp_send(req, html.c_str(), html.length());
+  return sendProgmemHtml(req, kLivePage);
 }
 
 esp_err_t otaPageHandler(httpd_req_t *req) {
-  const String html = formatOtaPage();
-  httpd_resp_set_type(req, "text/html");
-  return httpd_resp_send(req, html.c_str(), html.length());
+  return sendProgmemHtml(req, kOtaPage);
+}
+
+esp_err_t visionPageHandler(httpd_req_t *req) {
+  return sendLocalRedirect(req, "/dashboard");
+}
+
+esp_err_t hearingPageHandler(httpd_req_t *req) {
+  return sendLocalRedirect(req, "/dashboard");
+}
+
+esp_err_t sensoricsPageHandler(httpd_req_t *req) {
+  return sendLocalRedirect(req, "/dashboard");
+}
+
+esp_err_t motorSkillsPageHandler(httpd_req_t *req) {
+  return sendLocalRedirect(req, "/dashboard");
+}
+
+esp_err_t systemPageHandler(httpd_req_t *req) {
+  return sendLocalRedirect(req, "/ctrldash");
+}
+
+esp_err_t visionLivePageHandler(httpd_req_t *req) {
+  return sendLocalRedirect(req, "/live");
+}
+
+esp_err_t hearingLivePageHandler(httpd_req_t *req) {
+  return sendLocalRedirect(req, "/dashboard");
+}
+
+esp_err_t sensoricsLivePageHandler(httpd_req_t *req) {
+  return sendLocalRedirect(req, "/dashboard");
+}
+
+esp_err_t systemStatusPageHandler(httpd_req_t *req) {
+  return sendLocalRedirect(req, "/ctrldash");
+}
+
+esp_err_t systemOtaPageHandler(httpd_req_t *req) {
+  return sendProgmemHtml(req, kOtaPage);
 }
 
 esp_err_t sensorsHandler(httpd_req_t *req) {
@@ -1286,6 +1557,7 @@ esp_err_t dashboardHandler(httpd_req_t *req) {
   buildDashboardJson(json);
   return sendJson(req, json);
 }
+
 
 esp_err_t pcaStatusHandler(httpd_req_t *req) {
   String json;
@@ -1362,7 +1634,6 @@ esp_err_t otaUploadHandler(httpd_req_t *req) {
   }
 
   httpd_resp_set_hdr(req, "Connection", "close");
-  broadcastTelemetry();
   return sendJson(req, "{\"ok\":true,\"message\":\"ota_uploaded_reboot_pending\"}");
 }
 
@@ -1391,7 +1662,7 @@ esp_err_t audioClipHandler(httpd_req_t *req) {
     if (queryLength < sizeof(query) && httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
       char value[16] = {};
       if (httpd_query_key_value(query, "ms", value, sizeof(value)) == ESP_OK) {
-        clipMs = static_cast<uint32_t>(constrain(atoi(value), 250, 5000));
+        clipMs = static_cast<uint32_t>(constrain(atoi(value), 250, 4000));
       }
     }
   }
@@ -1524,6 +1795,29 @@ esp_err_t cameraPresetResetDefaultsHandler(httpd_req_t *req) {
 }
 
 esp_err_t captureHandler(httpd_req_t *req) {
+  noteCameraStreamDemand();
+  size_t latestFrameBytes = getLatestCameraFrameSize();
+  if (latestFrameBytes > 0) {
+    uint8_t *frameBuffer = static_cast<uint8_t *>(malloc(latestFrameBytes));
+    if (frameBuffer != nullptr) {
+      size_t frameLength = 0;
+      int64_t timestampUs = 0;
+      uint32_t sequence = 0;
+      if (copyLatestCameraFrame(frameBuffer, latestFrameBytes, frameLength, timestampUs, sequence)) {
+        httpd_resp_set_type(req, "image/jpeg");
+        httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char ts[32];
+        snprintf(ts, sizeof(ts), "%ld.%06ld", static_cast<long>(timestampUs / 1000000LL), static_cast<long>(timestampUs % 1000000LL));
+        httpd_resp_set_hdr(req, "X-Timestamp", ts);
+        const esp_err_t result = httpd_resp_send(req, reinterpret_cast<const char *>(frameBuffer), frameLength);
+        free(frameBuffer);
+        return result;
+      }
+      free(frameBuffer);
+    }
+  }
+
   camera_fb_t *fb = captureCameraFrame();
   if (fb == nullptr) {
     return sendError(req, "503 Service Unavailable", "{\"error\":\"camera_frame_not_ready\"}");
@@ -1541,16 +1835,19 @@ esp_err_t captureHandler(httpd_req_t *req) {
 }
 
 esp_err_t streamHandler(httpd_req_t *req) {
+  noteCameraStreamDemand();
   portENTER_CRITICAL(&gRuntimeStateMux);
   const bool cameraReady = gRuntimeState.cameraReady;
   const uint32_t startingGeneration = gRuntimeState.cameraGeneration;
-  gRuntimeState.videoClients++;
+  gRuntimeState.videoClients = gRuntimeState.videoClients + 1;
+  setLastStreamErrorLocked("none");
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
   if (!cameraReady) {
     portENTER_CRITICAL(&gRuntimeStateMux);
+    setLastStreamErrorLocked("camera_not_ready");
     if (gRuntimeState.videoClients > 0) {
-      gRuntimeState.videoClients--;
+      gRuntimeState.videoClients = gRuntimeState.videoClients - 1;
     }
     portEXIT_CRITICAL(&gRuntimeStateMux);
     return sendError(req, "503 Service Unavailable", "{\"error\":\"camera_not_ready\"}");
@@ -1563,30 +1860,64 @@ esp_err_t streamHandler(httpd_req_t *req) {
 
   esp_err_t result = ESP_OK;
   int64_t lastFrameAtUs = 0;
+  uint8_t *frameBuffer = nullptr;
+  size_t frameBufferCapacity = 0;
+  uint32_t lastSentSequence = 0;
+  uint8_t slowSendStrikes = 0;
+  const char *streamErrorCode = "client_closed";
+  bool sendFailed = false;
+  bool clientResetLikely = false;
 
   while (result == ESP_OK) {
+    noteCameraStreamDemand();
     portENTER_CRITICAL(&gRuntimeStateMux);
     const uint32_t currentGeneration = gRuntimeState.cameraGeneration;
     portEXIT_CRITICAL(&gRuntimeStateMux);
     if (currentGeneration != startingGeneration) {
       portENTER_CRITICAL(&gRuntimeStateMux);
-      gRuntimeState.streamRestarts++;
+      gRuntimeState.streamRestarts = gRuntimeState.streamRestarts + 1;
       portEXIT_CRITICAL(&gRuntimeStateMux);
+      streamErrorCode = "generation_change";
       break;
     }
 
-    camera_fb_t *fb = captureCameraFrame();
-    if (fb == nullptr) {
-      result = ESP_FAIL;
-      break;
+    size_t requiredFrameBytes = getLatestCameraFrameSize();
+    if (requiredFrameBytes == 0) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
+    if (frameBufferCapacity < requiredFrameBytes) {
+      uint8_t *newBuffer = static_cast<uint8_t *>(realloc(frameBuffer, requiredFrameBytes));
+      if (newBuffer == nullptr) {
+        result = ESP_ERR_NO_MEM;
+        streamErrorCode = "buffer_alloc";
+        break;
+      }
+      frameBuffer = newBuffer;
+      frameBufferCapacity = requiredFrameBytes;
+    }
+
+    size_t frameLength = 0;
+    int64_t timestampUs = 0;
+    uint32_t frameSequence = 0;
+    if (!copyLatestCameraFrame(frameBuffer, frameBufferCapacity, frameLength, timestampUs, frameSequence, lastSentSequence)) {
+      if (frameLength > frameBufferCapacity) {
+        continue;
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
     }
 
     const int64_t sendStartedUs = esp_timer_get_time();
     result = httpd_resp_send_chunk(req, kStreamBoundaryChunk, strlen(kStreamBoundaryChunk));
+    if (result != ESP_OK) {
+      sendFailed = true;
+      clientResetLikely = true;
+      streamErrorCode = "send_boundary_fail";
+      break;
+    }
     if (result == ESP_OK) {
-      const int64_t timestampUs =
-        static_cast<int64_t>(fb->timestamp.tv_sec) * 1000000LL +
-        static_cast<int64_t>(fb->timestamp.tv_usec);
       const long tsSec = static_cast<long>(timestampUs / 1000000LL);
       const long tsUsec = static_cast<long>(timestampUs % 1000000LL);
       char header[160];
@@ -1594,39 +1925,75 @@ esp_err_t streamHandler(httpd_req_t *req) {
         header,
         sizeof(header),
         "Content-Type: image/jpeg\r\nContent-Length: %u\r\nX-Sequence: %lu\r\nX-Timestamp: %ld.%06ld\r\n\r\n",
-        static_cast<unsigned>(fb->len),
-        static_cast<unsigned long>(getLatestCameraFrameSequence()),
+        static_cast<unsigned>(frameLength),
+        static_cast<unsigned long>(frameSequence),
         tsSec,
         tsUsec
       );
       result = httpd_resp_send_chunk(req, header, headerLen);
+      if (result != ESP_OK) {
+        sendFailed = true;
+        clientResetLikely = true;
+        streamErrorCode = "send_header_fail";
+        break;
+      }
     }
     if (result == ESP_OK) {
-      result = httpd_resp_send_chunk(req, reinterpret_cast<const char *>(fb->buf), fb->len);
+      result = httpd_resp_send_chunk(req, reinterpret_cast<const char *>(frameBuffer), frameLength);
+      if (result != ESP_OK) {
+        sendFailed = true;
+        clientResetLikely = true;
+        streamErrorCode = "send_frame_fail";
+        break;
+      }
     }
 
     const int64_t nowUs = esp_timer_get_time();
     const uint32_t frameTimeMs = lastFrameAtUs == 0 ? 0 : static_cast<uint32_t>((nowUs - lastFrameAtUs) / 1000);
     lastFrameAtUs = nowUs;
     const uint32_t sendTimeMs = static_cast<uint32_t>((esp_timer_get_time() - sendStartedUs) / 1000);
+    const uint32_t droppedFrames = (lastSentSequence != 0 && frameSequence > lastSentSequence + 1)
+      ? (frameSequence - lastSentSequence - 1)
+      : 0;
+    lastSentSequence = frameSequence;
     portENTER_CRITICAL(&gRuntimeStateMux);
     gRuntimeState.streamSendTimeMs = sendTimeMs;
     gRuntimeState.frameTimeMs = frameTimeMs;
     if (frameTimeMs > 0) {
       gRuntimeState.frameRateTimes10 = static_cast<uint32_t>(10000.0f / static_cast<float>(frameTimeMs));
-      gRuntimeState.captureFrameTimeMs = frameTimeMs;
-      gRuntimeState.captureFrameRateTimes10 = gRuntimeState.frameRateTimes10;
     }
-    gRuntimeState.lastFrameSize = static_cast<uint32_t>(fb->len);
-    gRuntimeState.lastJpegSize = static_cast<uint32_t>(fb->len);
+    gRuntimeState.lastFrameSize = static_cast<uint32_t>(frameLength);
+    gRuntimeState.lastJpegSize = static_cast<uint32_t>(frameLength);
+    gRuntimeState.streamDrops = gRuntimeState.streamDrops + droppedFrames;
     portEXIT_CRITICAL(&gRuntimeStateMux);
 
-    releaseCameraFrame(fb);
+    if (sendTimeMs >= kStreamSlowSendThresholdMs) {
+      slowSendStrikes = static_cast<uint8_t>(slowSendStrikes + 1);
+      if (slowSendStrikes >= kStreamSlowSendStrikeLimit) {
+        result = ESP_ERR_TIMEOUT;
+        portENTER_CRITICAL(&gRuntimeStateMux);
+        gRuntimeState.streamTimeoutCloses = gRuntimeState.streamTimeoutCloses + 1;
+        portEXIT_CRITICAL(&gRuntimeStateMux);
+        streamErrorCode = "slow_client_timeout";
+        break;
+      }
+    } else {
+      slowSendStrikes = 0;
+    }
   }
 
+  free(frameBuffer);
+
   portENTER_CRITICAL(&gRuntimeStateMux);
+  if (sendFailed) {
+    gRuntimeState.streamSendFailures = gRuntimeState.streamSendFailures + 1;
+  }
+  if (clientResetLikely) {
+    gRuntimeState.streamClientResets = gRuntimeState.streamClientResets + 1;
+  }
+  setLastStreamErrorLocked(streamErrorCode);
   if (gRuntimeState.videoClients > 0) {
-    gRuntimeState.videoClients--;
+    gRuntimeState.videoClients = gRuntimeState.videoClients - 1;
   }
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
@@ -1674,7 +2041,7 @@ esp_err_t audioHandler(httpd_req_t *req) {
   }
 
   portENTER_CRITICAL(&gRuntimeStateMux);
-  gRuntimeState.audioClients++;
+  gRuntimeState.audioClients = gRuntimeState.audioClients + 1;
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
   uint8_t chunk[kAudioReadChunkBytes];
@@ -1697,7 +2064,7 @@ esp_err_t audioHandler(httpd_req_t *req) {
 
   portENTER_CRITICAL(&gRuntimeStateMux);
   if (gRuntimeState.audioClients > 0) {
-    gRuntimeState.audioClients--;
+    gRuntimeState.audioClients = gRuntimeState.audioClients - 1;
   }
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
@@ -1757,6 +2124,14 @@ esp_err_t speakerHandler(httpd_req_t *req) {
   return httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
 }
 
+esp_err_t audioMovedHandler(httpd_req_t *req) {
+  return sendMovedEndpoint(req, kAudioPort, "/audio");
+}
+
+esp_err_t speakerMovedHandler(httpd_req_t *req) {
+  return sendMovedEndpoint(req, kSpeakerPort, "/speaker");
+}
+
 esp_err_t pcaChannelHandler(httpd_req_t *req) {
   portENTER_CRITICAL(&gRuntimeStateMux);
   const bool ready = gRuntimeState.pca9685Ready;
@@ -1777,7 +2152,6 @@ esp_err_t pcaChannelHandler(httpd_req_t *req) {
 
   String json;
   buildPcaStatusJson(json);
-  broadcastTelemetry();
   return sendJson(req, json);
 }
 
@@ -1802,7 +2176,6 @@ esp_err_t pcaChannelsHandler(httpd_req_t *req) {
 
   String json;
   buildPcaStatusJson(json);
-  broadcastTelemetry();
   return sendJson(req, json);
 }
 
@@ -1826,7 +2199,6 @@ esp_err_t pcaSceneHandler(httpd_req_t *req) {
 
   String json;
   buildPcaStatusJson(json);
-  broadcastTelemetry();
   return sendJson(req, json);
 }
 
@@ -1850,14 +2222,102 @@ esp_err_t pcaFrequencyHandler(httpd_req_t *req) {
 
   String json;
   buildPcaStatusJson(json);
-  broadcastTelemetry();
   return sendJson(req, json);
 }
+
+esp_err_t motorSkillsStatusHandler(httpd_req_t *req) {
+  return pcaStatusHandler(req);
+}
+
+esp_err_t motorSkillsControlHandler(httpd_req_t *req) {
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  const bool ready = gRuntimeState.pca9685Ready;
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+  if (!ready) {
+    return sendError(req, "503 Service Unavailable", "{\"error\":\"pca9685_not_ready\"}");
+  }
+
+  String body;
+  if (!readRequestBody(req, body)) {
+    return sendError(req, "400 Bad Request", "{\"error\":\"invalid_request_body\"}");
+  }
+
+  String scene;
+  int intValue = 0;
+  bool ok = false;
+  if (extractJsonString(body, "scene", scene)) {
+    ok = applyPca9685Scene(scene.c_str());
+  } else if (extractJsonInt(body, "frequency", intValue)) {
+    ok = setPca9685Frequency(static_cast<uint16_t>(intValue));
+  } else {
+    Pca9685ChannelUpdate updates[16] = {};
+    const size_t count = parseChannelUpdates(body, updates, 16);
+    if (count > 0) {
+      ok = applyPca9685Updates(updates, count);
+    } else {
+      Pca9685ChannelUpdate update = {};
+      ok = parseChannelUpdate(body, update) && applyPca9685Update(update);
+    }
+  }
+
+  if (!ok) {
+    return sendError(req, "400 Bad Request", "{\"error\":\"invalid_motor_skills_control\"}");
+  }
+
+  String json;
+  buildPcaStatusJson(json);
+  return sendJson(req, json);
+}
+
+esp_err_t v1VisionStatusHandler(httpd_req_t *req) {
+  String json;
+  String dashboard;
+  buildDashboardJson(dashboard);
+  json.reserve(1536);
+  json = "{";
+  appendCameraJson(json);
+  json += ",\"dashboard\":";
+  json += dashboard;
+  json += "}";
+  return sendJson(req, json);
+}
+
+esp_err_t v1HearingStatusHandler(httpd_req_t *req) {
+  String json;
+  String audio;
+  String dashboard;
+  buildAudioStatusJson(audio);
+  buildDashboardJson(dashboard);
+  json.reserve(2048);
+  json = "{";
+  json += "\"audio\":";
+  json += audio;
+  json += ",\"dashboard\":";
+  json += dashboard;
+  json += "}";
+  return sendJson(req, json);
+}
+
+esp_err_t v1SensoricsStatusHandler(httpd_req_t *req) { return sensorsHandler(req); }
+esp_err_t v1SystemStatusHandler(httpd_req_t *req) { return statusHandler(req); }
+esp_err_t v1SystemDashboardHandler(httpd_req_t *req) { return dashboardHandler(req); }
+esp_err_t v1SystemOtaStatusHandler(httpd_req_t *req) { return otaStatusHandler(req); }
+esp_err_t v1SystemOtaUploadHandler(httpd_req_t *req) { return otaUploadHandler(req); }
+esp_err_t v1VisionCameraGetHandler(httpd_req_t *req) { return cameraStatusHandler(req); }
+esp_err_t v1VisionCameraPostHandler(httpd_req_t *req) { return cameraUpdateHandler(req); }
+esp_err_t v1VisionPresetApplyHandler(httpd_req_t *req) { return cameraPresetApplyHandler(req); }
+esp_err_t v1VisionPresetSaveHandler(httpd_req_t *req) { return cameraPresetSaveHandler(req); }
+esp_err_t v1VisionPresetDeleteHandler(httpd_req_t *req) { return cameraPresetDeleteHandler(req); }
+esp_err_t v1VisionPresetResetDefaultsHandler(httpd_req_t *req) { return cameraPresetResetDefaultsHandler(req); }
+esp_err_t v1VisionCaptureHandler(httpd_req_t *req) { return captureHandler(req); }
+esp_err_t v1HearingAudioGetHandler(httpd_req_t *req) { return audioStatusHandler(req); }
+esp_err_t v1HearingAudioPostHandler(httpd_req_t *req) { return audioConfigHandler(req); }
+esp_err_t v1HearingClipHandler(httpd_req_t *req) { return audioClipHandler(req); }
 
 esp_err_t wsHandler(httpd_req_t *req) {
   if (req->method == HTTP_GET) {
     portENTER_CRITICAL(&gRuntimeStateMux);
-    gRuntimeState.websocketClients++;
+    gRuntimeState.websocketClients = gRuntimeState.websocketClients + 1;
     portEXIT_CRITICAL(&gRuntimeStateMux);
     return ESP_OK;
   }
@@ -1892,42 +2352,73 @@ esp_err_t wsHandler(httpd_req_t *req) {
 }
 
 void registerControlHandlers(httpd_handle_t server) {
-  httpd_uri_t indexUri = {.uri = "/", .method = HTTP_GET, .handler = indexHandler, .user_ctx = nullptr};
-  httpd_uri_t liveUri = {.uri = "/live", .method = HTTP_GET, .handler = liveHandler, .user_ctx = nullptr};
-  httpd_uri_t otaPageUri = {.uri = "/ota", .method = HTTP_GET, .handler = otaPageHandler, .user_ctx = nullptr};
-  httpd_uri_t sensorsUri = {.uri = "/api/sensors", .method = HTTP_GET, .handler = sensorsHandler, .user_ctx = nullptr};
-  httpd_uri_t statusUri = {.uri = "/api/status", .method = HTTP_GET, .handler = statusHandler, .user_ctx = nullptr};
-  httpd_uri_t dashboardUri = {.uri = "/api/dashboard", .method = HTTP_GET, .handler = dashboardHandler, .user_ctx = nullptr};
-  httpd_uri_t otaStatusUri = {.uri = "/api/ota", .method = HTTP_GET, .handler = otaStatusHandler, .user_ctx = nullptr};
-  httpd_uri_t otaUploadUri = {.uri = "/api/ota/upload", .method = HTTP_POST, .handler = otaUploadHandler, .user_ctx = nullptr};
-  httpd_uri_t pcaStatusUri = {.uri = "/api/pca9685", .method = HTTP_GET, .handler = pcaStatusHandler, .user_ctx = nullptr};
-  httpd_uri_t audioStatusUri = {.uri = "/api/audio", .method = HTTP_GET, .handler = audioStatusHandler, .user_ctx = nullptr};
-  httpd_uri_t audioConfigUri = {.uri = "/api/audio", .method = HTTP_POST, .handler = audioConfigHandler, .user_ctx = nullptr};
-  httpd_uri_t audioClipUri = {.uri = "/api/audio/clip", .method = HTTP_GET, .handler = audioClipHandler, .user_ctx = nullptr};
-  httpd_uri_t cameraStatusUri = {.uri = "/api/camera", .method = HTTP_GET, .handler = cameraStatusHandler, .user_ctx = nullptr};
-  httpd_uri_t cameraUpdateUri = {.uri = "/api/camera", .method = HTTP_POST, .handler = cameraUpdateHandler, .user_ctx = nullptr};
-  httpd_uri_t cameraPresetApplyUri = {.uri = "/api/camera/preset/apply", .method = HTTP_POST, .handler = cameraPresetApplyHandler, .user_ctx = nullptr};
-  httpd_uri_t cameraPresetSaveUri = {.uri = "/api/camera/preset/save", .method = HTTP_POST, .handler = cameraPresetSaveHandler, .user_ctx = nullptr};
-  httpd_uri_t cameraPresetDeleteUri = {.uri = "/api/camera/preset/delete", .method = HTTP_POST, .handler = cameraPresetDeleteHandler, .user_ctx = nullptr};
-  httpd_uri_t cameraPresetResetDefaultsUri = {.uri = "/api/camera/preset/resetdefaults", .method = HTTP_POST, .handler = cameraPresetResetDefaultsHandler, .user_ctx = nullptr};
-  httpd_uri_t captureUri = {.uri = "/capture", .method = HTTP_GET, .handler = captureHandler, .user_ctx = nullptr};
-  httpd_uri_t audioUri = {.uri = "/audio", .method = HTTP_GET, .handler = audioHandler, .user_ctx = nullptr};
-  httpd_uri_t speakerUri = {.uri = "/speaker", .method = HTTP_POST, .handler = speakerHandler, .user_ctx = nullptr};
-  httpd_uri_t pcaChannelUri = {.uri = "/api/pca9685/channel", .method = HTTP_POST, .handler = pcaChannelHandler, .user_ctx = nullptr};
-  httpd_uri_t pcaChannelsUri = {.uri = "/api/pca9685/channels", .method = HTTP_POST, .handler = pcaChannelsHandler, .user_ctx = nullptr};
-  httpd_uri_t pcaSceneUri = {.uri = "/api/pca9685/scene", .method = HTTP_POST, .handler = pcaSceneHandler, .user_ctx = nullptr};
-  httpd_uri_t pcaFrequencyUri = {.uri = "/api/pca9685/frequency", .method = HTTP_POST, .handler = pcaFrequencyHandler, .user_ctx = nullptr};
-  httpd_uri_t wsUri = {.uri = "/ws", .method = HTTP_GET, .handler = wsHandler, .user_ctx = nullptr, .is_websocket = true, .handle_ws_control_frames = false, .supported_subprotocol = nullptr};
+  httpd_uri_t indexUri = makeHttpUri("/", HTTP_GET, indexHandler);
+  httpd_uri_t dashboardPageUri = makeHttpUri("/dashboard", HTTP_GET, dashboardPageHandler);
+  httpd_uri_t ctrlDashUri = makeHttpUri("/ctrldash", HTTP_GET, ctrlDashHandler);
+  httpd_uri_t liveUri = makeHttpUri("/live", HTTP_GET, liveHandler);
+  httpd_uri_t otaPageUri = makeHttpUri("/ota", HTTP_GET, otaPageHandler);
+
+  httpd_uri_t visionUiUri = makeHttpUri("/vision", HTTP_GET, visionPageHandler);
+  httpd_uri_t hearingUiUri = makeHttpUri("/hearing", HTTP_GET, hearingPageHandler);
+  httpd_uri_t sensoricsUiUri = makeHttpUri("/sensorics", HTTP_GET, sensoricsPageHandler);
+  httpd_uri_t motorSkillsUiUri = makeHttpUri("/motor_skills", HTTP_GET, motorSkillsPageHandler);
+  httpd_uri_t systemUiUri = makeHttpUri("/system", HTTP_GET, systemPageHandler);
+  httpd_uri_t visionLiveUiUri = makeHttpUri("/vision/live", HTTP_GET, visionLivePageHandler);
+  httpd_uri_t hearingLiveUiUri = makeHttpUri("/hearing/live", HTTP_GET, hearingLivePageHandler);
+  httpd_uri_t sensoricsLiveUiUri = makeHttpUri("/sensorics/live", HTTP_GET, sensoricsLivePageHandler);
+  httpd_uri_t systemStatusUiUri = makeHttpUri("/system/status", HTTP_GET, systemStatusPageHandler);
+  httpd_uri_t systemOtaUiUri = makeHttpUri("/system/ota", HTTP_GET, systemOtaPageHandler);
+
+  httpd_uri_t sensorsUri = makeHttpUri("/api/sensors", HTTP_GET, sensorsHandler);
+  httpd_uri_t statusUri = makeHttpUri("/api/status", HTTP_GET, statusHandler);
+  httpd_uri_t dashboardUri = makeHttpUri("/api/dashboard", HTTP_GET, dashboardHandler);
+  httpd_uri_t otaStatusUri = makeHttpUri("/api/ota", HTTP_GET, otaStatusHandler);
+  httpd_uri_t otaUploadUri = makeHttpUri("/api/ota/upload", HTTP_POST, otaUploadHandler);
+  httpd_uri_t pcaStatusUri = makeHttpUri("/api/pca9685", HTTP_GET, pcaStatusHandler);
+  httpd_uri_t pcaChannelUri = makeHttpUri("/api/pca9685/channel", HTTP_POST, pcaChannelHandler);
+  httpd_uri_t pcaChannelsUri = makeHttpUri("/api/pca9685/channels", HTTP_POST, pcaChannelsHandler);
+  httpd_uri_t pcaSceneUri = makeHttpUri("/api/pca9685/scene", HTTP_POST, pcaSceneHandler);
+  httpd_uri_t pcaFrequencyUri = makeHttpUri("/api/pca9685/frequency", HTTP_POST, pcaFrequencyHandler);
+  httpd_uri_t audioStatusUri = makeHttpUri("/api/audio", HTTP_GET, audioStatusHandler);
+  httpd_uri_t audioConfigUri = makeHttpUri("/api/audio", HTTP_POST, audioConfigHandler);
+  httpd_uri_t audioClipUri = makeHttpUri("/api/audio/clip", HTTP_GET, audioClipHandler);
+  httpd_uri_t cameraStatusUri = makeHttpUri("/api/camera", HTTP_GET, cameraStatusHandler);
+  httpd_uri_t cameraUpdateUri = makeHttpUri("/api/camera", HTTP_POST, cameraUpdateHandler);
+  httpd_uri_t cameraPresetApplyUri = makeHttpUri("/api/camera/preset/apply", HTTP_POST, cameraPresetApplyHandler);
+  httpd_uri_t cameraPresetSaveUri = makeHttpUri("/api/camera/preset/save", HTTP_POST, cameraPresetSaveHandler);
+  httpd_uri_t cameraPresetDeleteUri = makeHttpUri("/api/camera/preset/delete", HTTP_POST, cameraPresetDeleteHandler);
+  httpd_uri_t cameraPresetResetDefaultsUri = makeHttpUri("/api/camera/preset/resetdefaults", HTTP_POST, cameraPresetResetDefaultsHandler);
+  httpd_uri_t captureUri = makeHttpUri("/capture", HTTP_GET, captureHandler);
+  httpd_uri_t wsUri = makeWebSocketUri("/ws", wsHandler);
+  httpd_uri_t audioMovedUri = makeHttpUri("/audio", HTTP_GET, audioMovedHandler);
+  httpd_uri_t speakerMovedUri = makeHttpUri("/speaker", HTTP_POST, speakerMovedHandler);
 
   httpd_register_uri_handler(server, &indexUri);
+  httpd_register_uri_handler(server, &dashboardPageUri);
+  httpd_register_uri_handler(server, &ctrlDashUri);
   httpd_register_uri_handler(server, &liveUri);
   httpd_register_uri_handler(server, &otaPageUri);
+  httpd_register_uri_handler(server, &visionUiUri);
+  httpd_register_uri_handler(server, &hearingUiUri);
+  httpd_register_uri_handler(server, &sensoricsUiUri);
+  httpd_register_uri_handler(server, &motorSkillsUiUri);
+  httpd_register_uri_handler(server, &systemUiUri);
+  httpd_register_uri_handler(server, &visionLiveUiUri);
+  httpd_register_uri_handler(server, &hearingLiveUiUri);
+  httpd_register_uri_handler(server, &sensoricsLiveUiUri);
+  httpd_register_uri_handler(server, &systemStatusUiUri);
+  httpd_register_uri_handler(server, &systemOtaUiUri);
+
   httpd_register_uri_handler(server, &sensorsUri);
   httpd_register_uri_handler(server, &statusUri);
   httpd_register_uri_handler(server, &dashboardUri);
   httpd_register_uri_handler(server, &otaStatusUri);
   httpd_register_uri_handler(server, &otaUploadUri);
   httpd_register_uri_handler(server, &pcaStatusUri);
+  httpd_register_uri_handler(server, &pcaChannelUri);
+  httpd_register_uri_handler(server, &pcaChannelsUri);
+  httpd_register_uri_handler(server, &pcaSceneUri);
+  httpd_register_uri_handler(server, &pcaFrequencyUri);
   httpd_register_uri_handler(server, &audioStatusUri);
   httpd_register_uri_handler(server, &audioConfigUri);
   httpd_register_uri_handler(server, &audioClipUri);
@@ -1938,30 +2429,48 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_register_uri_handler(server, &cameraPresetDeleteUri);
   httpd_register_uri_handler(server, &cameraPresetResetDefaultsUri);
   httpd_register_uri_handler(server, &captureUri);
-  httpd_register_uri_handler(server, &audioUri);
-  httpd_register_uri_handler(server, &speakerUri);
-  httpd_register_uri_handler(server, &pcaChannelUri);
-  httpd_register_uri_handler(server, &pcaChannelsUri);
-  httpd_register_uri_handler(server, &pcaSceneUri);
-  httpd_register_uri_handler(server, &pcaFrequencyUri);
   httpd_register_uri_handler(server, &wsUri);
+  httpd_register_uri_handler(server, &audioMovedUri);
+  httpd_register_uri_handler(server, &speakerMovedUri);
 }
 
 void registerStreamHandlers(httpd_handle_t server) {
-  httpd_uri_t streamUri = {.uri = "/stream", .method = HTTP_GET, .handler = streamHandler, .user_ctx = nullptr};
+  httpd_uri_t streamUri = makeHttpUri("/stream", HTTP_GET, streamHandler);
   httpd_register_uri_handler(server, &streamUri);
+}
+
+void registerAudioHandlers(httpd_handle_t server) {
+  httpd_uri_t audioUri = makeHttpUri("/audio", HTTP_GET, audioHandler);
+  httpd_register_uri_handler(server, &audioUri);
+}
+
+void registerSpeakerHandlers(httpd_handle_t server) {
+  httpd_uri_t speakerUri = makeHttpUri("/speaker", HTTP_POST, speakerHandler);
+  httpd_register_uri_handler(server, &speakerUri);
 }
 
 }  // namespace
 
 bool startWebServer() {
-  if (sControlServer != nullptr && sStreamServer != nullptr) {
+  if (sControlServer != nullptr && sStreamServer != nullptr && sAudioServer != nullptr && sSpeakerServer != nullptr) {
     return true;
   }
 
-  if (sControlServer != nullptr && sStreamServer == nullptr) {
+  if (sControlServer != nullptr) {
     httpd_stop(sControlServer);
     sControlServer = nullptr;
+  }
+  if (sStreamServer != nullptr) {
+    httpd_stop(sStreamServer);
+    sStreamServer = nullptr;
+  }
+  if (sAudioServer != nullptr) {
+    httpd_stop(sAudioServer);
+    sAudioServer = nullptr;
+  }
+  if (sSpeakerServer != nullptr) {
+    httpd_stop(sSpeakerServer);
+    sSpeakerServer = nullptr;
   }
 
   portENTER_CRITICAL(&gRuntimeStateMux);
@@ -1970,7 +2479,7 @@ bool startWebServer() {
 
   httpd_config_t controlConfig = HTTPD_DEFAULT_CONFIG();
   controlConfig.server_port = kHttpPort;
-  controlConfig.max_uri_handlers = 28;
+  controlConfig.max_uri_handlers = 40;
 
   if (httpd_start(&sControlServer, &controlConfig) != ESP_OK) {
     bootLog("web", "failed to start control HTTP server");
@@ -1982,6 +2491,9 @@ bool startWebServer() {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port = controlConfig.ctrl_port + 1;
   streamConfig.max_uri_handlers = 4;
+  streamConfig.max_open_sockets = 4;
+  streamConfig.lru_purge_enable = true;
+  streamConfig.send_wait_timeout = 3;
 
   if (httpd_start(&sStreamServer, &streamConfig) != ESP_OK) {
     bootLog("web", "failed to start stream HTTP server");
@@ -1991,10 +2503,48 @@ bool startWebServer() {
   }
   registerStreamHandlers(sStreamServer);
 
+  httpd_config_t audioConfig = HTTPD_DEFAULT_CONFIG();
+  audioConfig.server_port = kAudioPort;
+  audioConfig.ctrl_port = controlConfig.ctrl_port + 2;
+  audioConfig.max_uri_handlers = 2;
+  audioConfig.max_open_sockets = 4;
+  audioConfig.lru_purge_enable = true;
+  audioConfig.send_wait_timeout = 3;
+
+  if (httpd_start(&sAudioServer, &audioConfig) != ESP_OK) {
+    bootLog("web", "failed to start audio HTTP server");
+    httpd_stop(sStreamServer);
+    httpd_stop(sControlServer);
+    sStreamServer = nullptr;
+    sControlServer = nullptr;
+    return false;
+  }
+  registerAudioHandlers(sAudioServer);
+
+  httpd_config_t speakerConfig = HTTPD_DEFAULT_CONFIG();
+  speakerConfig.server_port = kSpeakerPort;
+  speakerConfig.ctrl_port = controlConfig.ctrl_port + 3;
+  speakerConfig.max_uri_handlers = 2;
+  speakerConfig.max_open_sockets = 4;
+  speakerConfig.lru_purge_enable = true;
+  speakerConfig.recv_wait_timeout = 3;
+
+  if (httpd_start(&sSpeakerServer, &speakerConfig) != ESP_OK) {
+    bootLog("web", "failed to start speaker HTTP server");
+    httpd_stop(sAudioServer);
+    httpd_stop(sStreamServer);
+    httpd_stop(sControlServer);
+    sAudioServer = nullptr;
+    sStreamServer = nullptr;
+    sControlServer = nullptr;
+    return false;
+  }
+  registerSpeakerHandlers(sSpeakerServer);
+
   portENTER_CRITICAL(&gRuntimeStateMux);
   gRuntimeState.webReady = true;
   portEXIT_CRITICAL(&gRuntimeStateMux);
-  bootLogf("web", "ready on ports %u and %u", kHttpPort, kStreamPort);
+  bootLogf("web", "ready on ports control=%u video=%u audio=%u speaker=%u", kHttpPort, kStreamPort, kAudioPort, kSpeakerPort);
 
   return true;
 }
