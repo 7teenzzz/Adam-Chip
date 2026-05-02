@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn>=0.27
+
+# Optional runtime packages for local TTS. Install on Jetson after CUDA/PyTorch
+# is confirmed for the active JetPack image.
+# silero>=0.5.0
+# torch
+
+# Optional Riva ASR client. Install only when Riva service is deployed.
+# nvidia-riva-client

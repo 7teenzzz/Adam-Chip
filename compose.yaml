@@ -1,0 +1,51 @@
+services:
+  adam-orchestrator:
+    build:
+      context: .
+      dockerfile: System/Dockerfile
+    container_name: adam-orchestrator
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ADAM_CONFIG: /app/System/Config.json
+      ADAM_MODE: ${ADAM_MODE:-maintenance}
+      ADAM_DATA_DIR: /data/adam
+      ESP_BASE_URL: ${ESP_BASE_URL:-http://192.168.0.171}
+      ADAM_LLM_PROVIDER: ${ADAM_LLM_PROVIDER:-ollama}
+      ADAM_LLM_BASE_URL: ${ADAM_LLM_BASE_URL:-http://127.0.0.1:11434}
+      ADAM_LLM_MODEL: ${ADAM_LLM_MODEL:-gemma3:4b}
+      ADAM_TTS_BASE_URL: ${ADAM_TTS_BASE_URL:-http://127.0.0.1:8090}
+      ADAM_ASR_HOST: ${ADAM_ASR_HOST:-127.0.0.1}
+      ADAM_ASR_PORT: ${ADAM_ASR_PORT:-50051}
+      ADAM_VLM_BASE_URL: ${ADAM_VLM_BASE_URL:-http://127.0.0.1:8050}
+      ADAM_VLM_MODEL: ${ADAM_VLM_MODEL:-Efficient-Large-Model/VILA1.5-3b}
+      ADAM_ORCHESTRATOR_PORT: ${ADAM_ORCHESTRATOR_PORT:-8080}
+      ADAM_VIDEO_DEVICE: ${ADAM_VIDEO_DEVICE:-/dev/video0}
+      ADAM_AUDIO_INPUT_DEVICE: ${ADAM_AUDIO_INPUT_DEVICE:-hw:0,0}
+      ADAM_AUDIO_OUTPUT_DEVICE: ${ADAM_AUDIO_OUTPUT_DEVICE:-default}
+    volumes:
+      - ./data:/data
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
+    privileged: true
+
+  adam-tts-silero:
+    build:
+      context: .
+      dockerfile: System/Dockerfile
+    container_name: adam-tts-silero
+    profiles:
+      - speech-local
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ADAM_TTS_PORT: ${ADAM_TTS_PORT:-8090}
+      ADAM_TTS_OUTPUT_DEVICE: ${ADAM_AUDIO_OUTPUT_DEVICE:-default}
+    command: ["python", "-m", "Speech.TTS"]
+    volumes:
+      - ./data:/data
+      - ./models:/root/.cache
+
+  # Run NVIDIA Riva and nano_llm/VILA with their official Jetson setup flows,
+  # then point ADAM_LLM_BASE_URL / Riva host / VLM URL at those services.
+  # They are intentionally not hidden behind guessed Compose images here.

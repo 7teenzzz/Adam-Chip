@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Install the Jetson-compatible PyTorch build first, using NVIDIA's wheel for
+# the active JetPack image. Do not let pip resolve and install generic torch.
+#
+# After torch is present:
+#   python3 -m pip install --no-deps "silero>=0.5.0"

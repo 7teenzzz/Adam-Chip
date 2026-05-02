@@ -1,0 +1,24 @@
+[Unit]
+Description=Adam Chip Orchestrator
+After=network-online.target ollama.service docker.service
+Wants=network-online.target ollama.service docker.service
+
+[Service]
+Type=simple
+User=i17jet
+Group=i17jet
+SupplementaryGroups=audio video render docker ollama
+WorkingDirectory=/home/i17jet/Agents/Adam-Chip
+EnvironmentFile=-/etc/adam-chip/adam.env
+Environment=PYTHONPATH=/home/i17jet/Agents/Adam-Chip/System
+Environment=ADAM_VENV=/home/i17jet/Agents/Adam-Chip/.venv
+PermissionsStartOnly=true
+ExecStartPre=/home/i17jet/Agents/Adam-Chip/scripts/adam_power_maxn.sh
+ExecStartPre=/usr/bin/test -x /home/i17jet/Agents/Adam-Chip/.venv/bin/python
+ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python /home/i17jet/Agents/Adam-Chip/System/Orchestrator.py
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

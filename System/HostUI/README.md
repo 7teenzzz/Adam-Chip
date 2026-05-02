@@ -1,36 +1,31 @@
-# Host UI (PC/Jetson)
+# Host UI Legacy Service
 
-Легкий хост-сервис, который:
-- поднимает dashboard на ПК/Jetson,
-- проксирует `GET/POST /api/v1/*` на ESP,
-- оставляет ESP источником данных и стримов.
+`System/HostUI/server.py` — legacy dashboard/proxy для текущей ESP32-прошивки.
 
-## Запуск
+Основной UI/API новой агентной системы теперь находится в:
 
-```powershell
-cd F:\Adam-Chip
-$env:ESP_BASE_URL="http://192.168.0.171"
-python .\System\HostUI\server.py
+```bash
+python3 System/Orchestrator.py
 ```
 
-По умолчанию:
-- bind: `0.0.0.0`
-- порт хост-UI: `8080`
-- ESP base: `http://192.168.0.171`
+Основные маршруты:
 
-Можно переопределить:
+- `GET /` — dashboard orchestrator;
+- `GET /api/agent/status` — состояние power/media/services/MCU;
+- `GET /api/agent/events` — JSONL event tail;
+- `POST /api/agent/turn` — тестовый диалоговый цикл;
+- `POST /api/agent/say` — ручная озвучка;
+- `POST /api/agent/stop` — остановка и перевод моторики в idle;
+- `POST /api/agent/mode` — смена режима.
 
-```powershell
-$env:ADAM_HOST_UI_BIND="0.0.0.0"
-$env:ADAM_HOST_UI_PORT="8080"
-$env:ESP_BASE_URL="http://192.168.0.171"
+Legacy Host UI можно запускать только для диагностики ESP endpoints:
+
+```bash
+ESP_BASE_URL="http://192.168.0.171" python3 System/HostUI/server.py
 ```
 
-## Маршруты
+После переключения ESP32 на прямой W5500 Ethernet с Jetson используйте:
 
-- `GET /` — хост-дэшборд (стримы + телеметрия)
-- `GET /vision/live` — хост-страница видео
-- `GET/POST /api/v1/*` — proxy на ESP
-- остальные UI-маршруты (`/vision`, `/hearing`, `/sensorics`, `/motor_skills`, `/system`) редиректятся на ESP
-
-Это соответствует гибридной схеме: UI на хосте, данные/стримы на ESP.
+```bash
+ESP_BASE_URL="http://192.168.50.2" python3 System/HostUI/server.py
+```

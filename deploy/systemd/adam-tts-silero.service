@@ -1,0 +1,22 @@
+[Unit]
+Description=Adam Chip Silero TTS Service
+After=network-online.target sound.target
+Wants=network-online.target sound.target
+
+[Service]
+Type=simple
+User=i17jet
+Group=i17jet
+SupplementaryGroups=audio
+WorkingDirectory=/home/i17jet/Agents/Adam-Chip
+EnvironmentFile=-/etc/adam-chip/adam.env
+Environment=PYTHONPATH=/home/i17jet/Agents/Adam-Chip/System
+Environment=ADAM_VENV=/home/i17jet/Agents/Adam-Chip/.venv
+ExecStartPre=/usr/bin/test -x /home/i17jet/Agents/Adam-Chip/.venv/bin/python
+ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python -m Speech.TTS
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
