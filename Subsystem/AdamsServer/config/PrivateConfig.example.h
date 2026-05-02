@@ -3,7 +3,9 @@
 // Copy this file to PrivateConfig.h and fill in your real private values.
 // PrivateConfig.h is ignored by git and must stay only on your machine.
 
-inline constexpr char kWifiSsid[] = "YOUR_WIFI_SSID";
+inline constexpr char kWifiSsid[] = "YOUR_2G_WIFI_SSID";
+inline constexpr char kWifi5Ssid[] = "";
+inline constexpr char kFallbackWifiSsid[] = "YOUR_FALLBACK_2G_WIFI_SSID";
 inline constexpr char kWifiPassword[] = "YOUR_WIFI_PASSWORD";
 
 // Use OTA token to protect firmware upload over Wi-Fi.

@@ -67,6 +67,24 @@ Legacy UI пути (`/vision`, `/hearing`, `/sensorics`, `/motor_skills`, `/syst
 
 - `kWifiHostOctet = 17` или `71` или `171`
 
+## W5500 Ethernet
+
+Прошивка поддерживает `W5500 MINI` через штатный `ETH.h` из Arduino-ESP32. Сейчас активный транспорт по умолчанию остаётся `Wi‑Fi`:
+
+- `kNetworkTransport = AdamsNetworkTransport::WiFi`
+- текущий адрес ESP32 остаётся `192.168.0.171`
+
+Для прямого кабеля Jetson ↔ W5500 переключите транспорт на `AdamsNetworkTransport::EthernetW5500` или соберите с `-DADAMS_NETWORK_TRANSPORT_ETHERNET_W5500=1`.
+
+Статическая Ethernet-схема:
+
+- Jetson NIC: `192.168.50.1/24`
+- ESP32 W5500: `192.168.50.2/24`
+- `ESP_BASE_URL=http://192.168.50.2`
+- `ESP_SPEAKER_URL=http://192.168.50.2:83/speaker`
+
+После переключения те же endpoint-ы работают на Ethernet host: `http://192.168.50.2`, `:81/stream`, `:82/audio`, `:83/speaker`.
+
 ## Структура папки
 
 - `Subsystem/AdamsServer` - входная точка скетча и build-файлы
@@ -110,6 +128,7 @@ Legacy UI пути (`/vision`, `/hearing`, `/sensorics`, `/motor_skills`, `/syst
 - `POST http://ESP32_IP/api/pca9685/channels` - несколько каналов
 - `POST http://ESP32_IP/api/pca9685/scene` - сцена
 - `POST http://ESP32_IP/api/pca9685/frequency` - частота PWM
+- `POST http://ESP32_IP/api/sound/play` - проиграть встроенный системный звук `boot`
 - `WS http://ESP32_IP/ws` - push telemetry
 
 ## Микрофон: как проверять правильно
@@ -245,6 +264,27 @@ curl.exe --data-binary "@input.wav" -H "Content-Type: audio/wav" http://ESP32_IP
 
 ```powershell
 ffmpeg -re -i input.wav -f s16le -acodec pcm_s16le -ac 1 -ar 16000 -chunked_post 0 http://ESP32_IP/speaker
+```
+
+## Системные звуки ESP
+
+Boot-cue больше не отправляется с Jetson при каждом старте. Он встроен в
+прошивку как flash/PROGMEM PCM и проигрывается самой ESP после успешной
+инициализации `PCM5102`. `success` cue тоже встроен в прошивку и может быть
+вызван вручную через тот же API.
+
+Исходный asset:
+
+- `Subsystem/AdamsServer/data/sounds/boot.wav`
+- `Subsystem/AdamsServer/data/sounds/success.wav`
+- формат embedded playback assets: `mono`, `44.1 kHz`, `16-bit PCM`
+
+Ручной тест после прошивки:
+
+```powershell
+curl.exe -X POST "http://ESP32_IP/api/sound/play?name=boot"
+curl.exe -X POST "http://ESP32_IP/api/sound/play?name=tone"
+curl.exe -X POST "http://ESP32_IP/api/sound/play?name=success"
 ```
 
 ## PCA9685

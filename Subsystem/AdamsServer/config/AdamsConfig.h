@@ -31,9 +31,33 @@ struct Pca9685SceneConfig {
   uint16_t values[16];
 };
 
+enum class AdamsNetworkTransport : uint8_t {
+  None,
+  WiFi,
+  EthernetW5500,
+  AccessPoint
+};
+
 inline constexpr uint8_t kWifiStaticIp[4] = {192, 168, kWifiSubnetOctet3, kWifiHostOctet};
 inline constexpr uint8_t kWifiGateway[4] = {192, 168, kWifiSubnetOctet3, kWifiGatewayHostOctet};
 inline constexpr uint8_t kWifiSubnet[4] = {kWifiSubnetMask[0], kWifiSubnetMask[1], kWifiSubnetMask[2], kWifiSubnetMask[3]};
+
+inline constexpr bool kEthernetUseStaticIp = true;
+inline constexpr uint8_t kEthernetStaticIp[4] = {192, 168, 0, 172};
+inline constexpr uint8_t kEthernetGateway[4] = {192, 168, 0, 1};
+inline constexpr uint8_t kEthernetSubnet[4] = {255, 255, 255, 0};
+inline constexpr uint8_t kEthernetDns1[4] = {192, 168, 0, 1};
+inline constexpr uint8_t kEthernetDns2[4] = {1, 1, 1, 1};
+inline constexpr int32_t kEthernetPhyAddress = 1;
+inline constexpr uint8_t kEthernetSpiFrequencyMhz = 20;
+
+inline constexpr char kApSsid[] = "Adam Chip";
+inline constexpr char kApPassword[] = "4D4M-CH1P4$";
+inline constexpr uint8_t kApChannel = 6;
+inline constexpr uint8_t kApMaxConnections = 4;
+inline constexpr uint8_t kApStaticIp[4] = {192, 168, 4, 1};
+inline constexpr uint8_t kApGateway[4] = {192, 168, 4, 1};
+inline constexpr uint8_t kApSubnet[4] = {255, 255, 255, 0};
 
 inline constexpr uint16_t kHttpPort = 80;
 inline constexpr uint16_t kStreamPort = 81;
@@ -46,7 +70,10 @@ inline constexpr bool kOtaEnabled = true;
 inline constexpr uint32_t kOtaRebootDelayMs = 1500;
 inline constexpr uint32_t kWifiInitialConnectWindowMs = 8000;
 inline constexpr uint32_t kWifiRetryIntervalMs = 15000;
+inline constexpr uint32_t kEthernetInitialConnectWindowMs = 5000;
+inline constexpr uint32_t kEthernetRetryIntervalMs = 15000;
 inline constexpr uint32_t kWebServerRetryIntervalMs = 5000;
+inline constexpr uint32_t kBootSoundStartupDelayMs = 1200;
 
 inline constexpr framesize_t kDefaultFrameSize = FRAMESIZE_QVGA;
 inline constexpr pixformat_t kDefaultPixelFormat = PIXFORMAT_JPEG;
@@ -61,6 +88,7 @@ inline constexpr uint8_t kStreamSlowSendStrikeLimit = 5;
 inline constexpr size_t kStreamFrameBufferReserveBytes = 196608;
 
 inline constexpr uint32_t kAudioSampleRate = 16000;
+inline constexpr uint32_t kSpeakerSampleRate = 44100;
 inline constexpr uint8_t kAudioBitsPerSample = 16;
 inline constexpr uint8_t kAudioChannels = 1;
 inline constexpr uint8_t kAudioPreferredSlot = 1;  // 1 = left, 2 = right

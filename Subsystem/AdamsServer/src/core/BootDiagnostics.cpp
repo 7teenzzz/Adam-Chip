@@ -49,6 +49,10 @@ void copyStage(const char *stage) {
 
 void beginBootDiagnostics() {
   Serial.begin(kSerialBaudRate);
+  const uint32_t serialWaitStartedAt = millis();
+  while (!Serial && millis() - serialWaitStartedAt < 1500) {
+    delay(10);
+  }
   if (kEnableUart0Diagnostics) {
     Serial0.begin(kSerialBaudRate);
   }
@@ -56,7 +60,9 @@ void beginBootDiagnostics() {
 
   runtimeSetBootStage("boot");
   runtimeClearLastInitError();
+  runtimeSetNetworkState("none", false, IPAddress());
   runtimeSetWifiState(false, 0, IPAddress());
+  runtimeSetEthernetState(false, false, IPAddress());
   copyStage("boot");
 
   bootLog("boot", "diagnostics online");
