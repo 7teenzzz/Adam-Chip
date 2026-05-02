@@ -16,19 +16,27 @@ constexpr uint8_t kPrescaleReg = 0xFE;
 constexpr uint8_t kLed0OnLowReg = 0x06;
 
 bool writeRegister(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(kPca9685Address);
-  Wire.write(reg);
-  Wire.write(value);
-  return Wire.endTransmission() == 0;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    Wire.beginTransmission(kPca9685Address);
+    Wire.write(reg);
+    Wire.write(value);
+    if (Wire.endTransmission() == 0) return true;
+    delay(2);
+  }
+  return false;
 }
 
 bool writeRegisters(uint8_t reg, const uint8_t *data, size_t len) {
-  Wire.beginTransmission(kPca9685Address);
-  Wire.write(reg);
-  for (size_t i = 0; i < len; ++i) {
-    Wire.write(data[i]);
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    Wire.beginTransmission(kPca9685Address);
+    Wire.write(reg);
+    for (size_t i = 0; i < len; ++i) {
+      Wire.write(data[i]);
+    }
+    if (Wire.endTransmission() == 0) return true;
+    delay(2);
   }
-  return Wire.endTransmission() == 0;
+  return false;
 }
 
 bool readRegister(uint8_t reg, uint8_t &value) {
@@ -67,6 +75,7 @@ bool writeChannelRaw(uint8_t channel, uint16_t duty) {
   if (channel >= 16) {
     return false;
   }
+  duty = min<uint16_t>(4095, duty);
 
   uint8_t payload[4] = {};
   fillChannelPayload(duty, payload);

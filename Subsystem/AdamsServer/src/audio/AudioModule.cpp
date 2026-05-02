@@ -347,7 +347,7 @@ bool initSpeakerStdTxChannel() {
   }
 
   i2s_std_config_t stdCfg = {};
-  stdCfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kAudioSampleRate);
+  stdCfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSpeakerSampleRate);
   stdCfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
   stdCfg.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
   stdCfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;
@@ -559,8 +559,10 @@ void speakerPlaybackTask(void *parameter) {
       stereoFrames,
       sizeof(stereoFrames),
       &bytesWritten,
-      portMAX_DELAY);
-    if (err != ESP_OK) {
+      pdMS_TO_TICKS(500));
+    if (err == ESP_ERR_TIMEOUT) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+    } else if (err != ESP_OK) {
       bootLogf("speaker", "i2s_channel_write failed: 0x%x", err);
       delay(2);
     }
@@ -654,7 +656,7 @@ bool initSpeakerPlayback() {
     sSpeakerTaskStarted = true;
   }
 
-  bootLogf("speaker", "ready, sample_rate=%lu Hz", static_cast<unsigned long>(kAudioSampleRate));
+  bootLogf("speaker", "ready, sample_rate=%lu Hz", static_cast<unsigned long>(kSpeakerSampleRate));
   return true;
 }
 
@@ -858,7 +860,7 @@ bool beginSpeakerStream() {
 
   bool acquired = false;
   portENTER_CRITICAL(&sSpeakerMux);
-  if (!sSpeakerClientActive) {
+  if (!sSpeakerClientActive && sSpeakerFillCount == 0) {
     sSpeakerClientActive = true;
     sSpeakerWriteIndex = 0;
     sSpeakerReadIndex = 0;
@@ -874,9 +876,6 @@ bool beginSpeakerStream() {
 void endSpeakerStream() {
   portENTER_CRITICAL(&sSpeakerMux);
   sSpeakerClientActive = false;
-  sSpeakerWriteIndex = 0;
-  sSpeakerReadIndex = 0;
-  sSpeakerFillCount = 0;
   portEXIT_CRITICAL(&sSpeakerMux);
 
   updateSpeakerFillRuntime();

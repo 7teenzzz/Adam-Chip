@@ -35,6 +35,16 @@ void runtimeClearLastInitError() {
   runtimeSetLastInitError("");
 }
 
+void runtimeSetNetworkState(const char *transport, bool connected, const IPAddress &ip) {
+  const String ipString = connected ? ip.toString() : String("0.0.0.0");
+
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  gRuntimeState.networkConnected = connected;
+  copyIntoBuffer(gRuntimeState.networkTransport, sizeof(gRuntimeState.networkTransport), transport);
+  copyIntoBuffer(gRuntimeState.networkIp, sizeof(gRuntimeState.networkIp), ipString.c_str());
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+}
+
 void runtimeSetWifiState(bool connected, int32_t rssi, const IPAddress &ip) {
   const String ipString = connected ? ip.toString() : String("0.0.0.0");
 
@@ -42,5 +52,15 @@ void runtimeSetWifiState(bool connected, int32_t rssi, const IPAddress &ip) {
   gRuntimeState.wifiConnected = connected;
   gRuntimeState.wifiRssi = connected ? rssi : 0;
   copyIntoBuffer(gRuntimeState.wifiIp, sizeof(gRuntimeState.wifiIp), ipString.c_str());
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+}
+
+void runtimeSetEthernetState(bool connected, bool linkUp, const IPAddress &ip) {
+  const String ipString = connected ? ip.toString() : String("0.0.0.0");
+
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  gRuntimeState.ethernetConnected = connected;
+  gRuntimeState.ethernetLinkUp = linkUp;
+  copyIntoBuffer(gRuntimeState.ethernetIp, sizeof(gRuntimeState.ethernetIp), ipString.c_str());
   portEXIT_CRITICAL(&gRuntimeStateMux);
 }

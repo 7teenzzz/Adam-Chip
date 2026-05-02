@@ -5,13 +5,14 @@
 #include <cstring>
 #include <cstdlib>
 
-#include <WiFi.h>
 #include "esp_http_server.h"
 #include "esp_timer.h"
 
 #include "../../config/AdamsConfig.h"
 #include "../audio/AudioModule.h"
+#include "../audio/SystemSoundModule.h"
 #include "../core/BootDiagnostics.h"
+#include "../core/NetworkModule.h"
 #include "../core/OtaModule.h"
 #include "../camera/CameraModule.h"
 #include "../io/Pca9685Module.h"
@@ -73,10 +74,14 @@ void setLastStreamErrorLocked(const char *code) {
 }
 
 void appendCommonStatusFields(String &json) {
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  const int32_t wifiRssi = gRuntimeState.wifiRssi;
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+
   json += "\"uptime_ms\":";
   json += String(millis());
   json += ",\"wifi_rssi\":";
-  json += String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
+  json += String(wifiRssi);
   json += ",\"heap_free\":";
   json += String(ESP.getFreeHeap());
   json += ",\"psram_free\":";
@@ -388,6 +393,9 @@ void buildStatusJson(String &json) {
   const uint32_t speakerUnderruns = gRuntimeState.speakerUnderruns;
   const uint32_t speakerOverflows = gRuntimeState.speakerOverflows;
   const bool sensorsReady = gRuntimeState.sensorsReady;
+  const bool networkConnected = gRuntimeState.networkConnected;
+  const bool ethernetConnected = gRuntimeState.ethernetConnected;
+  const bool ethernetLinkUp = gRuntimeState.ethernetLinkUp;
   const bool wifiConnected = gRuntimeState.wifiConnected;
   const int32_t wifiRssi = gRuntimeState.wifiRssi;
   const bool producerRunning = gRuntimeState.cameraProducerRunning;
@@ -402,21 +410,40 @@ void buildStatusJson(String &json) {
   const uint32_t streamTimeoutCloses = gRuntimeState.streamTimeoutCloses;
   const uint32_t streamSendFailures = gRuntimeState.streamSendFailures;
   const uint32_t streamClientResets = gRuntimeState.streamClientResets;
+  const uint32_t lastSoundStartedAtMs = gRuntimeState.lastSoundStartedAtMs;
+  const uint32_t lastSoundCompletedAtMs = gRuntimeState.lastSoundCompletedAtMs;
+  const uint32_t lastSoundBytes = gRuntimeState.lastSoundBytes;
+  const uint32_t soundPlayRequests = gRuntimeState.soundPlayRequests;
   char bootStage[sizeof(gRuntimeState.bootStage)];
   strncpy(bootStage, gRuntimeState.bootStage, sizeof(bootStage) - 1);
   bootStage[sizeof(bootStage) - 1] = '\0';
   char lastInitError[sizeof(gRuntimeState.lastInitError)];
   strncpy(lastInitError, gRuntimeState.lastInitError, sizeof(lastInitError) - 1);
   lastInitError[sizeof(lastInitError) - 1] = '\0';
+  char networkTransport[sizeof(gRuntimeState.networkTransport)];
+  strncpy(networkTransport, gRuntimeState.networkTransport, sizeof(networkTransport) - 1);
+  networkTransport[sizeof(networkTransport) - 1] = '\0';
+  char networkIp[sizeof(gRuntimeState.networkIp)];
+  strncpy(networkIp, gRuntimeState.networkIp, sizeof(networkIp) - 1);
+  networkIp[sizeof(networkIp) - 1] = '\0';
   char wifiIp[sizeof(gRuntimeState.wifiIp)];
   strncpy(wifiIp, gRuntimeState.wifiIp, sizeof(wifiIp) - 1);
   wifiIp[sizeof(wifiIp) - 1] = '\0';
+  char ethernetIp[sizeof(gRuntimeState.ethernetIp)];
+  strncpy(ethernetIp, gRuntimeState.ethernetIp, sizeof(ethernetIp) - 1);
+  ethernetIp[sizeof(ethernetIp) - 1] = '\0';
   char lastReinitReason[sizeof(gRuntimeState.lastCameraReinitReason)];
   strncpy(lastReinitReason, gRuntimeState.lastCameraReinitReason, sizeof(lastReinitReason) - 1);
   lastReinitReason[sizeof(lastReinitReason) - 1] = '\0';
   char lastStreamError[sizeof(gRuntimeState.lastStreamError)];
   strncpy(lastStreamError, gRuntimeState.lastStreamError, sizeof(lastStreamError) - 1);
   lastStreamError[sizeof(lastStreamError) - 1] = '\0';
+  char lastSoundName[sizeof(gRuntimeState.lastSoundName)];
+  strncpy(lastSoundName, gRuntimeState.lastSoundName, sizeof(lastSoundName) - 1);
+  lastSoundName[sizeof(lastSoundName) - 1] = '\0';
+  char lastSoundResult[sizeof(gRuntimeState.lastSoundResult)];
+  strncpy(lastSoundResult, gRuntimeState.lastSoundResult, sizeof(lastSoundResult) - 1);
+  lastSoundResult[sizeof(lastSoundResult) - 1] = '\0';
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
   json.reserve(kStatusJsonCapacity);
@@ -428,29 +455,47 @@ void buildStatusJson(String &json) {
   json += ",\"last_init_error\":\"";
   json += lastInitError;
   json += "\"";
+  json += ",\"network_transport\":\"";
+  json += networkTransport;
+  json += "\"";
+  json += ",\"network_connected\":";
+  json += networkConnected ? "true" : "false";
+  json += ",\"network_ip\":\"";
+  json += networkIp;
+  json += "\"";
+  json += ",\"ethernet_connected\":";
+  json += ethernetConnected ? "true" : "false";
+  json += ",\"ethernet_link_up\":";
+  json += ethernetLinkUp ? "true" : "false";
+  json += ",\"ethernet_ip\":\"";
+  json += ethernetIp;
+  json += "\"";
   json += ",\"wifi_connected\":";
   json += wifiConnected ? "true" : "false";
   json += ",\"ip\":\"";
+  json += networkIp;
+  json += "\"";
+  json += ",\"wifi_ip\":\"";
   json += wifiIp;
   json += "\"";
   json += ",\"wifi_rssi_cached\":";
-  json += String(wifiRssi);
+  json += wifiRssi;
   json += ",\"psram_found\":";
   json += psramFound() ? "true" : "false";
   json += ",\"video_clients\":";
-  json += String(videoClients);
+  json += videoClients;
   json += ",\"stream_clients\":";
-  json += String(videoClients);
+  json += videoClients;
   json += ",\"audio_clients\":";
-  json += String(audioClients);
+  json += audioClients;
   json += ",\"websocket_clients\":";
-  json += String(websocketClients);
+  json += websocketClients;
   json += ",\"camera_ready\":";
   json += cameraReady ? "true" : "false";
   json += ",\"camera_producer_running\":";
   json += producerRunning ? "true" : "false";
   json += ",\"camera_generation\":";
-  json += String(generation);
+  json += generation;
   json += ",\"audio_ready\":";
   json += audioReady ? "true" : "false";
   json += ",\"speaker_ready\":";
@@ -460,39 +505,53 @@ void buildStatusJson(String &json) {
   json += ",\"speaker_client_active\":";
   json += speakerClientActive ? "true" : "false";
   json += ",\"speaker_buffer_fill\":";
-  json += String(speakerBufferFill);
+  json += speakerBufferFill;
   json += ",\"speaker_underruns\":";
-  json += String(speakerUnderruns);
+  json += speakerUnderruns;
   json += ",\"speaker_overflows\":";
-  json += String(speakerOverflows);
+  json += speakerOverflows;
+  json += ",\"last_sound_name\":\"";
+  json += lastSoundName;
+  json += "\"";
+  json += ",\"last_sound_result\":\"";
+  json += lastSoundResult;
+  json += "\"";
+  json += ",\"last_sound_bytes\":";
+  json += lastSoundBytes;
+  json += ",\"last_sound_started_at_ms\":";
+  json += lastSoundStartedAtMs;
+  json += ",\"last_sound_completed_at_ms\":";
+  json += lastSoundCompletedAtMs;
+  json += ",\"sound_play_requests\":";
+  json += soundPlayRequests;
   json += ",\"sensors_ready\":";
   json += sensorsReady ? "true" : "false";
   json += ",\"frame_time_ms\":";
-  json += String(frameTimeMs);
+  json += frameTimeMs;
   json += ",\"fps\":";
   json += String(frameRateTimes10 / 10.0f, 1);
   json += ",\"last_frame_size\":";
-  json += String(lastFrameSize);
+  json += lastFrameSize;
   json += ",\"capture_frame_time_ms\":";
-  json += String(captureFrameTimeMs);
+  json += captureFrameTimeMs;
   json += ",\"capture_fps\":";
   json += String(captureFpsTimes10 / 10.0f, 1);
   json += ",\"last_jpeg_size\":";
-  json += String(lastJpegSize);
+  json += lastJpegSize;
   json += ",\"stream_restarts\":";
-  json += String(streamRestarts);
+  json += streamRestarts;
   json += ",\"stream_drops\":";
-  json += String(streamDrops);
+  json += streamDrops;
   json += ",\"camera_reinit_count\":";
-  json += String(cameraReinitCount);
+  json += cameraReinitCount;
   json += ",\"stream_send_time_ms\":";
-  json += String(streamSendTimeMs);
+  json += streamSendTimeMs;
   json += ",\"stream_timeout_closes\":";
-  json += String(streamTimeoutCloses);
+  json += streamTimeoutCloses;
   json += ",\"stream_send_failures\":";
-  json += String(streamSendFailures);
+  json += streamSendFailures;
   json += ",\"stream_client_resets\":";
-  json += String(streamClientResets);
+  json += streamClientResets;
   json += ",\"last_stream_error\":\"";
   json += lastStreamError;
   json += "\"";
@@ -521,13 +580,13 @@ void buildSensorJson(String &json) {
   json = "{";
   appendCommonStatusFields(json);
   json += ",\"light_raw\":";
-  json += String(lightRaw);
+  json += lightRaw;
   json += ",\"light_norm\":";
   json += String(lightNorm, 3);
   json += ",\"motion\":";
   json += motion ? "true" : "false";
   json += ",\"motion_changed_ms_ago\":";
-  json += String(millis() - motionChangedAtMs);
+  json += millis() - motionChangedAtMs;
   json += "}";
 }
 
@@ -653,6 +712,9 @@ void buildOtaStatusJson(String &json) {
 
 void buildDashboardJson(String &json) {
   portENTER_CRITICAL(&gRuntimeStateMux);
+  const bool networkConnected = gRuntimeState.networkConnected;
+  const bool ethernetConnected = gRuntimeState.ethernetConnected;
+  const bool ethernetLinkUp = gRuntimeState.ethernetLinkUp;
   const bool wifiConnected = gRuntimeState.wifiConnected;
   const int32_t wifiRssi = gRuntimeState.wifiRssi;
   const bool cameraReady = gRuntimeState.cameraReady;
@@ -666,6 +728,10 @@ void buildDashboardJson(String &json) {
   const uint32_t streamSendFailures = gRuntimeState.streamSendFailures;
   const uint32_t streamClientResets = gRuntimeState.streamClientResets;
   const uint32_t videoClients = gRuntimeState.videoClients;
+  const uint32_t lastSoundStartedAtMs = gRuntimeState.lastSoundStartedAtMs;
+  const uint32_t lastSoundCompletedAtMs = gRuntimeState.lastSoundCompletedAtMs;
+  const uint32_t lastSoundBytes = gRuntimeState.lastSoundBytes;
+  const uint32_t soundPlayRequests = gRuntimeState.soundPlayRequests;
   const bool audioReady = gRuntimeState.audioReady;
   const bool speakerReady = gRuntimeState.speakerReady;
   const bool pcaReady = gRuntimeState.pca9685Ready;
@@ -682,25 +748,58 @@ void buildDashboardJson(String &json) {
   char lastInitError[sizeof(gRuntimeState.lastInitError)];
   strncpy(lastInitError, gRuntimeState.lastInitError, sizeof(lastInitError) - 1);
   lastInitError[sizeof(lastInitError) - 1] = '\0';
+  char networkTransport[sizeof(gRuntimeState.networkTransport)];
+  strncpy(networkTransport, gRuntimeState.networkTransport, sizeof(networkTransport) - 1);
+  networkTransport[sizeof(networkTransport) - 1] = '\0';
+  char networkIp[sizeof(gRuntimeState.networkIp)];
+  strncpy(networkIp, gRuntimeState.networkIp, sizeof(networkIp) - 1);
+  networkIp[sizeof(networkIp) - 1] = '\0';
   char wifiIp[sizeof(gRuntimeState.wifiIp)];
   strncpy(wifiIp, gRuntimeState.wifiIp, sizeof(wifiIp) - 1);
   wifiIp[sizeof(wifiIp) - 1] = '\0';
+  char ethernetIp[sizeof(gRuntimeState.ethernetIp)];
+  strncpy(ethernetIp, gRuntimeState.ethernetIp, sizeof(ethernetIp) - 1);
+  ethernetIp[sizeof(ethernetIp) - 1] = '\0';
   char cameraPreset[sizeof(gRuntimeState.cameraPreset)];
   strncpy(cameraPreset, gRuntimeState.cameraPreset, sizeof(cameraPreset) - 1);
   cameraPreset[sizeof(cameraPreset) - 1] = '\0';
   char lastStreamError[sizeof(gRuntimeState.lastStreamError)];
   strncpy(lastStreamError, gRuntimeState.lastStreamError, sizeof(lastStreamError) - 1);
   lastStreamError[sizeof(lastStreamError) - 1] = '\0';
+  char lastSoundName[sizeof(gRuntimeState.lastSoundName)];
+  strncpy(lastSoundName, gRuntimeState.lastSoundName, sizeof(lastSoundName) - 1);
+  lastSoundName[sizeof(lastSoundName) - 1] = '\0';
+  char lastSoundResult[sizeof(gRuntimeState.lastSoundResult)];
+  strncpy(lastSoundResult, gRuntimeState.lastSoundResult, sizeof(lastSoundResult) - 1);
+  lastSoundResult[sizeof(lastSoundResult) - 1] = '\0';
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
   json.reserve(2048);
   json = "{";
   appendCommonStatusFields(json);
+  json += ",\"network_transport\":\"";
+  json += networkTransport;
+  json += "\"";
+  json += ",\"network_connected\":";
+  json += networkConnected ? "true" : "false";
+  json += ",\"network_ip\":\"";
+  json += networkIp;
+  json += "\"";
+  json += ",\"ethernet_connected\":";
+  json += ethernetConnected ? "true" : "false";
+  json += ",\"ethernet_link_up\":";
+  json += ethernetLinkUp ? "true" : "false";
+  json += ",\"ethernet_ip\":\"";
+  json += ethernetIp;
+  json += "\"";
   json += ",\"wifi_connected\":";
   json += wifiConnected ? "true" : "false";
   json += ",\"wifi_rssi_cached\":";
   json += String(wifiRssi);
   json += ",\"ip\":\"";
+  json += networkIp;
+  json += "\"";
+  json += ",\"wifi_ip\":\"";
   json += wifiIp;
   json += "\"";
   json += ",\"boot_stage\":\"";
@@ -751,6 +850,20 @@ void buildDashboardJson(String &json) {
   json += audioReady ? "true" : "false";
   json += ",\"speaker_ready\":";
   json += speakerReady ? "true" : "false";
+  json += ",\"last_sound_name\":\"";
+  json += lastSoundName;
+  json += "\"";
+  json += ",\"last_sound_result\":\"";
+  json += lastSoundResult;
+  json += "\"";
+  json += ",\"last_sound_bytes\":";
+  json += String(lastSoundBytes);
+  json += ",\"last_sound_started_at_ms\":";
+  json += String(lastSoundStartedAtMs);
+  json += ",\"last_sound_completed_at_ms\":";
+  json += String(lastSoundCompletedAtMs);
+  json += ",\"sound_play_requests\":";
+  json += String(soundPlayRequests);
   json += ",\"pca9685_ready\":";
   json += pcaReady ? "true" : "false";
   json += ",\"ota_ready\":";
@@ -784,7 +897,7 @@ esp_err_t sendError(httpd_req_t *req, const char *status, const char *message) {
 }
 
 esp_err_t sendMovedEndpoint(httpd_req_t *req, uint16_t port, const char *path) {
-  const String location = String("http://") + WiFi.localIP().toString() + ":" + String(port) + path;
+  const String location = String("http://") + networkIp().toString() + ":" + String(port) + path;
   char body[192];
   snprintf(
     body,
@@ -823,7 +936,7 @@ esp_err_t sendHtml(httpd_req_t *req, const char *page) {
 bool readHeaderValue(httpd_req_t *req, const char *name, String &value) {
   value = "";
   const size_t headerLen = httpd_req_get_hdr_value_len(req, name);
-  if (headerLen == 0) {
+  if (headerLen == 0 || headerLen > 256) {
     return false;
   }
   char *buffer = static_cast<char *>(malloc(headerLen + 1));
@@ -1234,7 +1347,7 @@ const char kDashboardPage[] PROGMEM =
   function fillCameraControls(){const c=(state.camera&&state.camera.camera)?state.camera.camera:state.camera||{}; const presets=Array.isArray(c.presets)?c.presets:[]; presetSelect.innerHTML=''; presets.forEach(p=>{const opt=document.createElement('option');opt.value=p.name;opt.textContent=p.builtin?`${p.name} [builtin]`:p.name;presetSelect.appendChild(opt);}); if(c.preset) presetSelect.value=c.preset; document.getElementById('preset_name').value=c.preset||''; setFramesizeOptions(c); refreshPresetExpectedFramesize(c); ['quality','brightness','contrast','saturation','sharpness','denoise','gain_ceiling'].forEach(k=>{if(c[k]!==undefined) document.getElementById(k).value=String(c[k]);}); if(c.awb!==undefined) document.getElementById('awb').value=String(!!c.awb); if(c.agc!==undefined) document.getElementById('agc').value=String(!!c.agc); if(c.aec!==undefined) document.getElementById('aec').value=String(!!c.aec); if(c.hmirror!==undefined) document.getElementById('hmirror').value=String(!!c.hmirror); if(c.vflip!==undefined) document.getElementById('vflip').value=String(!!c.vflip); renderQuickPresets(c);}
   function fillAudioControls(){const a=state.audio&&state.audio.capture?state.audio.capture:{}; const profiles=Array.isArray(a.profiles)?a.profiles:[]; const sel=document.getElementById('audio_profile'); sel.innerHTML=''; profiles.forEach(name=>{const opt=document.createElement('option');opt.value=name;opt.textContent=name;sel.appendChild(opt);}); if(a.profile) sel.value=a.profile; document.getElementById('audio_gain').value=a.software_gain!==undefined?Number(a.software_gain).toFixed(2):'1.00'; document.getElementById('audio_dc_block').value=String(!!a.dc_block); document.getElementById('audio_slot').value=String(a.preferred_slot||1); document.getElementById('audio_shift').value=a.sample_shift!==undefined?a.sample_shift:0; updateAudioClipLink();}
   function updateAudioClipLink(){const clipMs=Math.max(250,Math.min(4000,Number(document.getElementById('audio_clip_ms').value||2000))); document.getElementById('audio_clip_link').href=`/api/audio/clip?ms=${clipMs}`; document.getElementById('audio_stream_link').href=audioStreamUrl();}
-  function renderTopStatus(){const d=state.dashboard||{};const s=state.status||{};const a=state.audio&&state.audio.capture?state.audio.capture:{};document.getElementById('top-system').innerHTML=`${d.wifi_connected?badge('Wi‑Fi OK',true):badge('Wi‑Fi down',false)} | RSSI ${d.wifi_rssi_cached??d.wifi_rssi??'n/a'} | Heap ${fmtBytes(s.heap_free||0)}`;document.getElementById('top-video').innerHTML=`${d.camera_ready?badge('камера ок',true):badge('камера fail',false)} | ${d.fps||0} FPS | ${fmtMs(d.frame_time_ms)}`;document.getElementById('top-audio').innerHTML=`${d.audio_ready?badge('аудио ок',true):badge('аудио fail',false)} | профиль ${a.profile||'n/a'}`;}
+  function renderTopStatus(){const d=state.dashboard||{};const s=state.status||{};const a=state.audio&&state.audio.capture?state.audio.capture:{};const net=d.network_transport||'wifi';const netOk=d.network_connected??d.wifi_connected;document.getElementById('top-system').innerHTML=`${netOk?badge(`${net} OK`,true):badge(`${net} down`,false)} | IP ${d.network_ip||d.ip||'0.0.0.0'} | RSSI ${d.wifi_rssi_cached??d.wifi_rssi??'n/a'} | Heap ${fmtBytes(s.heap_free||0)}`;document.getElementById('top-video').innerHTML=`${d.camera_ready?badge('камера ок',true):badge('камера fail',false)} | ${d.fps||0} FPS | ${fmtMs(d.frame_time_ms)}`;document.getElementById('top-audio').innerHTML=`${d.audio_ready?badge('аудио ок',true):badge('аудио fail',false)} | профиль ${a.profile||'n/a'}`;}
   function renderSystem(){const d=state.dashboard||{}; const s=state.status||{}; const a=state.audio&&state.audio.capture?state.audio.capture:{}; const playback=state.audio&&state.audio.playback?state.audio.playback:{}; document.getElementById('video-meta').textContent=`${d.camera_preset||'realtime'} | ${d.fps||0} FPS | ${fmtMs(d.frame_time_ms)} | gen ${d.camera_generation||0}`; document.getElementById('audio-stream-card').innerHTML=`<div class="row"><span>Capture</span><span>${d.audio_ready?badge('ok',true):badge('fail',false)}</span></div><div class="row"><span>PCM5102</span><span>${d.speaker_ready?badge('ok',true):badge('fail',false)}</span></div><div class="row"><span>Профиль</span><span class="mono">${a.profile||'n/a'}</span></div><div class="row"><span>Сигнал</span><span>${badge(a.signal_state||'n/a',a.signal_state==='active')}</span></div><div class="row"><span>Playback client</span><span>${playback.client_active?badge('active',false):badge('idle',true)}</span></div>`; document.getElementById('camera-card').innerHTML=`<div class="row"><span>Состояние</span><span>${d.camera_ready?badge('ok',true):badge('fail',false)}</span></div><div class="row"><span>Producer</span><span>${d.camera_producer_running?badge('run',true):badge('stop',false)}</span></div><div class="row"><span>Поколение</span><span>${d.camera_generation||0}</span></div><div class="row"><span>Пресет</span><span>${d.camera_preset||'realtime'}</span></div><div class="row"><span>Зрители</span><span>${d.video_clients||0}</span></div><div class="row"><span>Ошибки стрима</span><span>${d.last_stream_error||'none'}</span></div>`; document.getElementById('mic-card').innerHTML=`<div class="row"><span>Состояние</span><span>${a.ready?badge('ok',true):badge('fail',false)}</span></div><div class="row"><span>Peak / Avg</span><span>${a.selected_peak||0} / ${a.average_level||0}</span></div><div class="row"><span>DC block</span><span>${a.dc_block?'on':'off'}</span></div><div class="row"><span>Shift / slot</span><span>${a.sample_shift||0} / ${a.preferred_slot||1}</span></div><div class="row"><span>PSRAM</span><span>${fmtBytes(s.psram_free||0)}</span></div>`; renderTopStatus();}
   function renderSensors(){const s=state.sensors||{}; document.getElementById('sensor-card').innerHTML=`<div class="row"><span>Движение</span><span>${s.motion?badge('detected',false):badge('none',true)}</span></div><div class="row"><span>Свет raw</span><span>${s.light_raw??'n/a'}</span></div><div class="row"><span>Свет norm</span><span>${s.light_norm!==undefined?fmtPct(s.light_norm):'n/a'}</span></div><div class="row"><span>Изменение</span><span>${fmtMs(s.motion_changed_ms_ago)}</span></div>`; document.getElementById('top-sensors').innerHTML=`${s.motion?badge('движение',false):badge('спокойно',true)} | light ${s.light_raw??'n/a'}`;}
   function attachVideo(force=false){if(force||!videoFrameEl.src||!videoFrameEl.src.includes(`/live?embed=1&gen=${lastGeneration}`)){videoFrameEl.src=liveUrl();}}
@@ -1495,7 +1608,7 @@ const char kRootV2Page[] PROGMEM =
       document.getElementById('raw-dashboard').textContent=pretty(dashboard);
       document.getElementById('raw-camera').textContent=pretty(camera);
       document.getElementById('raw-audio').textContent=pretty(audio);
-      document.getElementById('quick').innerHTML=`<div class="row"><span>IP</span><span class="mono">${status.ip||'0.0.0.0'}</span></div><div class="row"><span>Wi-Fi</span><span>${dashboard.wifi_connected?'up':'down'}</span></div><div class="row"><span>FPS</span><span>${dashboard.fps||0}</span></div><div class="row"><span>Camera preset</span><span>${dashboard.camera_preset||'n/a'}</span></div><div class="row"><span>Audio profile</span><span>${audio.capture?.profile||'n/a'}</span></div><div class="row"><span>Motion</span><span>${sensors.motion?'detected':'none'}</span></div>`;
+      document.getElementById('quick').innerHTML=`<div class="row"><span>IP</span><span class="mono">${status.ip||'0.0.0.0'}</span></div><div class="row"><span>Network</span><span>${dashboard.network_transport||'wifi'} ${dashboard.network_connected?'up':'down'}</span></div><div class="row"><span>Wi-Fi</span><span>${dashboard.wifi_connected?'up':'down'}</span></div><div class="row"><span>Ethernet</span><span>${dashboard.ethernet_link_up?'link':'no link'}</span></div><div class="row"><span>FPS</span><span>${dashboard.fps||0}</span></div><div class="row"><span>Camera preset</span><span>${dashboard.camera_preset||'n/a'}</span></div><div class="row"><span>Audio profile</span><span>${audio.capture?.profile||'n/a'}</span></div><div class="row"><span>Motion</span><span>${sensors.motion?'detected':'none'}</span></div>`;
     }catch(e){
       document.getElementById('quick').textContent=String(e);
     }
@@ -1715,6 +1828,32 @@ esp_err_t videoLatencyResetHandler(httpd_req_t *req) {
   return sendJson(req, json);
 }
 
+esp_err_t soundPlayHandler(httpd_req_t *req) {
+  char name[16] = "boot";
+  const size_t queryLength = httpd_req_get_url_query_len(req);
+  if (queryLength > 0) {
+    char query[64] = {};
+    if (queryLength < sizeof(query) && httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+      httpd_query_key_value(query, "name", name, sizeof(name));
+    }
+  }
+  if (strcmp(name, "boot") != 0 && strcmp(name, "tone") != 0 && strcmp(name, "success") != 0) {
+    return sendError(req, "400 Bad Request", "{\"ok\":false,\"error\":\"invalid_sound\"}");
+  }
+
+  const bool ok = playSystemSound(name);
+  if (!ok) {
+    String error = "{\"ok\":false,\"error\":\"sound_play_failed\",\"name\":\"";
+    error += name;
+    error += "\"}";
+    return sendError(req, "503 Service Unavailable", error.c_str());
+  }
+
+  String json = "{\"ok\":true,\"name\":\"";
+  json += name;
+  json += "\"}";
+  return sendJson(req, json);
+}
 
 esp_err_t pcaStatusHandler(httpd_req_t *req) {
   String json;
@@ -1761,12 +1900,19 @@ esp_err_t otaUploadHandler(httpd_req_t *req) {
   }
 
   int remaining = req->content_len;
+  int timeoutStrikes = 0;
   while (remaining > 0) {
     const int toRead = min(remaining, static_cast<int>(kOtaChunkBytes));
     const int read = httpd_req_recv(req, reinterpret_cast<char *>(buffer), toRead);
     if (read == HTTPD_SOCK_ERR_TIMEOUT) {
+      if (++timeoutStrikes >= 10) {
+        free(buffer);
+        abortOtaUpload("ota_recv_timeout");
+        return sendError(req, "500 Internal Server Error", "{\"error\":\"ota_recv_timeout\"}");
+      }
       continue;
     }
+    timeoutStrikes = 0;
     if (read <= 0) {
       free(buffer);
       abortOtaUpload("ota_recv_failed");
@@ -2018,7 +2164,10 @@ esp_err_t streamHandler(httpd_req_t *req) {
   esp_err_t result = ESP_OK;
   int64_t lastFrameAtUs = 0;
   uint8_t *frameBuffer = static_cast<uint8_t *>(malloc(kStreamFrameBufferReserveBytes));
-  size_t frameBufferCapacity = frameBuffer == nullptr ? 0 : kStreamFrameBufferReserveBytes;
+  if (frameBuffer == nullptr) {
+    return sendError(req, "503 Service Unavailable", "{\"error\":\"frame_buffer_alloc_failed\"}");
+  }
+  size_t frameBufferCapacity = kStreamFrameBufferReserveBytes;
   uint32_t lastSentSequence = 0;
   uint8_t slowSendStrikes = 0;
   const char *streamErrorCode = "client_closed";
@@ -2529,6 +2678,10 @@ esp_err_t wsHandler(httpd_req_t *req) {
   }
 
   if (frame.len > 0) {
+    static constexpr size_t kWsMaxIncomingFrameBytes = 8192;
+    if (frame.len > kWsMaxIncomingFrameBytes) {
+      return ESP_ERR_INVALID_SIZE;
+    }
     uint8_t *buffer = static_cast<uint8_t *>(malloc(frame.len + 1));
     if (buffer == nullptr) {
       return ESP_ERR_NO_MEM;
@@ -2572,6 +2725,7 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_uri_t statusUri = makeHttpUri("/api/status", HTTP_GET, statusHandler);
   httpd_uri_t dashboardUri = makeHttpUri("/api/dashboard", HTTP_GET, dashboardHandler);
   httpd_uri_t videoLatencyResetUri = makeHttpUri("/api/video_latency/reset", HTTP_POST, videoLatencyResetHandler);
+  httpd_uri_t soundPlayUri = makeHttpUri("/api/sound/play", HTTP_POST, soundPlayHandler);
   httpd_uri_t otaStatusUri = makeHttpUri("/api/ota", HTTP_GET, otaStatusHandler);
   httpd_uri_t otaUploadUri = makeHttpUri("/api/ota/upload", HTTP_POST, otaUploadHandler);
   httpd_uri_t pcaStatusUri = makeHttpUri("/api/pca9685", HTTP_GET, pcaStatusHandler);
@@ -2613,6 +2767,7 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_register_uri_handler(server, &statusUri);
   httpd_register_uri_handler(server, &dashboardUri);
   httpd_register_uri_handler(server, &videoLatencyResetUri);
+  httpd_register_uri_handler(server, &soundPlayUri);
   httpd_register_uri_handler(server, &otaStatusUri);
   httpd_register_uri_handler(server, &otaUploadUri);
   httpd_register_uri_handler(server, &pcaStatusUri);
@@ -2694,7 +2849,7 @@ bool startWebServer() {
   streamConfig.max_uri_handlers = 4;
   streamConfig.max_open_sockets = 4;
   streamConfig.lru_purge_enable = true;
-  streamConfig.send_wait_timeout = 3;
+  streamConfig.send_wait_timeout = 10;
 
   if (httpd_start(&sStreamServer, &streamConfig) != ESP_OK) {
     bootLog("web", "failed to start stream HTTP server");
@@ -2710,7 +2865,7 @@ bool startWebServer() {
   audioConfig.max_uri_handlers = 2;
   audioConfig.max_open_sockets = 4;
   audioConfig.lru_purge_enable = true;
-  audioConfig.send_wait_timeout = 3;
+  audioConfig.send_wait_timeout = 10;
 
   if (httpd_start(&sAudioServer, &audioConfig) != ESP_OK) {
     bootLog("web", "failed to start audio HTTP server");
@@ -2755,8 +2910,8 @@ void broadcastTelemetry() {
     return;
   }
 
-  size_t clients = 8;
-  int clientFds[8] = {};
+  size_t clients = 16;
+  int clientFds[16] = {};
   if (httpd_get_client_list(sControlServer, &clients, clientFds) != ESP_OK) {
     return;
   }
