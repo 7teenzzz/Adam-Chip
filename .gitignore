@@ -1,6 +1,14 @@
+# Claude Code local state (plans, memory, local settings)
+.claude/
+PLAN.md
+.mcp.json
+
 # Temp staff
 Subsystem/AdamsServer/artifacts/
 Subsystem/AdamsServer/config/PrivateConfig.h
+data/
+models/
+logs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
