@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Adam Chip · Operator UI</title>
+  <link rel="stylesheet" href="/ui/static/css/tokens.css" />
+  <link rel="stylesheet" href="/ui/static/css/base.css" />
+  <link rel="stylesheet" href="/ui/static/css/components.css" />
+  <link rel="stylesheet" href="/ui/static/css/layout.css" />
+  <link rel="stylesheet" href="/ui/static/css/animations.css" />
+</head>
+<body>
+  <div id="boot" style="padding:40px;color:#43d17a;font-family:monospace;font-size:14px">
+    <div style="opacity:0.6">ADAM CHIP UI · загрузка…</div>
+    <div id="boot-error" style="margin-top:24px;color:#ff6363;white-space:pre-wrap;display:none"></div>
+  </div>
+  <script>
+    window.addEventListener("error", (e) => {
+      const node = document.getElementById("boot-error");
+      if (node) {
+        node.style.display = "block";
+        node.textContent = `[error] ${e.message}\n  at ${e.filename}:${e.lineno}:${e.colno}`;
+      }
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      const node = document.getElementById("boot-error");
+      if (node) {
+        node.style.display = "block";
+        node.textContent = `[unhandled rejection] ${e.reason && e.reason.message || e.reason}`;
+      }
+    });
+  </script>
+  <script type="module" src="/ui/static/js/main.js"></script>
+</body>
+</html>
