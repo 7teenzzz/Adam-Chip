@@ -30,20 +30,61 @@ class OpenAIChatClient:
         self.timeout = float(config.get("timeout_sec", 30))
         self.temperature = float(config.get("temperature", 0.7))
         self.max_tokens = int(config.get("max_tokens", 220))
+        # Disable chain-of-thought thinking for models that support it (e.g. Gemma 4).
+        # Thinking consumes all max_tokens before producing a reply, leaving content empty.
+        self.disable_thinking = bool(config.get("disable_thinking", True))
 
     async def generate(self, messages: list[dict[str, str]]) -> str:
         return await asyncio.to_thread(self._generate_sync, messages)
+
+    async def generate_streaming(self, messages: list[dict[str, str]]):  # AsyncGenerator[str, None]
+        import httpx  # lazy — only needed for streaming path
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "stream": True,
+        }
+        if self.disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
+            async with client.stream(
+                "POST",
+                self.base_url + "/chat/completions",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        return
+                    try:
+                        data = json.loads(data_str)
+                        content = (data.get("choices", [{}])[0].get("delta", {}).get("content") or "")
+                        if content:
+                            yield content
+                    except (json.JSONDecodeError, IndexError, KeyError):
+                        pass
 
     async def health(self) -> ServiceHealth:
         return await asyncio.to_thread(self._health_sync)
 
     def _generate_sync(self, messages: list[dict[str, str]]) -> str:
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        if self.disable_thinking:
+            # Disable chain-of-thought for Gemma 4 and similar thinking models.
+            # Prefer --reasoning off at the llama-server level (adam-llm.service);
+            # this flag is a fallback for servers that support the API parameter.
+            payload["thinking"] = {"type": "disabled"}
         raw = self._post("/chat/completions", payload)
         choices = raw.get("choices", [])
         if not choices:
@@ -130,6 +171,7 @@ class TTSClient:
         self.base_url = str(config.get("base_url", "http://127.0.0.1:8090")).rstrip("/")
         self.timeout = float(config.get("timeout_sec", 20))
         self.speaker = str(config.get("speaker", "eugene"))
+        self.output_device = str(config.get("output_device", "")).strip()
 
     async def speak(self, text: str) -> dict[str, Any]:
         chunks = [chunk for chunk in split_sentences(text) if chunk.strip()]
@@ -143,7 +185,9 @@ class TTSClient:
         return await asyncio.to_thread(self._health_sync)
 
     def _synthesize_sync(self, text: str) -> dict[str, Any]:
-        payload = {"text": text, "speaker": self.speaker}
+        payload: dict[str, Any] = {"text": text, "speaker": self.speaker}
+        if self.output_device:
+            payload["output_device"] = self.output_device
         body = json.dumps(payload).encode("utf-8")
         req = Request(self.base_url + "/speak", data=body, method="POST")
         req.add_header("Content-Type", "application/json")
@@ -254,6 +298,55 @@ class RivaASRClient:
             if alternatives:
                 return str(getattr(alternatives[0], "transcript", "")).strip()
         return ""
+
+
+class WhisperASRClient:
+    """HTTP client for the ASR_Whisper.py microservice (faster-whisper)."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.base_url = str(config.get("base_url", "http://127.0.0.1:8095")).rstrip("/")
+        self.sample_rate = int(config.get("sample_rate", 16000))
+        self.timeout = float(config.get("timeout_sec", 30))
+
+    async def health(self) -> ServiceHealth:
+        return await asyncio.to_thread(self._health_sync)
+
+    def _health_sync(self) -> ServiceHealth:
+        try:
+            req = Request(self.base_url + "/health", method="GET")
+            with urlopen(req, timeout=2) as resp:
+                return ServiceHealth(resp.status < 500, f"HTTP {resp.status}")
+        except (HTTPError, URLError, OSError) as exc:
+            return ServiceHealth(False, str(exc))
+
+    async def transcribe_pcm(self, pcm: bytes) -> str:
+        return await asyncio.to_thread(self._transcribe_pcm_sync, pcm)
+
+    def _transcribe_pcm_sync(self, pcm: bytes) -> str:
+        if not pcm:
+            return ""
+        wav_bytes = self._pcm_to_wav(pcm)
+        req = Request(self.base_url + "/transcribe", data=wav_bytes, method="POST")
+        req.add_header("Content-Type", "audio/wav")
+        with urlopen(req, timeout=self.timeout) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+        return str(raw.get("transcript", "")).strip()
+
+    def _pcm_to_wav(self, pcm: bytes) -> bytes:
+        out = io.BytesIO()
+        with wave.open(out, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(self.sample_rate)
+            handle.writeframes(pcm)
+        return out.getvalue()
+
+
+def create_asr_client(config: dict[str, Any]) -> RivaASRClient | WhisperASRClient:
+    provider = str(config.get("provider", "riva")).strip().lower()
+    if provider == "whisper":
+        return WhisperASRClient(config)
+    return RivaASRClient(config)
 
 
 class VLMClient:

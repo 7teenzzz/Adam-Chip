@@ -1,0 +1,15 @@
+[Unit]
+Description=Adam Chip · таймер ночной консолидации памяти
+Documentation=Engineering/Memory_Schema.md
+
+[Timer]
+# Каждый день в 03:30 локального времени.
+# Окно консолидатора задано в Tuning.json (window_start/window_end);
+# таймер просто запускает скрипт внутри окна.
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=adam-consolidator.service
+
+[Install]
+WantedBy=timers.target

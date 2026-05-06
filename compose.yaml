@@ -21,7 +21,8 @@ services:
       ADAM_VLM_MODEL: ${ADAM_VLM_MODEL:-Efficient-Large-Model/VILA1.5-3b}
       ADAM_ORCHESTRATOR_PORT: ${ADAM_ORCHESTRATOR_PORT:-8080}
       ADAM_VIDEO_DEVICE: ${ADAM_VIDEO_DEVICE:-/dev/video0}
-      ADAM_AUDIO_INPUT_DEVICE: ${ADAM_AUDIO_INPUT_DEVICE:-hw:0,0}
+      ADAM_AUDIO_INPUT_DEVICE: ${ADAM_AUDIO_INPUT_DEVICE:-hw:1,0}
+      ADAM_ASR_WHISPER_BASE_URL: ${ADAM_ASR_WHISPER_BASE_URL:-http://127.0.0.1:8095}
       ADAM_AUDIO_OUTPUT_DEVICE: ${ADAM_AUDIO_OUTPUT_DEVICE:-default}
     volumes:
       - ./data:/data
@@ -45,6 +46,46 @@ services:
     volumes:
       - ./data:/data
       - ./models:/root/.cache
+
+  adam-asr-whisper:
+    build:
+      context: .
+      dockerfile: System/Dockerfile
+    container_name: adam-asr-whisper
+    profiles:
+      - speech-local
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8095}
+      ADAM_ASR_WHISPER_MODEL: ${ADAM_ASR_WHISPER_MODEL:-medium}
+      ADAM_ASR_LANGUAGE: ${ADAM_ASR_LANGUAGE:-ru}
+      ADAM_ASR_DEVICE: ${ADAM_ASR_DEVICE:-auto}
+    command: ["python", "-m", "Speech.ASR_Whisper"]
+    volumes:
+      - ./data:/data
+      - ./models:/root/.cache
+
+  adam-llm:
+    # Optional Docker alternative to the native systemd adam-llm.service.
+    # Use profile llm-docker to activate: docker compose --profile llm-docker up adam-llm
+    # Recommended: use systemd service instead (scripts/adam_install_systemd.sh).
+    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+    container_name: adam-llm
+    profiles:
+      - llm-docker
+    network_mode: host
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      LLAMA_ARG_MODEL: /models/gemma-4-E4B-it-UD-Q4_K_XL.gguf
+      LLAMA_ARG_HOST: 127.0.0.1
+      LLAMA_ARG_PORT: "8051"
+      LLAMA_ARG_N_GPU_LAYERS: "99"
+      LLAMA_ARG_CTX_SIZE: "8192"
+      LLAMA_ARG_PARALLEL: "1"
+    volumes:
+      - ./Subsystem/Models/gguf:/models:ro
 
   # Run NVIDIA Riva and nano_llm/VILA with their official Jetson setup flows,
   # then point ADAM_LLM_BASE_URL / Riva host / VLM URL at those services.

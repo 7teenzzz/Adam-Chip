@@ -6,9 +6,14 @@ PLAN.md
 # Temp staff
 Subsystem/AdamsServer/artifacts/
 Subsystem/AdamsServer/config/PrivateConfig.h
+Subsystem/Models/
+Subsystem/llama.cpp/
 data/
 models/
 logs/
+
+# GGUF model files (large binaries)
+*.gguf
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

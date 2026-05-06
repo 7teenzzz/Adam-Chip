@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from collections import deque
@@ -19,6 +20,7 @@ class EventLog:
         self.path = data_dir / "events.jsonl"
         self._lock = threading.Lock()
         self._recent: deque[dict[str, Any]] = deque(maxlen=memory_limit)
+        self._subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]] = []
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def append(self, event_type: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -33,6 +35,8 @@ class EventLog:
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(encoded + "\n")
             self._recent.append(event)
+            subscribers = list(self._subscribers)
+        self._broadcast(subscribers, event)
         return event
 
     def tail(self, limit: int = 100) -> list[dict[str, Any]]:
@@ -52,3 +56,36 @@ class EventLog:
             except json.JSONDecodeError:
                 continue
         return events
+
+    def subscribe(self, max_queue: int = 200) -> asyncio.Queue[dict[str, Any]]:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_queue)
+        with self._lock:
+            self._subscribers.append((loop, queue))
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        with self._lock:
+            self._subscribers = [(loop, q) for loop, q in self._subscribers if q is not queue]
+
+    def _broadcast(self, subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]], event: dict[str, Any]) -> None:
+        for loop, queue in subscribers:
+            try:
+                loop.call_soon_threadsafe(self._enqueue, queue, event)
+            except RuntimeError:
+                # Loop already closed — drop the subscriber on next sweep.
+                self.unsubscribe(queue)
+
+    @staticmethod
+    def _enqueue(queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                pass

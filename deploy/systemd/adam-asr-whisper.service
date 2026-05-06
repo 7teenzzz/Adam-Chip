@@ -1,0 +1,28 @@
+[Unit]
+Description=Adam Chip Whisper ASR Service
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=i17jet
+Group=i17jet
+SupplementaryGroups=audio render video
+WorkingDirectory=/home/i17jet/Agents/Adam-Chip
+EnvironmentFile=-/etc/adam-chip/adam.env
+Environment=PYTHONPATH=/home/i17jet/Agents/Adam-Chip/System
+Environment=ADAM_VENV=/home/i17jet/Agents/Adam-Chip/.venv
+Environment=ADAM_ASR_WHISPER_MODEL=medium
+Environment=ADAM_ASR_LANGUAGE=ru
+Environment=ADAM_ASR_DEVICE=auto
+Environment=ADAM_MODELS_DIR=/home/i17jet/Agents/Adam-Chip/Subsystem/Models
+Environment=HF_HOME=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/hf
+Environment=HF_HUB_CACHE=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/hf/hub
+ExecStartPre=/usr/bin/test -x /home/i17jet/Agents/Adam-Chip/.venv/bin/python
+ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python -m Speech.ASR_Whisper
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

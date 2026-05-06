@@ -4,10 +4,12 @@ from __future__ import annotations
 import audioop
 import json
 import os
+import re
 import shutil
 import sys
 import asyncio
 import subprocess
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ from typing import Any
 try:
     from fastapi import Body, FastAPI, HTTPException, Query, Request
     from fastapi.responses import HTMLResponse, RedirectResponse
+    from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover - exercised only on missing runtime deps.
     raise SystemExit(
         "FastAPI is required for the orchestrator. Install with: "
@@ -22,28 +25,36 @@ except ImportError as exc:  # pragma: no cover - exercised only on missing runti
     ) from exc
 
 from adam.action import ActionLayer
+from adam.api_runtime import RuntimeDeps, build_router
 from adam.config import Settings
 from adam.device import MCUClient
+from adam.echoes_gate import EchoGate
+from adam.episodic import SessionAccumulator, should_record
 from adam.events import EventLog, utc_now
-from adam.inference import RivaASRClient, SceneCache, TTSClient, VLMClient, create_llm_client
+from adam.inference import RivaASRClient, WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
 from adam.media import MediaHealth
-from adam.memory import MemoryStore
+from adam.memory import EpisodicMemory, MemoryStore
+from adam.metrics import MetricsLog
 from adam.power import PowerGate
 from adam.prompt import PromptBuilder
 from adam.config import PROJECT_ROOT
 from adam.sound import play_local_sound
-from adam.system import docker_health, gate_summary
+from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
+from adam.tuning import TuningStore, get_store as _get_tuning_store
 from adam.ui import agent_page, dash_page, debug_page
 
 
 settings = Settings.load()
 event_log = EventLog(settings.data_dir)
+metrics_log = MetricsLog(settings.data_dir)
 memory = MemoryStore(settings.data_dir)
+episodic_memory = EpisodicMemory(settings.data_dir)
+tuning_store: TuningStore = _get_tuning_store()
 power_gate = PowerGate(settings.section("power"))
 media_health = MediaHealth(settings.section("media"))
 mcu = MCUClient(settings.section("mcu"))
 llm = create_llm_client(settings.section("services").get("llm", {}))
-asr = RivaASRClient(settings.section("services").get("asr", {}))
+asr = create_asr_client(settings.section("services").get("asr", {}))
 vlm = VLMClient(settings.section("services").get("vlm", {}))
 tts = TTSClient(settings.section("services").get("tts", {}))
 scene_cache = SceneCache()
@@ -52,6 +63,18 @@ prompt_builder = PromptBuilder(
     int(settings.section("agent").get("history_turns", 8)),
 )
 action_layer = ActionLayer(settings.section("mcu"), settings.section("safety"))
+
+_about_dir = PROJECT_ROOT / "Agent Adam Chip" / "About"
+echoes_gate = EchoGate(
+    pool_path=_about_dir / "Echoes.md",
+    memory=episodic_memory,
+    pool="echoes",
+)
+chinese_gate = EchoGate(
+    pool_path=_about_dir / "Chinese_lines.md",
+    memory=episodic_memory,
+    pool="chinese",
+)
 
 runtime_state: dict[str, Any] = {
     "mode": settings.mode,
@@ -62,10 +85,106 @@ runtime_state: dict[str, Any] = {
 }
 
 turn_lock = asyncio.Lock()
+session_lock = asyncio.Lock()
+session_state: dict[str, Any] = {
+    "accumulator": None,  # type: ignore[assignment]
+    "last_turn_at": 0.0,
+    "last_face_seen_at": 0.0,
+}
+
+# Ring-buffer полных промтов для UI диагностики.
+from collections import deque  # noqa: E402
+
+_PROMPT_TRACE_MAX = 50
+prompt_trace: deque[dict[str, Any]] = deque(maxlen=_PROMPT_TRACE_MAX)
+
+
+_NAME_INTRO_RE = re.compile(
+    r"\b(?:меня\s+зовут|я\s+(?:это\s+)?|зовут\s+меня)\s+([A-ZА-ЯЁ][a-zа-яё\-]{1,30})\b",
+    flags=re.UNICODE,
+)
+
+
+def _extract_visitor_name(transcript: str) -> str | None:
+    m = _NAME_INTRO_RE.search(transcript)
+    if not m:
+        return None
+    candidate = m.group(1).strip()
+    # очень короткое или общее слово отбраковываем
+    if len(candidate) < 2:
+        return None
+    common_blacklist = {"вижу", "слышу", "хочу", "знаю", "помню", "там", "тут", "здесь"}
+    if candidate.lower() in common_blacklist:
+        return None
+    return candidate
+
+
+def _resolve_mood(scene_text: str, sensors: dict[str, Any]) -> str:
+    """Простая эвристика для mood-метки gate-фильтра.
+
+    Возвращает один из: 'neutral' | 'hostile' | 'overload' | 'silence_deep'.
+    Расширится в SceneDirector в дальнейших итерациях.
+    """
+    text = (scene_text or "").lower()
+    if "несколько" in text or "много" in text or "толпа" in text or "group" in text:
+        return "overload"
+    return "neutral"
+
+
+def _format_recent_episodic(episodes) -> list[str]:
+    out: list[str] = []
+    for ep in episodes:
+        date = ep.ts_end.date().isoformat()
+        themes = ", ".join(ep.themes[:3]) if ep.themes else "без явных тем"
+        out.append(f"{date} — {themes}")
+    return out
+
+
+async def _commit_session_locked(reason: str) -> None:
+    """Закрывает текущую сессию, пишет эпизод если salience прошёл фильтр.
+
+    Должна вызываться при удерживаемом session_lock.
+    """
+    acc: SessionAccumulator | None = session_state.get("accumulator")  # type: ignore[assignment]
+    if acc is None or acc.turn_count == 0:
+        session_state["accumulator"] = None
+        return
+    tuning = tuning_store.current()
+    episode = acc.finalize(
+        weights=tuning.memory.episodic.weights,
+        duration_normalize_seconds=tuning.memory.episodic.duration_normalize_seconds,
+    )
+    write = should_record(episode, acc, tuning.memory.episodic)
+    if write:
+        try:
+            episodic_memory.commit_episode(episode)
+            event_log.append(
+                "episode_committed",
+                {
+                    "id": episode.id,
+                    "salience": episode.salience,
+                    "name": episode.visitor.introduced_name,
+                    "themes": episode.themes,
+                    "duration_s": episode.duration_s,
+                    "reason": reason,
+                },
+            )
+        except Exception as exc:
+            event_log.append("episode_commit_error", {"error": str(exc), "id": episode.id})
+    else:
+        event_log.append(
+            "episode_skipped",
+            {
+                "salience": episode.salience,
+                "duration_s": episode.duration_s,
+                "reason": reason,
+            },
+        )
+    session_state["accumulator"] = None
 
 
 class VoiceLoopController:
-    def __init__(self, audio_config: dict[str, Any], asr_client: RivaASRClient) -> None:
+    def __init__(self, audio_config: dict[str, Any], asr_client: RivaASRClient | WhisperASRClient) -> None:
         self.audio_device = str(audio_config.get("input_device", "hw:0,0"))
         self.capture_device = self._capture_device_for(self.audio_device)
         self.sample_rate = int(audio_config.get("sample_rate", 16000))
@@ -76,6 +195,14 @@ class VoiceLoopController:
         self.endpointing_ms = int(settings.section("services").get("asr", {}).get("endpointing_ms", 450))
         self.max_segment_ms = int(audio_config.get("max_segment_ms", 9000))
         self.asr_client = asr_client
+        asr_cfg = settings.section("services").get("asr", {})
+        self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
+        wake_words = asr_cfg.get("wake_words", []) or []
+        self.wake_words = [str(w).strip().lower() for w in wake_words if str(w).strip()]
+        self._wake_re = (
+            re.compile(r"\b(?:" + "|".join(re.escape(w) for w in self.wake_words) + r")\b[\s,.:;!?\-]*", re.IGNORECASE)
+            if self.wake_words else None
+        )
         self._task: asyncio.Task[None] | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self.running = False
@@ -84,6 +211,7 @@ class VoiceLoopController:
         self.last_transcript_at = ""
         self.last_asr_error = ""
         self.muted_by_tts = False
+        self.last_wake_skip = ""
 
     def status(self) -> dict[str, Any]:
         return {
@@ -97,6 +225,9 @@ class VoiceLoopController:
             "capture_device": self.capture_device,
             "sample_rate": self.sample_rate,
             "frame_ms": self.frame_ms,
+            "wake_word_required": self.wake_word_required,
+            "wake_words": self.wake_words,
+            "last_wake_skip": self.last_wake_skip,
         }
 
     async def start(self) -> dict[str, Any]:
@@ -227,19 +358,38 @@ class VoiceLoopController:
 
     async def _transcribe_and_dispatch(self, pcm: bytes) -> None:
         self.vad_state = "transcribing"
+        t_asr = time.perf_counter()
         try:
             transcript = (await self.asr_client.transcribe_pcm(pcm)).strip()
         except Exception as exc:
             self.last_asr_error = str(exc)
             event_log.append("voice_loop_error", {"stage": "asr", "error": str(exc)})
             return
+        asr_ms = round((time.perf_counter() - t_asr) * 1000, 1)
+        runtime_state["last_asr_ms"] = asr_ms
         if not transcript:
             return
         self.last_transcript = transcript
         self.last_transcript_at = utc_now()
         self.last_asr_error = ""
-        event_log.append("asr_final", {"text": transcript, "source": "voice_loop"})
-        await _run_dialogue_turn(transcript, "voice_loop")
+
+        cleaned = transcript
+        if self.wake_word_required and self._wake_re is not None:
+            match = self._wake_re.search(transcript)
+            if not match:
+                self.last_wake_skip = transcript
+                event_log.append(
+                    "asr_wake_skip",
+                    {"text": transcript, "reason": "no_wake_word", "asr_ms": asr_ms},
+                )
+                return
+            cleaned = (transcript[:match.start()] + transcript[match.end():]).strip(" ,.;:!?-—")
+            if not cleaned:
+                # User said only the wake word — treat as a greeting trigger.
+                cleaned = "Привет!"
+
+        event_log.append("asr_final", {"text": cleaned, "raw": transcript, "source": "voice_loop", "asr_ms": asr_ms})
+        await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms)
 
 
 class SceneWorker:
@@ -274,9 +424,17 @@ class SceneWorker:
     async def _run(self) -> None:
         while self.running:
             try:
+                t_capture = time.perf_counter()
                 jpeg = await asyncio.to_thread(self._capture_snapshot)
+                capture_ms = round((time.perf_counter() - t_capture) * 1000, 1)
+                t_vlm = time.perf_counter()
                 summary = (await self.vlm_client.describe_jpeg(jpeg)).strip()
-                updated = scene_cache.update(summary, {"source": "vlm", "updated_at": utc_now(), "stale": False})
+                vlm_ms = round((time.perf_counter() - t_vlm) * 1000, 1)
+                runtime_state["last_vlm_ms"] = vlm_ms
+                updated = scene_cache.update(
+                    summary,
+                    {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms, "capture_ms": capture_ms},
+                )
                 self.last_error = ""
                 event_log.append("scene_updated", updated)
             except asyncio.CancelledError:
@@ -320,11 +478,89 @@ voice_loop = VoiceLoopController(settings.section("media").get("audio", {}), asr
 scene_worker = SceneWorker(settings.section("media"), vlm)
 
 
+class SessionWatcher:
+    """Закрывает накопленную сессию когда долго нет turn'ов (silence timeout)."""
+
+    def __init__(self, poll_seconds: float = 10.0) -> None:
+        self.poll_seconds = poll_seconds
+        self._task: asyncio.Task | None = None
+        self._stop = asyncio.Event()
+
+    async def start(self) -> None:
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run(), name="adam_session_watcher")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self.poll_seconds)
+                return  # stop requested
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await self._tick()
+            except Exception as exc:
+                event_log.append("session_watcher_error", {"error": str(exc)})
+
+    async def _tick(self) -> None:
+        tuning = tuning_store.current()
+        strategy = tuning.session.end_strategy
+        threshold = tuning.session.vad_silence_seconds
+        face_threshold = tuning.session.face_lost_seconds
+        now_ts = time.time()
+        async with session_lock:
+            acc = session_state.get("accumulator")
+            if acc is None:
+                return
+            last_ts = float(session_state.get("last_turn_at") or 0.0)
+            silence_elapsed = now_ts - last_ts
+            face_seen = float(session_state.get("last_face_seen_at") or 0.0)
+            face_elapsed = now_ts - face_seen if face_seen else None
+
+            close = False
+            reason = ""
+            if strategy == "vad_silence" and silence_elapsed >= threshold:
+                close, reason = True, f"silence_{int(silence_elapsed)}s"
+            elif strategy == "face_lost":
+                if face_elapsed is not None and face_elapsed >= face_threshold:
+                    close, reason = True, f"face_lost_{int(face_elapsed)}s"
+            elif strategy == "combined":
+                if silence_elapsed >= threshold:
+                    close, reason = True, f"silence_{int(silence_elapsed)}s"
+                elif face_elapsed is not None and face_elapsed >= face_threshold:
+                    close, reason = True, f"face_lost_{int(face_elapsed)}s"
+            elif strategy == "idle_with_grace":
+                # пока упрощённо: как combined, без grace-message
+                if silence_elapsed >= threshold:
+                    close, reason = True, f"silence_{int(silence_elapsed)}s"
+            elif strategy == "event_signal":
+                # внешний триггер не приходит автоматически — оставляем open
+                return
+
+            if close:
+                await _commit_session_locked(reason=f"watcher:{reason}")
+                session_state["last_turn_at"] = 0.0
+
+
+session_watcher = SessionWatcher()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     power = power_gate.check()
     event_log.append("orchestrator_started", {"mode": runtime_state["mode"], "power": power.as_dict()})
     await scene_worker.start()
+    await session_watcher.start()
     if runtime_state["mode"] == "exhibition" and settings.section("power").get("enforce_in_exhibition", True):
         status_payload = await _status_payload()
         gate = status_payload["exhibition_gate"]
@@ -338,6 +574,10 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         await voice_loop.stop()
+        await session_watcher.stop()
+        # финальный коммит, если сессия осталась открытой
+        async with session_lock:
+            await _commit_session_locked(reason="shutdown")
         await scene_worker.stop()
 
 
@@ -346,22 +586,37 @@ app = FastAPI(title="Adam Chip Orchestrator", version="0.1.0", lifespan=lifespan
 
 @app.get("/")
 async def index() -> RedirectResponse:
-    return RedirectResponse("/dash", status_code=307)
+    return RedirectResponse("/ui/", status_code=307)
 
 
-@app.get("/agent", response_class=HTMLResponse)
-async def agent() -> str:
+@app.get("/legacy/agent", response_class=HTMLResponse)
+async def legacy_agent() -> str:
     return agent_page()
 
 
-@app.get("/dash", response_class=HTMLResponse)
-async def dash() -> str:
+@app.get("/legacy/dash", response_class=HTMLResponse)
+async def legacy_dash() -> str:
     return dash_page(_ui_settings_public())
 
 
-@app.get("/debug", response_class=HTMLResponse)
-async def debug() -> str:
+@app.get("/legacy/debug", response_class=HTMLResponse)
+async def legacy_debug() -> str:
     return debug_page(_ui_settings_public())
+
+
+@app.get("/agent", response_class=HTMLResponse)
+async def agent() -> RedirectResponse:
+    return RedirectResponse("/legacy/agent", status_code=307)
+
+
+@app.get("/dash", response_class=HTMLResponse)
+async def dash() -> RedirectResponse:
+    return RedirectResponse("/legacy/dash", status_code=307)
+
+
+@app.get("/debug", response_class=HTMLResponse)
+async def debug() -> RedirectResponse:
+    return RedirectResponse("/legacy/debug", status_code=307)
 
 
 @app.get("/api/ui/status")
@@ -581,6 +836,12 @@ async def _status_payload() -> dict[str, Any]:
             "speaking": runtime_state["speaking"],
             "thinking": runtime_state["thinking"],
             "last_error": runtime_state["last_error"],
+            "latency_ms": {
+                "llm": runtime_state.get("last_llm_ms"),
+                "tts": runtime_state.get("last_tts_ms"),
+                "asr": runtime_state.get("last_asr_ms"),
+                "vlm": runtime_state.get("last_vlm_ms"),
+            },
         },
         "power": power.as_dict(),
         "media": media.as_dict(),
@@ -608,6 +869,66 @@ async def gate() -> dict[str, Any]:
 @app.get("/api/agent/events")
 async def events(limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
     return {"events": event_log.tail(limit)}
+
+
+# ---------- Tuning (runtime persona config) ----------
+
+
+@app.get("/api/tuning")
+async def get_tuning() -> dict[str, Any]:
+    return tuning_store.current().model_dump()
+
+
+@app.put("/api/tuning")
+async def patch_tuning(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        new_cfg = tuning_store.apply_patch(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid tuning patch: {exc}") from exc
+    event_log.append("tuning_updated", {"patch_keys": list(payload.keys())})
+    return {"ok": True, "tuning": new_cfg.model_dump()}
+
+
+@app.post("/api/tuning/reset")
+async def reset_tuning() -> dict[str, Any]:
+    new_cfg = tuning_store.restore_defaults()
+    event_log.append("tuning_reset", {})
+    return {"ok": True, "tuning": new_cfg.model_dump()}
+
+
+@app.get("/api/tuning/schema")
+async def tuning_schema() -> dict[str, Any]:
+    from adam.tuning import Tuning
+    return Tuning.model_json_schema()
+
+
+# ---------- Prompt trace (UI диагностика) ----------
+
+
+@app.get("/api/agent/prompts")
+async def get_prompt_trace(
+    limit: int = Query(20, ge=1, le=_PROMPT_TRACE_MAX),
+    full: bool = Query(False),
+) -> dict[str, Any]:
+    """Список последних prompt-trace записей.
+
+    full=false — только метаданные (transcript, echo, recent, semantic flags).
+    full=true — включает system_prompt если он был сохранён (требует tuning.diagnostics.trace_prompts=true).
+    """
+    items = list(prompt_trace)[-limit:]
+    if not full:
+        items = [_summarize_trace(rec) for rec in items]
+    return {
+        "items": items,
+        "trace_prompts_enabled": tuning_store.current().diagnostics.trace_prompts,
+        "ring_capacity": _PROMPT_TRACE_MAX,
+    }
+
+
+def _summarize_trace(rec: dict[str, Any]) -> dict[str, Any]:
+    out = {k: v for k, v in rec.items() if k != "system_prompt"}
+    out["system_prompt_available"] = rec.get("system_prompt") is not None
+    return out
 
 
 @app.post("/api/agent/mode")
@@ -678,7 +999,49 @@ async def dialogue_turn(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="transcript is required")
     return await _run_dialogue_turn(transcript, "manual")
 
-async def _run_dialogue_turn(transcript: str, source: str) -> dict[str, Any]:
+
+# ---- Service control --------------------------------------------------------
+
+@app.get("/api/services")
+async def get_services() -> dict[str, Any]:
+    """Status of all managed systemd services."""
+    statuses = await asyncio.to_thread(all_services_status)
+    return {"services": statuses}
+
+
+@app.post("/api/services/{name}/start")
+async def start_service(name: str) -> dict[str, Any]:
+    if name not in ADAM_SERVICES:
+        raise HTTPException(status_code=404, detail=f"unknown service: {name}")
+    unit = ADAM_SERVICES[name]
+    result = await asyncio.to_thread(service_action, unit, "start")
+    if not result.ok:
+        raise HTTPException(status_code=500, detail=result.detail)
+    return {"ok": True, "service": name, "unit": unit, "detail": result.detail}
+
+
+@app.post("/api/services/{name}/stop")
+async def stop_service(name: str) -> dict[str, Any]:
+    if name not in ADAM_SERVICES:
+        raise HTTPException(status_code=404, detail=f"unknown service: {name}")
+    unit = ADAM_SERVICES[name]
+    result = await asyncio.to_thread(service_action, unit, "stop")
+    if not result.ok:
+        raise HTTPException(status_code=500, detail=result.detail)
+    return {"ok": True, "service": name, "unit": unit, "detail": result.detail}
+
+
+@app.post("/api/services/{name}/restart")
+async def restart_service(name: str) -> dict[str, Any]:
+    if name not in ADAM_SERVICES:
+        raise HTTPException(status_code=404, detail=f"unknown service: {name}")
+    unit = ADAM_SERVICES[name]
+    result = await asyncio.to_thread(service_action, unit, "restart")
+    if not result.ok:
+        raise HTTPException(status_code=500, detail=result.detail)
+    return {"ok": True, "service": name, "unit": unit, "detail": result.detail}
+
+async def _run_dialogue_turn(transcript: str, source: str, asr_ms: float | None = None) -> dict[str, Any]:
     if turn_lock.locked() and source == "voice_loop":
         event_log.append("voice_loop_error", {"stage": "turn", "error": "turn_already_in_progress", "text": transcript})
         return {"ok": False, "error": "turn_already_in_progress"}
@@ -686,35 +1049,214 @@ async def _run_dialogue_turn(transcript: str, source: str) -> dict[str, Any]:
     async with turn_lock:
         runtime_state["thinking"] = True
         try:
-            return await _run_dialogue_turn_locked(transcript, source)
+            return await _run_dialogue_turn_locked(transcript, source, asr_ms)
         finally:
             runtime_state["thinking"] = False
 
 
-async def _run_dialogue_turn_locked(transcript: str, source: str) -> dict[str, Any]:
+async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float | None) -> dict[str, Any]:
+    t_total = time.perf_counter()
+    tuning = tuning_store.current()
     sensors = await _sensor_payload()
-    history = memory.recent_dialogue(int(settings.section("agent").get("history_turns", 8)))
+
+    # ---- Session lifecycle ----
+    now_ts = time.time()
+    async with session_lock:
+        acc: SessionAccumulator | None = session_state.get("accumulator")  # type: ignore[assignment]
+        last_ts = float(session_state.get("last_turn_at") or 0.0)
+        silence_threshold = max(5, tuning.session.vad_silence_seconds)
+        if acc and last_ts and (now_ts - last_ts) > silence_threshold:
+            await _commit_session_locked(reason="silence_timeout_on_new_turn")
+            acc = None
+        if acc is None:
+            acc = SessionAccumulator()
+            session_state["accumulator"] = acc
+        session_state["last_turn_at"] = now_ts
+
+    # извлекаем имя
+    visitor_name = _extract_visitor_name(transcript)
+    if visitor_name:
+        acc.set_visitor_name(visitor_name)
+
+    acc.note_turn("visitor", transcript)
+
+    # recent episodic
+    recent_lines: list[str] = []
+    if visitor_name and tuning.memory.recent_injection.enabled:
+        recent_eps = episodic_memory.query_by_name(
+            visitor_name, limit=tuning.memory.recent_injection.limit
+        )
+        recent_lines = _format_recent_episodic(recent_eps)
+
+    # echoes / chinese gate (приоритет — echoes, потом chinese)
+    mood = _resolve_mood(scene_cache.text, sensors)
+    echo_hint: str | None = None
+    echo_meta: dict[str, Any] | None = None
+    if tuning.echoes.enabled:
+        echo_inj = echoes_gate.maybe_inject(
+            transcript=transcript,
+            mood=mood,
+            adam_state=acc.adam_state,
+            tuning=tuning.echoes,
+        )
+        if echo_inj:
+            echo_hint = echo_inj.hint_text
+            acc.note_echo_used(echo_inj.entry.id)
+            echo_meta = {"pool": "echoes", "id": echo_inj.entry.id, "score": echo_inj.score}
+    if echo_hint is None and tuning.chinese.enabled:
+        cn_inj = chinese_gate.maybe_inject(
+            transcript=transcript,
+            mood=mood,
+            adam_state=acc.adam_state,
+            tuning=tuning.chinese,
+        )
+        if cn_inj:
+            echo_hint = cn_inj.hint_text
+            acc.note_chinese_used(cn_inj.entry.id)
+            echo_meta = {"pool": "chinese", "id": cn_inj.entry.id, "score": cn_inj.score}
+
+    # semantic
+    semantic_text = ""
+    if tuning.memory.semantic.enabled:
+        try:
+            semantic_text = episodic_memory.read_semantic()[: tuning.memory.semantic.max_chars]
+        except Exception as exc:
+            event_log.append("semantic_read_error", {"error": str(exc)})
+
+    history_turns = tuning.prompt.history_turns
+    history = memory.recent_dialogue(history_turns)
     messages = prompt_builder.build_messages(
         transcript=transcript,
         dialogue_history=history,
         memory_summary=memory.summary_text(),
         scene_cache=scene_cache.text,
         sensors=sensors,
+        semantic_text=semantic_text,
+        recent_episodic=recent_lines,
+        echo_hint=echo_hint,
+        history_turns=history_turns,
+        include_scene=tuning.prompt.include_scene,
+        include_sensors=tuning.prompt.include_sensors,
+        response_word_target=tuning.llm.response_word_target,
     )
     memory.add_dialogue("viewer", transcript)
-    event_log.append("viewer_transcript", {"text": transcript, "source": source, "sensors": sensors})
+    event_log.append(
+        "viewer_transcript",
+        {
+            "text": transcript,
+            "source": source,
+            "sensors": sensors,
+            "visitor_name": visitor_name,
+            "echo": echo_meta,
+        },
+    )
 
-    try:
-        reply = await llm.generate(messages)
-    except Exception as exc:
-        runtime_state["last_error"] = str(exc)
-        reply = "Я слышу тебя, но мой речевой контур сейчас нестабилен. Дай мне несколько секунд."
-        event_log.append("llm_error", {"error": str(exc)})
+    # Trace для UI: всегда метаданные, system_prompt только при trace_prompts=true.
+    system_prompt_full = messages[0]["content"] if messages else ""
+    trace_record: dict[str, Any] = {
+        "ts": utc_now(),
+        "source": source,
+        "transcript": transcript,
+        "visitor_name": visitor_name,
+        "mood": mood,
+        "adam_state": acc.adam_state,
+        "session_id": acc.session_id,
+        "session_turn": acc.turn_count,
+        "semantic_used": bool(semantic_text),
+        "semantic_chars": len(semantic_text),
+        "recent_episodic": recent_lines,
+        "echo": echo_meta,
+        "history_turns_used": min(history_turns, len(history)),
+        "messages_count": len(messages),
+        "prompt_chars": len(system_prompt_full),
+        "system_prompt": system_prompt_full if tuning.diagnostics.trace_prompts else None,
+    }
+
+    t_llm = time.perf_counter()
+    llm_error: str | None = None
+    if hasattr(llm, "generate_streaming"):
+        try:
+            reply, llm_ms, tts_ms, tts_result = await _stream_llm_and_speak(messages)
+        except Exception as exc:
+            llm_error = str(exc)
+            runtime_state["last_error"] = llm_error
+            event_log.append("llm_error", {"error": llm_error})
+            reply = "Я слышу тебя, но мой речевой контур сейчас нестабилен. Дай мне несколько секунд."
+            llm_ms = round((time.perf_counter() - t_llm) * 1000, 1)
+            t_tts = time.perf_counter()
+            tts_result = await _speak(reply)
+            tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
+    else:
+        try:
+            reply = await llm.generate(messages)
+        except Exception as exc:
+            llm_error = str(exc)
+            runtime_state["last_error"] = llm_error
+            reply = "Я слышу тебя, но мой речевой контур сейчас нестабилен. Дай мне несколько секунд."
+            event_log.append("llm_error", {"error": llm_error})
+        llm_ms = round((time.perf_counter() - t_llm) * 1000, 1)
+        t_tts = time.perf_counter()
+        tts_result = await _speak(reply)
+        tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
+    runtime_state["last_llm_ms"] = llm_ms
+    runtime_state["last_tts_ms"] = tts_ms
 
     memory.add_dialogue("adam", reply)
-    tts_result = await _speak(reply)
+    acc.note_turn("adam", reply)
+    if echo_meta and not llm_error:
+        # Эхо может стать highlight'ом — сильный сигнал
+        acc.add_highlight(
+            "adam",
+            reply,
+            reason=f"echo_used:{echo_meta['pool']}:{echo_meta['id']}",
+            max_count=tuning.memory.episodic.highlights_max_per_episode,
+        )
+
     action = action_layer.infer(reply, {"sensors": sensors, "scene": scene_cache.as_dict()})
     mcu_result = await _execute_action(action)
+
+    total_ms = round((time.perf_counter() - t_total) * 1000, 1)
+    timings = {"asr_ms": asr_ms, "llm_ms": llm_ms, "tts_ms": tts_ms, "total_ms": total_ms}
+
+    llm_cfg = settings.section("services").get("llm", {})
+    tts_cfg = settings.section("services").get("tts", {})
+    metrics_log.append({
+        "source": source,
+        "transcript": transcript,
+        "reply": reply,
+        "voice_degraded": bool(tts_result.get("degraded")),
+        "asr_ms": asr_ms,
+        "llm_ms": llm_ms,
+        "tts_ms": tts_ms,
+        "total_ms": total_ms,
+        "tts_chunks": int(tts_result.get("chunks") or 0),
+        "llm_model": str(llm_cfg.get("model") or ""),
+        "llm_provider": str(llm_cfg.get("provider") or ""),
+        "tts_speaker": str(tts_cfg.get("speaker") or ""),
+        "llm_error": llm_error,
+        "action": action.kind,
+    })
+
+    trace_record.update(
+        {
+            "reply": reply,
+            "llm_error": llm_error,
+            "timings": timings,
+        }
+    )
+    prompt_trace.append(trace_record)
+    event_log.append(
+        "prompt_trace",
+        {
+            "ts": trace_record["ts"],
+            "source": source,
+            "transcript_len": len(transcript),
+            "prompt_chars": trace_record["prompt_chars"],
+            "echo": echo_meta,
+            "visitor_name": visitor_name,
+            "semantic_used": trace_record["semantic_used"],
+        },
+    )
 
     event_log.append(
         "adam_reply",
@@ -725,6 +1267,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str) -> dict[str, A
             "tts": tts_result,
             "action": action.as_dict(),
             "mcu": mcu_result,
+            "timings": timings,
         },
     )
     return {
@@ -735,7 +1278,72 @@ async def _run_dialogue_turn_locked(transcript: str, source: str) -> dict[str, A
         "tts": tts_result,
         "action": action.as_dict(),
         "mcu": mcu_result,
+        "timings": timings,
     }
+
+
+async def _stream_llm_and_speak(
+    messages: list[dict[str, str]],
+) -> tuple[str, float, float, dict[str, Any]]:
+    """Stream LLM tokens → sentence queue → TTS concurrently.
+    Returns (reply, llm_ms, tts_ms, tts_result).
+    """
+    queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=4)
+    parts: list[str] = []
+    t_llm = time.perf_counter()
+    llm_done_at: list[float] = [0.0]
+    tts_chunks: list[dict[str, Any]] = []
+
+    async def _producer() -> None:
+        buf = ""
+        try:
+            async for token in llm.generate_streaming(messages):  # type: ignore[union-attr]
+                buf += token
+                m = re.search(r"(?<=[.!?。！？])\s+", buf)
+                while m:
+                    sentence = buf[: m.start()].strip()
+                    buf = buf[m.end() :]
+                    if sentence:
+                        parts.append(sentence)
+                        await queue.put(sentence)
+                    m = re.search(r"(?<=[.!?。！？])\s+", buf)
+        finally:
+            remainder = buf.strip()
+            if remainder:
+                parts.append(remainder)
+                await queue.put(remainder)
+            llm_done_at[0] = time.perf_counter()
+            await queue.put(None)  # sentinel
+
+    t_tts_start: list[float] = [0.0]
+
+    async def _consumer() -> None:
+        first = True
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            if first:
+                t_tts_start[0] = time.perf_counter()
+                first = False
+            result = await asyncio.to_thread(tts._synthesize_sync, chunk)
+            tts_chunks.append(result)
+
+    runtime_state["speaking"] = True
+    event_log.append("tts_started", {"text": "(streaming)"})
+    try:
+        await asyncio.gather(_producer(), _consumer())
+    finally:
+        runtime_state["speaking"] = False
+
+    reply = " ".join(parts)
+    llm_ms = round((llm_done_at[0] - t_llm) * 1000, 1)
+    tts_start = t_tts_start[0] or time.perf_counter()
+    tts_ms = round((time.perf_counter() - tts_start) * 1000, 1)
+    ok = all(bool(r.get("ok")) for r in tts_chunks) if tts_chunks else True
+    tts_result: dict[str, Any] = {"ok": ok, "degraded": not ok, "chunks": len(tts_chunks), "results": tts_chunks}
+    event_log.append("tts_finished", {"ok": ok, "degraded": not ok})
+    return reply, llm_ms, tts_ms, tts_result
 
 
 async def _speak(text: str) -> dict[str, Any]:
@@ -845,6 +1453,65 @@ async def _play_success_sound(reason: str) -> dict[str, Any]:
     if not result.ok:
         runtime_state["last_error"] = f"success_sound_failed:{result.error}"
     return payload
+
+
+def _rebuild_clients(section_path: str) -> list[str]:
+    """Recreate service clients after a Config.json patch.
+
+    Called from the /api/config PATCH handler. Returns a list of section tags
+    that were rebuilt so the UI can show "restarting" indicators.
+    """
+    global llm, asr, vlm, tts, mcu, action_layer, prompt_builder
+    restarted: list[str] = []
+    services = settings.section("services")
+    if section_path.startswith("services.llm") or section_path == "services":
+        llm = create_llm_client(services.get("llm", {}))
+        restarted.append("llm")
+    if section_path.startswith("services.asr") or section_path == "services":
+        asr = create_asr_client(services.get("asr", {}))
+        voice_loop.asr_client = asr
+        restarted.append("asr")
+    if section_path.startswith("services.vlm") or section_path == "services":
+        vlm = VLMClient(services.get("vlm", {}))
+        scene_worker.vlm_client = vlm
+        restarted.append("vlm")
+    if section_path.startswith("services.tts") or section_path == "services":
+        tts = TTSClient(services.get("tts", {}))
+        restarted.append("tts")
+    if section_path.startswith("mcu"):
+        mcu = MCUClient(settings.section("mcu"))
+        action_layer = ActionLayer(settings.section("mcu"), settings.section("safety"))
+        restarted.append("mcu")
+    if section_path.startswith("agent"):
+        prompt_builder = PromptBuilder(
+            settings.persona_paths,
+            int(settings.section("agent").get("history_turns", 8)),
+        )
+        restarted.append("prompt")
+    return restarted
+
+
+_runtime_deps = RuntimeDeps(
+    settings=settings,
+    event_log=event_log,
+    memory=memory,
+    metrics_log=metrics_log,
+    runtime_state=runtime_state,
+    get_llm=lambda: llm,
+    get_asr=lambda: asr,
+    get_tts=lambda: tts,
+    get_vlm=lambda: vlm,
+    get_mcu=lambda: mcu,
+    rebuild_clients=_rebuild_clients,
+    capture_snapshot=lambda: scene_worker._capture_snapshot(),
+    run_dialogue_turn=_run_dialogue_turn,
+)
+app.include_router(build_router(_runtime_deps))
+
+
+_WEBUI_DIR = PROJECT_ROOT / "System" / "WebUI"
+if _WEBUI_DIR.exists():
+    app.mount("/ui", StaticFiles(directory=str(_WEBUI_DIR), html=True), name="ui")
 
 
 def main() -> None:

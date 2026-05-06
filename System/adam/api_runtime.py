@@ -1,0 +1,398 @@
+"""Runtime API extensions for the Adam Chip orchestrator.
+
+Exposes config read/write, model discovery, conversation history, SSE event
+stream, camera snapshot, audio device list, and an in-browser ASR upload
+endpoint. Wired into the FastAPI app via :func:`build_router`.
+
+Designed for dependency injection — the orchestrator passes already-built
+service clients and a rebuild callback so this module stays free of cyclic
+imports against ``Orchestrator.py``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import json
+import shutil
+import subprocess
+import time
+import wave
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
+
+import httpx
+from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi.responses import Response, StreamingResponse
+
+from .config import Settings, PROJECT_ROOT
+from .events import EventLog
+from .memory import MemoryStore
+from .metrics import MetricsLog
+
+
+# Hardcoded Silero v5_5_ru speakers — the model is fixed at install time so
+# enumerating a remote API would be wasted overhead.
+SILERO_RU_SPEAKERS = ["aidar", "baya", "kseniya", "xenia", "eugene", "random"]
+
+WHISPER_SIZES = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
+
+# Sections whose patches require which client to be rebuilt. Keys are dotted
+# section prefixes; values are the rebuild scope tag returned to the UI.
+CLIENT_REBUILD_MAP = {
+    "services.llm": "llm",
+    "services.asr": "asr",
+    "services.vlm": "vlm",
+    "services.tts": "tts",
+    "mcu": "mcu",
+    "media.audio": "voice_loop",
+    "media.video": "scene_worker",
+}
+
+
+@dataclass
+class RuntimeDeps:
+    settings: Settings
+    event_log: EventLog
+    memory: MemoryStore
+    metrics_log: MetricsLog
+    runtime_state: dict[str, Any]
+    get_llm: Callable[[], Any]
+    get_asr: Callable[[], Any]
+    get_tts: Callable[[], Any]
+    get_vlm: Callable[[], Any]
+    get_mcu: Callable[[], Any]
+    rebuild_clients: Callable[[str], list[str]]
+    capture_snapshot: Callable[[], bytes]
+    run_dialogue_turn: Callable[..., Awaitable[dict[str, Any]]]
+
+
+def build_router(deps: RuntimeDeps) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/api/config")
+    async def get_config() -> dict[str, Any]:
+        return deps.settings.to_public_dict()
+
+    @router.patch("/api/config")
+    async def patch_config(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        section = str(payload.get("section", "")).strip()
+        patch = payload.get("patch")
+        if not section:
+            raise HTTPException(status_code=400, detail="section is required")
+        if not isinstance(patch, dict):
+            raise HTTPException(status_code=400, detail="patch must be an object")
+        try:
+            applied = deps.settings.apply_patch(section, patch)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        target = deps.settings.save()
+        restarted = deps.rebuild_clients(section)
+        deps.event_log.append("config_patched", {"section": section, "patch": patch, "restarted": restarted, "saved_to": str(target)})
+        return {"ok": True, "section": section, "applied": applied, "restarted": restarted, "saved_to": str(target)}
+
+    @router.get("/api/models/llm")
+    async def models_llm() -> dict[str, Any]:
+        llm_cfg = deps.settings.section("services").get("llm", {})
+        provider = str(llm_cfg.get("provider", "ollama"))
+        base_url = str(llm_cfg.get("base_url", "")).rstrip("/")
+        current = str(llm_cfg.get("model", ""))
+        available: list[dict[str, Any]] = []
+        error: str | None = None
+        try:
+            async with httpx.AsyncClient(timeout=4.0, trust_env=False) as client:
+                if provider == "ollama":
+                    resp = await client.get(f"{base_url}/api/tags")
+                    resp.raise_for_status()
+                    body = resp.json()
+                    for tag in body.get("models", []):
+                        available.append({
+                            "name": tag.get("name"),
+                            "size": tag.get("size"),
+                            "modified_at": tag.get("modified_at"),
+                        })
+                else:
+                    resp = await client.get(f"{base_url}/v1/models")
+                    resp.raise_for_status()
+                    body = resp.json()
+                    for entry in body.get("data", []):
+                        available.append({"name": entry.get("id")})
+        except Exception as exc:
+            error = str(exc)
+        return {"provider": provider, "current": current, "available": available, "error": error}
+
+    @router.get("/api/models/tts")
+    async def models_tts() -> dict[str, Any]:
+        tts_cfg = deps.settings.section("services").get("tts", {})
+        return {
+            "provider": str(tts_cfg.get("provider", "silero")),
+            "model": str(tts_cfg.get("model", "v5_5_ru")),
+            "current": str(tts_cfg.get("speaker", "eugene")),
+            "available": [{"name": speaker} for speaker in SILERO_RU_SPEAKERS],
+        }
+
+    @router.get("/api/models/asr")
+    async def models_asr() -> dict[str, Any]:
+        asr_cfg = deps.settings.section("services").get("asr", {})
+        provider = str(asr_cfg.get("provider", "riva"))
+        whisper_current = str(asr_cfg.get("model", "medium")) if provider == "whisper" else "medium"
+        whisper_status: dict[str, Any] = {"provider_active": provider == "whisper"}
+        whisper_base = str(asr_cfg.get("base_url", "http://127.0.0.1:8095")).rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=2.0, trust_env=False) as client:
+                resp = await client.get(f"{whisper_base}/health")
+                whisper_status["reachable"] = resp.status_code in (200, 503)
+                whisper_status["body"] = resp.json()
+        except Exception as exc:
+            whisper_status["reachable"] = False
+            whisper_status["error"] = str(exc)
+        return {
+            "provider": provider,
+            "whisper": {
+                "current": whisper_current,
+                "available": [{"name": size} for size in WHISPER_SIZES],
+                "service": whisper_status,
+            },
+            "riva": {
+                "host": asr_cfg.get("host"),
+                "port": asr_cfg.get("port"),
+                "language_code": asr_cfg.get("language_code"),
+            },
+        }
+
+    @router.get("/api/models/vlm")
+    async def models_vlm() -> dict[str, Any]:
+        vlm_cfg = deps.settings.section("services").get("vlm", {})
+        base_url = str(vlm_cfg.get("base_url", "")).rstrip("/")
+        current = str(vlm_cfg.get("model", ""))
+        available: list[dict[str, Any]] = []
+        error: str | None = None
+        try:
+            async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
+                resp = await client.get(f"{base_url}/v1/models")
+                resp.raise_for_status()
+                body = resp.json()
+                for entry in body.get("data", []):
+                    available.append({"name": entry.get("id")})
+        except Exception as exc:
+            error = str(exc)
+        return {"current": current, "available": available, "error": error}
+
+    @router.get("/api/memory/dialogue")
+    async def memory_dialogue(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+        return {"turns": deps.memory.recent_dialogue(limit)}
+
+    @router.get("/api/memory/summary")
+    async def memory_summary() -> dict[str, Any]:
+        return {"text": deps.memory.summary_text()}
+
+    @router.get("/api/metrics/turns")
+    async def metrics_turns(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
+        return {"turns": deps.metrics_log.tail(limit)}
+
+    @router.get("/api/metrics/summary")
+    async def metrics_summary(window: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
+        return deps.metrics_log.summary(window)
+
+    @router.get("/api/metrics/export")
+    async def metrics_export() -> Response:
+        path = deps.metrics_log.path
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="metrics log is empty")
+        data = path.read_bytes()
+        headers = {
+            "Content-Disposition": f'attachment; filename="{path.name}"',
+            "Cache-Control": "no-store",
+        }
+        return Response(content=data, media_type="application/x-ndjson", headers=headers)
+
+    @router.get("/api/audio/devices")
+    async def audio_devices() -> dict[str, Any]:
+        return await asyncio.to_thread(_aplay_devices)
+
+    @router.get("/api/persona")
+    async def get_persona() -> dict[str, Any]:
+        from .prompt import BASE_SYSTEM_PROMPT
+        paths = deps.settings.section("agent").get("persona_paths", [])
+        files = []
+        for rel in paths:
+            p = PROJECT_ROOT / rel
+            name = p.stem
+            content = p.read_text("utf-8") if p.exists() else ""
+            files.append({"name": name, "path": rel, "content": content})
+        return {"base_prompt": BASE_SYSTEM_PROMPT, "files": files}
+
+    @router.put("/api/persona")
+    async def put_persona(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        rel = str(payload.get("path", "")).strip()
+        content = str(payload.get("content", ""))
+        if not rel:
+            raise HTTPException(status_code=400, detail="path required")
+        allowed = deps.settings.section("agent").get("persona_paths", [])
+        if rel not in allowed:
+            raise HTTPException(status_code=403, detail="path not in persona_paths")
+        target = PROJECT_ROOT / rel
+        target.write_text(content, "utf-8")
+        deps.event_log.append("persona_updated", {"path": rel})
+        return {"ok": True, "path": rel, "bytes": len(content.encode())}
+
+    @router.get("/api/camera/snapshot.jpg")
+    async def camera_snapshot() -> Response:
+        try:
+            data = await asyncio.to_thread(deps.capture_snapshot)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @router.get("/api/live_vlm/status")
+    async def live_vlm_status() -> dict[str, Any]:
+        """Probe the adam-live-vlm Docker container.
+
+        Returns running flag, viewer URL, and (if running) seconds since the
+        container started. Used by #/camera UI to swap between snapshot and
+        WebRTC viewer.
+        """
+        info = await asyncio.to_thread(_docker_inspect, "adam-live-vlm")
+        return info
+
+    @router.post("/api/agent/asr/upload")
+    async def asr_upload(request: Request, auto_turn: bool = Query(False)) -> dict[str, Any]:
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="audio body is required")
+        content_type = request.headers.get("content-type", "")
+        try:
+            pcm, sample_rate = _decode_to_pcm(body, content_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        asr_client = deps.get_asr()
+        t_asr = time.perf_counter()
+        try:
+            transcript = (await asr_client.transcribe_pcm(pcm)).strip()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"asr_failed: {exc}") from exc
+        asr_ms = round((time.perf_counter() - t_asr) * 1000, 1)
+        deps.runtime_state["last_asr_ms"] = asr_ms
+
+        deps.event_log.append("asr_final", {
+            "text": transcript, "source": "ui_upload",
+            "sample_rate": sample_rate, "asr_ms": asr_ms,
+        })
+
+        result: dict[str, Any] = {
+            "transcript": transcript,
+            "sample_rate": sample_rate,
+            "asr_ms": asr_ms,
+        }
+        if auto_turn and transcript:
+            result["turn"] = await deps.run_dialogue_turn(transcript, "ui_upload", asr_ms=asr_ms)
+        return result
+
+    @router.get("/api/agent/stream")
+    async def agent_stream(request: Request) -> StreamingResponse:
+        queue = deps.event_log.subscribe()
+
+        async def generator():
+            try:
+                yield ":\n\n"  # initial keep-alive
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield ":\n\n"
+                        continue
+                    payload = json.dumps(event, ensure_ascii=False)
+                    yield f"event: {event.get('type', 'event')}\n"
+                    yield f"id: {event.get('id', '')}\n"
+                    yield f"data: {payload}\n\n"
+            finally:
+                deps.event_log.unsubscribe(queue)
+
+        headers = {
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+        return StreamingResponse(generator(), media_type="text/event-stream", headers=headers)
+
+    return router
+
+
+def _docker_inspect(name: str) -> dict[str, Any]:
+    docker = shutil.which("docker")
+    if docker is None:
+        return {"running": False, "error": "docker not installed"}
+    try:
+        proc = subprocess.run(
+            [docker, "inspect", "--format", "{{.State.Status}}|{{.State.StartedAt}}|{{.Config.Image}}", name],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"running": False, "error": str(exc)}
+    if proc.returncode != 0:
+        return {"running": False, "error": "container not found"}
+    parts = proc.stdout.decode("utf-8", errors="replace").strip().split("|")
+    status = parts[0] if parts else ""
+    started_at = parts[1] if len(parts) > 1 else ""
+    image = parts[2] if len(parts) > 2 else ""
+    return {
+        "running": status == "running",
+        "status": status,
+        "started_at": started_at,
+        "image": image,
+        "name": name,
+    }
+
+
+def _aplay_devices() -> dict[str, Any]:
+    aplay = shutil.which("aplay")
+    if aplay is None:
+        return {"devices": [], "error": "aplay not installed"}
+    try:
+        proc = subprocess.run([aplay, "-L"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"devices": [], "error": str(exc)}
+    if proc.returncode != 0:
+        return {"devices": [], "error": proc.stderr.decode("utf-8", errors="replace")[-300:]}
+    raw = proc.stdout.decode("utf-8", errors="replace")
+    devices: list[dict[str, str]] = []
+    name: str | None = None
+    description_parts: list[str] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        if not line.startswith(" ") and not line.startswith("\t"):
+            if name is not None:
+                devices.append({"name": name, "description": "\n".join(description_parts).strip()})
+            name = line.strip()
+            description_parts = []
+        else:
+            description_parts.append(line.strip())
+    if name is not None:
+        devices.append({"name": name, "description": "\n".join(description_parts).strip()})
+    return {"devices": devices}
+
+
+def _decode_to_pcm(body: bytes, content_type: str) -> tuple[bytes, int]:
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    if ct in {"audio/wav", "audio/x-wav", "audio/wave"} or body[:4] == b"RIFF":
+        with wave.open(io.BytesIO(body), "rb") as handle:
+            if handle.getsampwidth() != 2:
+                raise ValueError("only 16-bit PCM WAV is supported")
+            channels = handle.getnchannels()
+            sample_rate = handle.getframerate()
+            frames = handle.readframes(handle.getnframes())
+        if channels == 1:
+            return frames, sample_rate
+        if channels == 2:
+            return _stereo_to_mono(frames), sample_rate
+        raise ValueError(f"unsupported channel count: {channels}")
+    raise ValueError(f"unsupported content-type: {content_type or '(none)'}")
+
+
+def _stereo_to_mono(stereo: bytes) -> bytes:
+    import audioop  # local import — only needed on stereo upload
+    return audioop.tomono(stereo, 2, 0.5, 0.5)

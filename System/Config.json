@@ -1,14 +1,15 @@
 {
   "agent": {
-    "name": "Adam Chip",
+    "name": "Адам Чип",
     "language": "ru-RU",
     "mode": "maintenance",
     "data_dir": "data/adam",
     "persona_paths": [
-      "Agent Adam Chip/About/BIO.md",
+      "Agent Adam Chip/About/Identity.md",
+      "Agent Adam Chip/About/Lore.md",
       "Agent Adam Chip/About/Abilities.md"
     ],
-    "history_turns": 8
+    "history_turns": 2
   },
   "power": {
     "required_mode_name": "MAXN",
@@ -21,10 +22,10 @@
       "primary": "jetson_gstreamer",
       "gstreamer_pipeline": "v4l2src device=/dev/video0 ! image/jpeg,framerate=30/1 ! jpegdec ! videoconvert ! video/x-raw,format=RGB ! appsink name=adam_frames drop=true max-buffers=1 sync=false",
       "remote_rtsp_url": "",
-      "preview_enabled": false
+      "preview_enabled": true
     },
     "audio": {
-      "input_device": "hw:0,0",
+      "input_device": "hw:1,0",
       "output_device": "default",
       "sample_rate": 16000,
       "channels": 1,
@@ -39,12 +40,13 @@
   },
   "services": {
     "llm": {
-      "provider": "ollama",
-      "base_url": "http://127.0.0.1:11434",
-      "model": "gemma3:4b",
-      "timeout_sec": 30,
+      "provider": "openai",
+      "base_url": "http://127.0.0.1:8051/v1",
+      "model": "gemma-4-E4B-it-UD-Q4_K_XL",
+      "timeout_sec": 60,
       "temperature": 0.7,
-      "max_tokens": 220
+      "max_tokens": 80,
+      "num_ctx": 8192
     },
     "vlm": {
       "base_url": "http://127.0.0.1:8050",
@@ -53,29 +55,43 @@
       "max_new_tokens": 32
     },
     "asr": {
-      "provider": "riva",
+      "provider": "whisper",
       "host": "127.0.0.1",
       "port": 50051,
       "language_code": "ru-RU",
       "endpointing_ms": 450,
       "sample_rate": 16000,
       "audio_channel_count": 1,
-      "chunk_bytes": 3200
+      "chunk_bytes": 3200,
+      "base_url": "http://127.0.0.1:8095",
+      "model": "tiny",
+      "timeout_sec": 30,
+      "wake_words": "адам",
+      "wake_word_required": true,
+      "_riva": {
+        "host": "127.0.0.1",
+        "port": 50051,
+        "language_code": "ru-RU",
+        "endpointing_ms": 450,
+        "audio_channel_count": 1,
+        "chunk_bytes": 3200
+      }
     },
     "tts": {
       "provider": "silero",
       "base_url": "http://127.0.0.1:8090",
       "model": "v5_5_ru",
-      "speaker": "eugene",
+      "speaker": "aidar",
       "sample_rate": 48000,
       "output_sample_rate": 16000,
-      "timeout_sec": 20
+      "timeout_sec": 20,
+      "output_device": "plughw:0,3"
     }
   },
   "mcu": {
     "base_url": "http://192.168.0.172",
     "speaker_url": "http://192.168.0.172:83/speaker",
-    "timeout_sec": 3,
+    "timeout_sec": 1,
     "idle_scene": "boot_idle",
     "allowed_scenes": [
       "boot_idle",
@@ -89,16 +105,16 @@
       "value_max": 4095
     }
   },
-  "safety": {
-    "motor_default_duration_ms": 900,
-    "motor_max_duration_ms": 2500,
-    "motor_cooldown_ms": 250,
-    "half_duplex_mute": true
-  },
   "sounds": {
     "enabled": true,
     "success_path": "data/sounds/success.mp3",
     "local_output_device": "default",
     "esp_boot_note": "ESP boot sound is embedded in ESP firmware and played by ESP after speaker init"
+  },
+  "safety": {
+    "motor_default_duration_ms": 900,
+    "motor_max_duration_ms": 2500,
+    "motor_cooldown_ms": 250,
+    "half_duplex_mute": true
   }
 }

@@ -20,18 +20,27 @@ ADAM_DATA_DIR=${ROOT_DIR}/data/adam
 ADAM_ORCHESTRATOR_HOST=0.0.0.0
 ADAM_ORCHESTRATOR_PORT=8080
 ESP_BASE_URL=http://192.168.0.171
-ADAM_LLM_PROVIDER=ollama
-ADAM_LLM_BASE_URL=http://127.0.0.1:11434
-ADAM_LLM_MODEL=gemma3:4b
+ADAM_LLM_PROVIDER=openai
+ADAM_LLM_BASE_URL=http://127.0.0.1:8051/v1
+ADAM_LLM_MODEL=gemma-4-E4B-it-UD-Q4_K_XL
+ADAM_LLM_LLAMACPP_DIR=${ROOT_DIR}/Subsystem/llama.cpp
+ADAM_LLM_GGUF_PATH=${ROOT_DIR}/Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf
+ADAM_LLM_PORT=8051
+ADAM_LLM_GPU_LAYERS=99
+ADAM_LLM_CTX=8192
 ADAM_TTS_BASE_URL=http://127.0.0.1:8090
 ADAM_ASR_HOST=127.0.0.1
 ADAM_ASR_PORT=50051
+ADAM_ASR_WHISPER_BASE_URL=http://127.0.0.1:8095
+ADAM_ASR_WHISPER_MODEL=medium
+ADAM_ASR_LANGUAGE=ru
+ADAM_ASR_DEVICE=auto
 ADAM_VLM_BASE_URL=http://127.0.0.1:8050
 ADAM_VLM_MODEL=Efficient-Large-Model/VILA1.5-3b
 ADAM_TTS_PORT=8090
-ADAM_TTS_OUTPUT_DEVICE=default
+ADAM_TTS_OUTPUT_DEVICE=plughw:0,3
 ADAM_VIDEO_DEVICE=/dev/video0
-ADAM_AUDIO_INPUT_DEVICE=hw:0,0
+ADAM_AUDIO_INPUT_DEVICE=hw:1,0
 ADAM_AUDIO_OUTPUT_DEVICE=default
 EOF
 fi
@@ -52,15 +61,26 @@ ensure_env_line() {
 ensure_env_line "ADAM_VENV" "${VENV}"
 ensure_env_line "ADAM_ASR_HOST" "127.0.0.1"
 ensure_env_line "ADAM_ASR_PORT" "50051"
+ensure_env_line "ADAM_ASR_WHISPER_MODEL" "medium"
+ensure_env_line "ADAM_ASR_LANGUAGE" "ru"
+ensure_env_line "ADAM_ASR_DEVICE" "auto"
 ensure_env_line "ADAM_VLM_BASE_URL" "http://127.0.0.1:8050"
 ensure_env_line "ADAM_VLM_MODEL" "Efficient-Large-Model/VILA1.5-3b"
+ensure_env_line "ADAM_TTS_OUTPUT_DEVICE" "plughw:0,3"
+ensure_env_line "ADAM_LLM_LLAMACPP_DIR" "${ROOT_DIR}/Subsystem/llama.cpp"
+ensure_env_line "ADAM_LLM_GGUF_PATH" "${ROOT_DIR}/Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+ensure_env_line "ADAM_LLM_PORT" "8051"
+ensure_env_line "ADAM_LLM_GPU_LAYERS" "99"
+ensure_env_line "ADAM_LLM_CTX" "8192"
 
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-orchestrator.service" /etc/systemd/system/adam-orchestrator.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-tts-silero.service" /etc/systemd/system/adam-tts-silero.service
+install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-asr-whisper.service" /etc/systemd/system/adam-asr-whisper.service
+install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-llm.service" /etc/systemd/system/adam-llm.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-exhibition.target" /etc/systemd/system/adam-exhibition.target
 
 systemctl daemon-reload
-systemctl enable adam-orchestrator.service adam-tts-silero.service adam-exhibition.target
+systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-whisper.service adam-llm.service adam-exhibition.target
 
 echo "Installed Adam Chip systemd units."
 echo "Edit ${ENV_FILE} for device/service overrides."
@@ -78,6 +98,16 @@ cat <<EOF
 Next commands:
   ${ROOT_DIR}/scripts/adam_bootstrap_venv.sh
   ${ROOT_DIR}/scripts/adam_torch_doctor.sh
+
+  # Build llama.cpp (first time, ~15 min):
+  ${ROOT_DIR}/scripts/adam_build_llamacpp.sh
+
+  # Download primary model (~6 GB):
+  ${ROOT_DIR}/scripts/adam_download_model.sh unsloth/gemma-4-E4B-it-GGUF '*UD-Q4_K_XL*'
+
+  # Start services:
+  sudo systemctl start adam-llm.service
+  sudo systemctl start adam-asr-whisper.service
   sudo systemctl start adam-tts-silero.service
   sudo systemctl start adam-orchestrator.service
   ${ROOT_DIR}/scripts/adam_service_status.sh
@@ -87,6 +117,12 @@ Full target:
   sudo systemctl start adam-exhibition.target
 
 Logs:
+  ${ROOT_DIR}/scripts/adam_service_logs.sh adam-llm.service
   ${ROOT_DIR}/scripts/adam_service_logs.sh adam-orchestrator.service
   ${ROOT_DIR}/scripts/adam_service_logs.sh adam-tts-silero.service
+
+Switch model without restart:
+  sudo systemctl edit adam-llm
+  # Add: Environment=ADAM_LLM_GGUF_PATH=/path/to/other-model.gguf
+  sudo systemctl restart adam-llm
 EOF

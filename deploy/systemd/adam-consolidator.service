@@ -1,0 +1,17 @@
+[Unit]
+Description=Adam Chip · ночной консолидатор памяти (semantic merge + decay)
+After=network-online.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=oneshot
+User=i17jet
+Group=i17jet
+WorkingDirectory=/home/i17jet/Agents/Adam-Chip
+EnvironmentFile=-/etc/adam-chip/adam.env
+Environment=PYTHONPATH=/home/i17jet/Agents/Adam-Chip/System
+ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python /home/i17jet/Agents/Adam-Chip/Engineering/consolidator.py --since=24h
+TimeoutStartSec=2400
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

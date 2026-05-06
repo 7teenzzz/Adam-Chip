@@ -1,8 +1,8 @@
 [Unit]
 Description=Adam Chip Exhibition Runtime
-Requires=adam-orchestrator.service adam-tts-silero.service
-Wants=ollama.service docker.service
-After=adam-orchestrator.service adam-tts-silero.service ollama.service docker.service
+Requires=adam-orchestrator.service adam-tts-silero.service adam-asr-whisper.service adam-llm.service
+Wants=docker.service
+After=adam-orchestrator.service adam-tts-silero.service adam-asr-whisper.service adam-llm.service docker.service
 AllowIsolate=yes
 
 [Install]

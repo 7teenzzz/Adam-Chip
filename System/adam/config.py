@@ -18,7 +18,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mode": "maintenance",
         "data_dir": "data/adam",
         "persona_paths": [
-            "Agent Adam Chip/About/BIO.md",
+            "Agent Adam Chip/About/Identity.md",
+            "Agent Adam Chip/About/Lore.md",
             "Agent Adam Chip/About/Abilities.md",
         ],
         "history_turns": 8,
@@ -202,3 +203,34 @@ class Settings:
     def to_public_dict(self) -> dict[str, Any]:
         public = copy.deepcopy(self.raw)
         return public
+
+    def apply_patch(self, section_path: str, patch: dict[str, Any]) -> dict[str, Any]:
+        if not section_path:
+            raise ValueError("section_path is required")
+        keys = [key for key in section_path.split(".") if key]
+        if not keys:
+            raise ValueError("section_path must reference at least one key")
+
+        cursor: dict[str, Any] = self.raw
+        for key in keys:
+            existing = cursor.get(key)
+            if not isinstance(existing, dict):
+                existing = {}
+                cursor[key] = existing
+            cursor = existing
+        merged = _deep_merge(cursor, patch)
+        cursor.clear()
+        cursor.update(merged)
+        return copy.deepcopy(merged)
+
+    def save(self, path: str | Path | None = None) -> Path:
+        target = Path(os.environ.get("ADAM_CONFIG", str(path or DEFAULT_CONFIG_PATH)))
+        if not target.is_absolute():
+            target = PROJECT_ROOT / target
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump(self.raw, handle, ensure_ascii=False, indent=2, sort_keys=False)
+            handle.write("\n")
+        os.replace(tmp, target)
+        return target

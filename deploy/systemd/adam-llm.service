@@ -1,0 +1,45 @@
+[Unit]
+Description=Adam Chip · llama-server (LLM inference, OpenAI-compatible API :8051)
+Documentation=https://github.com/ggerganov/llama.cpp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=i17jet
+Group=i17jet
+SupplementaryGroups=render video
+
+WorkingDirectory=/home/i17jet/Agents/Adam-Chip
+EnvironmentFile=-/etc/adam-chip/adam.env
+
+# Defaults — override in /etc/adam-chip/adam.env
+Environment=ADAM_LLM_LLAMACPP_DIR=/home/i17jet/Agents/Adam-Chip/Subsystem/llama.cpp
+Environment=ADAM_LLM_GGUF_PATH=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf
+Environment=ADAM_LLM_PORT=8051
+Environment=ADAM_LLM_CTX=8192
+Environment=ADAM_LLM_GPU_LAYERS=99
+
+ExecStartPre=/usr/bin/test -x ${ADAM_LLM_LLAMACPP_DIR}/build/bin/llama-server
+ExecStartPre=/usr/bin/test -f ${ADAM_LLM_GGUF_PATH}
+
+ExecStart=/bin/bash -c \
+  '"${ADAM_LLM_LLAMACPP_DIR}/build/bin/llama-server" \
+    --model "${ADAM_LLM_GGUF_PATH}" \
+    --host 127.0.0.1 \
+    --port "${ADAM_LLM_PORT}" \
+    --n-gpu-layers "${ADAM_LLM_GPU_LAYERS}" \
+    --ctx-size "${ADAM_LLM_CTX}" \
+    --parallel 1 \
+    --reasoning off \
+    --flash-attn on \
+    --cache-type-k q8_0 \
+    --cache-type-v q8_0'
+
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+# llama-server loads the model into GPU memory on startup — can take 30–120s.
+
+[Install]
+WantedBy=multi-user.target

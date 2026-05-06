@@ -10,35 +10,28 @@ Adam Chip — художественно-исследовательская аг
   - ARMv8 Processor rev 1 (v8l) x 8
   - NVIDIA Tegra Orin GPU
   - Ubuntu 22.04.5 LTS
-- ESP32S3 N16R8 WROOM CAM как низкоуровневый контроллер моторики, сенсоров и резервной диагностики
+- ESP32S3 N16R8 WROOM CAM - низкоуровневый контроллер\ моторики, сенсоров 
+  - 16x12bit PWA: PCA9685
+  - Cam&Mic: INMP441 + OV5640
+  - Audio out: PCM5102A + PAM8403
+  - ETH-SPI: W5500 LITE
+  - Sensors: TEMT600 (light), BTE16-19 (rip) 
 
-## Профессиональная Архитектура
+## Архитектура
 
 Jetson — главный вычислительный узел:
 
 - power gate: exhibition mode требует `MAXN/Super`;
-- media acquisition: камера и микрофон подключаются напрямую к Jetson через CSI/USB/UVC/ALSA;
+- media acquisition: стрим звука и видео с камеры и микрофона ESP;
 - ASR: NVIDIA Riva Streaming ASR, `ru-RU`;
 - VLM: `nano_llm` + `Efficient-Large-Model/VILA1.5-3b`;
 - LLM: Ollama-first, локальная `gemma3:4b`, с сохранённой возможностью заменить runtime;
 - TTS: Silero `v5_5_ru`, голос `eugene`, быстрый локальный русский синтез;
 - orchestrator: FastAPI + asyncio, память, события, prompt builder, action layer, Host UI.
 
-ESP/MCU — низкоуровневый слой:
-
-- `set_scene`;
-- `set_channel`;
-- `idle`;
-- `sensor_snapshot`;
-- `health`.
-
-ESP32 camera/audio endpoints сохраняются как диагностика и резерв. Они не являются основным inference path для выставочного режима.
-
 ## Ключевой Принцип Диалога
 
-LLM отвечает обычным русским текстом, пригодным для прямой озвучки. Она не обязана возвращать JSON.
-
-Команды инсталляции создаёт отдельный action layer. Если action layer ошибся или выдал невалидную команду, голосовой ответ всё равно произносится, а моторика получает `no_action`.
+LLM отвечает на русском, пригодным для прямой озвучки.
 
 ## Структура
 
@@ -88,7 +81,7 @@ curl -fsS http://127.0.0.1:8080/api/agent/gate | python3 -m json.tool
 ```bash
 curl -fsS http://127.0.0.1:8080/api/agent/turn \
   -H 'Content-Type: application/json' \
-  -d '{"transcript":"Привет, Адам. Ты меня слышишь?"}' | python3 -m json.tool
+  -d '{"transcript":"Салют, дохлый!"}' | python3 -m json.tool
 ```
 
 ## Docker
@@ -153,28 +146,19 @@ https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform-
 
 Основной видео-вход для AI:
 
-- локальная CSI или USB/UVC камера на Jetson;
-- GStreamer pipeline с `appsink`/shared frame buffer;
-- удалённая камера допустима только как аппаратный H.264 RTSP источник.
+- ESP cam
+- USB cam
 
 Основной аудио-вход для ASR:
 
-- USB microphone или microphone array напрямую в Jetson;
-- ALSA capture;
-- resampling до 16 kHz mono PCM перед VAD/ASR.
+- ESP mic
 
-Текущие defaults ближайшего milestone:
-
-- video: `/dev/video0`;
-- audio input: `hw:0,0` (`WebCamera`);
-- audio output: `default`.
-
-WebRTC не используется в inference path. Его можно добавить только как операторский preview.
 
 ## Материалы
 
 - Jetson AI Lab: https://www.jetson-ai-lab.com/
 - NanoVLM / VILA archive: https://www.jetson-ai-lab.com/archive/tutorial_nano-vlm.html
+- Live LLaVa: [text](https://www.jetson-ai-lab.com/archive/tutorial_live-llava.html)
 - NanoOWL archive: https://www.jetson-ai-lab.com/archive/vit/tutorial_nanoowl.html
 - NVIDIA Riva ASR: https://docs.nvidia.com/deeplearning/riva/user-guide/docs/asr/asr-overview.html
 - Jetson Platform Services VLM: https://docs.nvidia.com/jetson/jps/inference-services/vlm.html

@@ -1,13 +1,13 @@
 [Unit]
 Description=Adam Chip Orchestrator
-After=network-online.target ollama.service docker.service
-Wants=network-online.target ollama.service docker.service
+After=network-online.target adam-llm.service docker.service
+Wants=network-online.target adam-llm.service docker.service
 
 [Service]
 Type=simple
 User=i17jet
 Group=i17jet
-SupplementaryGroups=audio video render docker ollama
+SupplementaryGroups=audio video render docker
 WorkingDirectory=/home/i17jet/Agents/Adam-Chip
 EnvironmentFile=-/etc/adam-chip/adam.env
 Environment=PYTHONPATH=/home/i17jet/Agents/Adam-Chip/System

@@ -55,17 +55,24 @@ class PowerGate:
 
         clocks_ok: bool | None = None
         clocks_text = ""
+        clocks_is_perm_error = False
         if self.require_clocks:
             code, clocks_text = _run(["jetson_clocks", "--show"])
             if code == 0:
                 lowered = clocks_text.lower()
                 clocks_ok = "error:" not in lowered and "inactive" not in lowered
             else:
-                clocks_ok = False
-                errors.append("jetson_clocks status requires root or is unavailable")
+                clocks_is_perm_error = "root" in clocks_text.lower() or "permission" in clocks_text.lower()
+                if clocks_is_perm_error:
+                    clocks_ok = None
+                    errors.append("jetson_clocks status requires root (warning only — add sudoers entry for exhibition)")
+                else:
+                    clocks_ok = False
+                    errors.append("jetson_clocks status unavailable")
 
+        clocks_blocking = self.require_clocks and clocks_ok is False
         return PowerStatus(
-            ok=mode_ok and (not self.require_clocks or clocks_ok is True),
+            ok=mode_ok and not clocks_blocking,
             mode_ok=mode_ok,
             clocks_ok=clocks_ok,
             mode_text=mode_text,
