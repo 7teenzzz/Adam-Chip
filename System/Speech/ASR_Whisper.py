@@ -8,12 +8,15 @@ import wave
 from pathlib import Path
 from typing import Any
 
-# Model is already cached, but httpx (used by huggingface_hub for validation) does not
-# support SOCKS proxy without the httpx[socks] extra. Unset SOCKS proxy variables
-# at import time so model loading works regardless of system proxy configuration.
-for _var in ("all_proxy", "ALL_PROXY"):
-    if os.environ.get(_var, "").startswith("socks"):
-        os.environ.pop(_var, None)
+# Clear all proxy env vars before importing HF libraries. huggingface_hub uses httpx
+# which doesn't support SOCKS5 without httpx[socks], and any proxy (including HTTP)
+# may block or delay the HF auth check, freezing the asyncio event loop on first import.
+for _var in ("all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
+    os.environ.pop(_var, None)
+
+# Disable HF hub network access — all models are cached locally.
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 # Project-local model storage. faster-whisper's WhisperModel(download_root=...)
 # overrides the HuggingFace cache; HF_HOME below is also set so huggingface_hub

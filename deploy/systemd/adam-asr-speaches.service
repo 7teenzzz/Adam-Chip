@@ -1,0 +1,26 @@
+[Unit]
+Description=Adam Chip ASR speaches (faster-whisper + CUDA, OpenAI-compatible API)
+After=network-online.target docker.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=i17jet
+Group=i17jet
+WorkingDirectory=/home/i17jet/Agents/Adam-Chip
+EnvironmentFile=-/etc/adam-chip/adam.env
+Environment=ADAM_ASR_IMAGE=dustynv/speaches:r36.4.0-cu128-24.04
+Environment=ADAM_ASR_MODEL=Systran/faster-whisper-medium
+Environment=ADAM_ASR_PORT=8000
+# HF_HUB_OFFLINE is intentionally NOT set — speaches needs network to fetch model metadata
+ExecStartPre=/usr/bin/docker pull dustynv/speaches:r36.4.0-cu128-24.04
+ExecStart=/home/i17jet/Agents/Adam-Chip/scripts/adam_asr_speaches.sh fg
+ExecStop=/home/i17jet/Agents/Adam-Chip/scripts/adam_asr_speaches.sh stop
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
