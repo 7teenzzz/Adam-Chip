@@ -87,6 +87,29 @@ services:
     volumes:
       - ./Subsystem/Models/gguf:/models:ro
 
+  adam-asr-speaches:
+    # faster-whisper + CUDA ASR via speaches (OpenAI-compatible API on :8000).
+    # Activate: docker compose --profile asr-speaches up adam-asr-speaches
+    image: dustynv/speaches:r36.4.0-cu128-24.04
+    container_name: adam-asr-speaches
+    profiles:
+      - asr-speaches
+    network_mode: host
+    restart: unless-stopped
+    runtime: nvidia
+    working_dir: /opt/speaches
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      WHISPER__INFERENCE_DEVICE: cuda
+      WHISPER__COMPUTE_TYPE: float16
+      WHISPER__TTL: "-1"
+      WHISPER__VAD_FILTER: "false"
+      HF_HOME: /hf_cache
+      HF_HUB_CACHE: /hf_cache/hub
+    volumes:
+      - ./Subsystem/Models/hf:/hf_cache
+      - /etc/localtime:/etc/localtime:ro
+
   # Run NVIDIA Riva and nano_llm/VILA with their official Jetson setup flows,
   # then point ADAM_LLM_BASE_URL / Riva host / VLM URL at those services.
   # They are intentionally not hidden behind guessed Compose images here.

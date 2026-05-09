@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Adam Chip — stop the full agent stack:
 #   - orchestrator (kill PID from data/adam/orchestrator.pid)
-#   - speech systemd services (TTS Silero + ASR Whisper)
+#   - LLM (adam-llm.service) + speech systemd services (TTS + ASR)
 #   - any leftover live-vlm container (best effort)
 #
 # Idempotent. Safe to run when nothing is up.
@@ -12,7 +12,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${ROOT_DIR}/data/adam"
 PID_FILE="${LOG_DIR}/orchestrator.pid"
 
-SPEECH_SERVICES=(adam-tts-silero.service adam-asr-whisper.service)
+SYSTEMD_SERVICES=(adam-llm.service adam-tts-silero.service adam-asr-whisper.service)
 LIVE_VLM_CONTAINER="adam-live-vlm"
 
 echo "▶ Adam Chip — stop"
@@ -68,9 +68,9 @@ if command -v docker >/dev/null 2>&1; then
   fi
 fi
 
-# --------- 3. Speech systemd services ----------------------------------------
+# --------- 3. Systemd services (LLM + TTS + ASR) ----------------------------
 need_systemd=false
-for s in "${SPEECH_SERVICES[@]}"; do
+for s in "${SYSTEMD_SERVICES[@]}"; do
   if systemctl is-active --quiet "${s}" 2>/dev/null; then
     need_systemd=true
   fi
@@ -78,11 +78,11 @@ done
 
 if ${need_systemd}; then
   echo
-  echo "⏵ Остановка speech-сервисов (sudo):"
-  sudo systemctl stop "${SPEECH_SERVICES[@]}" || true
+  echo "⏵ Остановка сервисов (sudo):"
+  sudo systemctl stop "${SYSTEMD_SERVICES[@]}" || true
 fi
 
-for s in "${SPEECH_SERVICES[@]}"; do
+for s in "${SYSTEMD_SERVICES[@]}"; do
   if systemctl is-active --quiet "${s}" 2>/dev/null; then
     echo "  ✗ ${s} всё ещё активен"
   else

@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
-# Adam Chip — Live VLM (real-time video captioning) via nano_llm + VILA.
+# Adam Chip — VLM HTTP Service (VILA1.5-3b via nano_llm, MLC backend).
 #
-# Запускает Docker-контейнер dustynv/nano_llm с агентом video_query.
-# Stream WebRTC overlay с captions виден на https://<JETSON_IP>:8050.
+# Запускает Docker-контейнер dustynv/nano_llm с FastAPI HTTP-сервисом VLM.py.
+# Сервис принимает кадры в OpenAI vision формате и возвращает описание сцены.
+# Совместим с VLMClient оркестратора: http://127.0.0.1:8050/v1/chat/completions
+#
+# Использование:
+#   scripts/adam_live_vlm.sh          # foreground (Ctrl-C для остановки)
+#   scripts/adam_live_vlm.sh bg       # detached (фон)
+#   scripts/adam_live_vlm.sh fg       # то же что без аргументов
 #
 # Stop: scripts/adam_stop.sh (выключит контейнер adam-live-vlm).
 #
 # ENV overrides:
-#   ADAM_VLM_CAMERA       /dev/video0
 #   ADAM_VLM_MODEL        Efficient-Large-Model/VILA1.5-3b
-#   ADAM_VLM_PROMPT       "Опиши коротко что ты видишь."
-#   ADAM_VLM_WEBRTC_PORT  8050     (browser viewer)
-#   ADAM_VLM_STREAM_PORT  8554     (WebRTC media)
-#   ADAM_VLM_MAX_TOKENS   32
-#   ADAM_VLM_MAX_CTX      256
+#   ADAM_VLM_HTTP_PORT    8050          (HTTP REST API порт)
+#   ADAM_VLM_MAX_TOKENS   48
+#   ADAM_VLM_IMAGE        dustynv/nano_llm:r36.4.0  (override image tag)
+#   JETSON_CONTAINERS_DIR /home/i17jet/Agents/jetson-containers
 
 set -euo pipefail
 
@@ -21,25 +25,21 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JC="${JETSON_CONTAINERS_DIR:-/home/i17jet/Agents/jetson-containers}"
 CONTAINER_NAME="adam-live-vlm"
 
-CAMERA="${ADAM_VLM_CAMERA:-/dev/video0}"
 MODEL="${ADAM_VLM_MODEL:-Efficient-Large-Model/VILA1.5-3b}"
-PROMPT="${ADAM_VLM_PROMPT:-Опиши коротко что ты видишь.}"
-WEBRTC_PORT="${ADAM_VLM_WEBRTC_PORT:-8050}"
-STREAM_PORT="${ADAM_VLM_STREAM_PORT:-8554}"
-MAX_TOKENS="${ADAM_VLM_MAX_TOKENS:-32}"
-MAX_CTX="${ADAM_VLM_MAX_CTX:-256}"
+HTTP_PORT="${ADAM_VLM_HTTP_PORT:-8050}"
+MAX_TOKENS="${ADAM_VLM_MAX_TOKENS:-48}"
+
+VLM_PY="${ROOT_DIR}/System/Speech/VLM.py"
 
 # --------- preflight ---------------------------------------------------------
-if [[ ! -d "${JC}" ]]; then
-  echo "ERROR: jetson-containers не найден в ${JC}" >&2
-  echo "Установи: git clone https://github.com/dusty-nv/jetson-containers ${JC} && bash ${JC}/install.sh" >&2
+if [[ ! -f "${VLM_PY}" ]]; then
+  echo "ERROR: ${VLM_PY} не найден — убедись что файл существует" >&2
   exit 1
 fi
 
-if [[ ! -e "${CAMERA}" ]]; then
-  echo "ERROR: ${CAMERA} не существует. Подключи USB веб-камеру и проверь:" >&2
-  echo "  ls /dev/video*"  >&2
-  echo "  v4l2-ctl --list-devices  (sudo apt install v4l-utils)" >&2
+if [[ ! -d "${JC}" ]]; then
+  echo "ERROR: jetson-containers не найден в ${JC}" >&2
+  echo "Установи: git clone https://github.com/dusty-nv/jetson-containers ${JC} && bash ${JC}/install.sh" >&2
   exit 1
 fi
 
@@ -58,14 +58,13 @@ fi
 IP="$(hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^192\.168\./){print $i; exit}}')"
 [[ -z "${IP}" ]] && IP="127.0.0.1"
 
-# Resolve container tag via autotag. autotag needs `requests` python module —
-# venv has it but system python may not, so prepend venv to PATH.
+# Resolve container tag via autotag (needs requests module — use venv python if available).
 TAG="${ADAM_VLM_IMAGE:-}"
 if [[ -z "${TAG}" ]]; then
   if [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
-    TAG="$(PATH="${ROOT_DIR}/.venv/bin:${PATH}" "${JC}/autotag" nano_llm 2>/dev/null | tail -1)"
+    TAG="$(PATH="${ROOT_DIR}/.venv/bin:${PATH}" "${JC}/autotag" nano_llm 2>/dev/null | tail -1)" || TAG=""
   fi
-  # Fallback: use a known image if autotag failed and the image is already pulled.
+  # Fallback: use known image if already pulled.
   if [[ -z "${TAG}" ]] && docker image inspect dustynv/nano_llm:r36.4.0 >/dev/null 2>&1; then
     TAG="dustynv/nano_llm:r36.4.0"
   fi
@@ -76,52 +75,44 @@ if [[ -z "${TAG}" ]]; then
   exit 1
 fi
 
-# Mode: "fg" runs interactive (so -it works); "bg" runs detached for adam_start.sh.
 MODE="${1:-fg}"
 
 cat <<EOF
-▶ Live VLM (Adam Chip)
+▶ VLM HTTP Service (Adam Chip)
   container:  ${CONTAINER_NAME}   (${MODE})
   image:      ${TAG}
-  camera:     ${CAMERA}
   model:      ${MODEL}
-  prompt:     ${PROMPT}
-  ports:      ${WEBRTC_PORT} (viewer)  /  ${STREAM_PORT} (WebRTC media)
-  Откроется:  https://${IP}:${WEBRTC_PORT}
+  api:        http://${IP}:${HTTP_PORT}/v1/chat/completions
+  health:     http://${IP}:${HTTP_PORT}/health
+  max_tokens: ${MAX_TOKENS}
+
+  Загрузка модели занимает ~60-120 сек — ожидай {"ok": true} на /health.
 
 EOF
 
-# --------- docker args (mirrors jetson-containers/run.sh defaults) -----------
-# We bypass run.sh because it hardcodes -it; we need -d for adam_start.sh.
+# --------- docker args -------------------------------------------------------
 COMMON_ARGS=(
   --runtime nvidia
-  --env NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+  --env NVIDIA_DRIVER_CAPABILITIES=compute,utility
   --network host
   --shm-size=8g
   --name "${CONTAINER_NAME}"
   --rm
-  -e DISPLAY="${DISPLAY:-:0}"
-  -v /tmp/.X11-unix:/tmp/.X11-unix
-  --device "${CAMERA}"
-  -p "${WEBRTC_PORT}:${WEBRTC_PORT}"
-  -p "${STREAM_PORT}:${STREAM_PORT}"
-  -v "${ROOT_DIR}/data/adam:/data/adam"
+  -e ADAM_VLM_HOST=0.0.0.0
+  -e ADAM_VLM_PORT="${HTTP_PORT}"
+  -e ADAM_VLM_MODEL="${MODEL}"
+  -e ADAM_VLM_MAX_TOKENS="${MAX_TOKENS}"
+  -e HF_HOME=/data/models/huggingface
+  -p "${HTTP_PORT}:${HTTP_PORT}"
+  -v "${VLM_PY}:/app/VLM.py:ro"
   -v "${JC}/data:/data"
   -v /etc/localtime:/etc/localtime:ro
 )
-[[ -e /tmp/argus_socket ]]                       && COMMON_ARGS+=(-v /tmp/argus_socket:/tmp/argus_socket)
-[[ -e /etc/nv_tegra_release ]]                   && COMMON_ARGS+=(-v /etc/nv_tegra_release:/etc/nv_tegra_release)
-[[ -e /run/jtop.sock ]]                          && COMMON_ARGS+=(-v /run/jtop.sock:/run/jtop.sock)
-[[ -e /var/run/dbus ]]                           && COMMON_ARGS+=(-v /var/run/dbus:/var/run/dbus)
+[[ -e /etc/nv_tegra_release ]] && COMMON_ARGS+=(-v /etc/nv_tegra_release:/etc/nv_tegra_release)
+[[ -e /run/jtop.sock ]]        && COMMON_ARGS+=(-v /run/jtop.sock:/run/jtop.sock)
 
 CMD_ARGS=(
-  python3 -m nano_llm.agents.video_query --api=mlc
-    --model "${MODEL}"
-    --max-context-len "${MAX_CTX}"
-    --max-new-tokens "${MAX_TOKENS}"
-    --video-input "${CAMERA}"
-    --video-output "webrtc://@:${STREAM_PORT}/output"
-    --prompt "${PROMPT}"
+  python3 /app/VLM.py
 )
 
 case "${MODE}" in
@@ -130,8 +121,10 @@ case "${MODE}" in
     echo
     echo "▶ Detached. Логи: docker logs -f ${CONTAINER_NAME}"
     echo "  Стоп:        docker stop ${CONTAINER_NAME}   (или scripts/adam_stop.sh)"
+    echo "  Health:      curl -s http://127.0.0.1:${HTTP_PORT}/health | python3 -m json.tool"
     ;;
   fg|foreground|*)
-    exec docker run -it "${COMMON_ARGS[@]}" "${TAG}" "${CMD_ARGS[@]}"
+    # No -it: works both in terminal and under systemd.
+    exec docker run "${COMMON_ARGS[@]}" "${TAG}" "${CMD_ARGS[@]}"
     ;;
 esac

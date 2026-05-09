@@ -84,7 +84,7 @@ has_microphone() {
   local dev
   dev="${ADAM_AUDIO_INPUT_DEVICE:-$(python3 -c "import json; print(json.load(open('${ROOT_DIR}/System/Config.json'))['media']['audio']['input_device'])" 2>/dev/null || echo "hw:0,0")}"
   local out
-  out="$(timeout 1 arecord -D "${dev}" --dump-hw-params 2>&1 || true)"
+  out="$( (timeout 1 arecord -D "${dev}" --dump-hw-params 2>&1 || true) | tr -d '\000')"
   [[ "${out}" == *"ACCESS:"* ]]
 }
 
@@ -144,12 +144,19 @@ if ${START_LLM}; then
   if [[ ! -x "${LLAMA_BIN}" ]]; then
     echo "  ✗ llama-server не найден: ${LLAMA_BIN}"
     echo "    Собери: ${ROOT_DIR}/scripts/adam_build_llamacpp.sh"
-  elif ! systemctl list-unit-files --type=service adam-llm.service 2>/dev/null | grep -q "^adam-llm.service"; then
+  elif ! systemctl cat adam-llm.service >/dev/null 2>&1; then
     echo "  ! adam-llm.service не установлен. Сначала: scripts/adam_install_systemd.sh"
   else
     if ! systemctl is-active --quiet adam-llm; then
       echo "⏵ Запуск adam-llm.service (sudo):"
-      sudo systemctl start adam-llm || true
+      # Kill stray llama-server that might hold port 8051 from a previous session.
+      strays="$(pgrep -f 'llama-server' || true)"
+      if [[ -n "${strays}" ]]; then
+        echo "  · Убиваю stray llama-server: ${strays}"
+        kill ${strays} 2>/dev/null || true
+        sleep 1
+      fi
+      sudo systemctl start adam-llm >/dev/null 2>&1 || true
       sleep 3
     fi
     if systemctl is-active --quiet adam-llm 2>/dev/null; then
@@ -165,7 +172,7 @@ fi
 if [[ ${#SPEECH_SERVICES[@]} -gt 0 ]]; then
   need_systemd=false
   for s in "${SPEECH_SERVICES[@]}"; do
-    if ! systemctl list-unit-files --type=service "${s}" 2>/dev/null | grep -q "^${s}"; then
+    if ! systemctl cat "${s}" >/dev/null 2>&1; then
       echo "  ! ${s} не установлен. Сначала: scripts/adam_install_systemd.sh"
       continue
     fi
@@ -176,7 +183,7 @@ if [[ ${#SPEECH_SERVICES[@]} -gt 0 ]]; then
 
   if ${need_systemd}; then
     echo "⏵ Запуск speech-сервисов (sudo):"
-    sudo systemctl start "${SPEECH_SERVICES[@]}" || true
+    sudo systemctl start "${SPEECH_SERVICES[@]}" >/dev/null 2>&1 || true
     sleep 2
   fi
 
@@ -187,6 +194,31 @@ if [[ ${#SPEECH_SERVICES[@]} -gt 0 ]]; then
       echo "  ✗ ${s} (см. journalctl -u ${s} -n 30)"
     fi
   done
+fi
+
+# --------- resolve VLM & expected services before orchestrator ---------------
+should_start_vlm=false
+case "${START_VLM}" in
+  true)  should_start_vlm=true ;;
+  false) should_start_vlm=false ;;
+  auto)
+    if { [[ "${USB_CAM}" == "1" ]] || [[ "${ESP_CAM}" == "1" ]]; } \
+       && command -v docker >/dev/null 2>&1 \
+       && docker image inspect dustynv/nano_llm:r36.4.0 >/dev/null 2>&1; then
+      should_start_vlm=true
+    fi
+    ;;
+esac
+
+# Comma-separated list of AI services the orchestrator should wait for before playing the startup sound.
+# Empty string = --empty mode, no services expected, no sound.
+EXPECTED_SERVICES=""
+if ! ${EMPTY_MODE}; then
+  ${START_LLM}        && EXPECTED_SERVICES+="llm,"
+  ${START_TTS}        && EXPECTED_SERVICES+="tts,"
+  ${START_ASR}        && EXPECTED_SERVICES+="asr,"
+  ${should_start_vlm} && EXPECTED_SERVICES+="vlm,"
+  EXPECTED_SERVICES="${EXPECTED_SERVICES%,}"
 fi
 
 # --------- 3. Orchestrator ---------------------------------------------------
@@ -209,6 +241,7 @@ PYTHONPATH="${ROOT_DIR}/System" \
   ADAM_MODE="${MODE}" \
   ADAM_ORCHESTRATOR_PORT="${PORT}" \
   ADAM_MODELS_DIR="${MODELS_DIR}" \
+  ADAM_EXPECTED_SERVICES="${EXPECTED_SERVICES}" \
   HF_HOME="${MODELS_DIR}/hf" \
   HF_HUB_CACHE="${MODELS_DIR}/hf/hub" \
   nohup "${VENV_PYTHON}" "${ROOT_DIR}/System/Orchestrator.py" >>"${LOG_FILE}" 2>&1 &
@@ -217,7 +250,7 @@ echo "${ORCH_PID}" > "${PID_FILE}"
 disown "${ORCH_PID}" 2>/dev/null || true
 
 for i in $(seq 1 40); do
-  if curl -fsS "http://127.0.0.1:${PORT}/api/agent/status" >/dev/null 2>&1; then
+  if curl --noproxy '*' -fsS "http://127.0.0.1:${PORT}/api/agent/status" >/dev/null 2>&1; then
     break
   fi
   sleep 0.3
@@ -230,19 +263,6 @@ if ! kill -0 "${ORCH_PID}" 2>/dev/null; then
 fi
 
 # --------- 4. Live VLM (optional) --------------------------------------------
-should_start_vlm=false
-case "${START_VLM}" in
-  true)  should_start_vlm=true ;;
-  false) should_start_vlm=false ;;
-  auto)
-    if { [[ "${USB_CAM}" == "1" ]] || [[ "${ESP_CAM}" == "1" ]]; } \
-       && command -v docker >/dev/null 2>&1 \
-       && docker image inspect dustynv/nano_llm:r36.4.0 >/dev/null 2>&1; then
-      should_start_vlm=true
-    fi
-    ;;
-esac
-
 if ${should_start_vlm}; then
   echo
   echo "⏵ Запуск Live VLM (Docker, detached)…"
@@ -271,7 +291,7 @@ IP="$(hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^192\.168\./){
 
 vlm_url=""
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${LIVE_VLM_CONTAINER}"; then
-  vlm_url="https://${IP}:8050/"
+  vlm_url="http://${IP}:8050/"
 fi
 
 cat <<EOF
