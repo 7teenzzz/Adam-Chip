@@ -26,7 +26,7 @@
     "recent_injection": {
       "enabled": true,
       "limit": 2,
-      "strategy": "by_name",
+      "strategy": "by_name_or_theme",
       "max_age_days": 30
     },
     "consolidator": {
@@ -59,7 +59,7 @@
     "end_strategy": "combined",
     "vad_silence_seconds": 60,
     "face_lost_seconds": 15,
-    "grace_message": "вы там?"
+    "grace_message": "Покеда, кожанные!"
   },
   "scene_director": {
     "enabled": true,
@@ -88,6 +88,6 @@
   "diagnostics": {
     "log_level": "info",
     "metrics_enabled": true,
-    "trace_prompts": false
+    "trace_prompts": true
   }
 }
