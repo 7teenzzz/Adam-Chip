@@ -6,6 +6,7 @@ import io
 import json
 import re
 import socket
+import time
 import wave
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,9 +19,10 @@ from urllib.request import Request, urlopen
 class ServiceHealth:
     ok: bool
     detail: str
+    loading: bool = False
 
     def as_dict(self) -> dict[str, Any]:
-        return {"ok": self.ok, "detail": self.detail}
+        return {"ok": self.ok, "detail": self.detail, "loading": self.loading}
 
 
 class OpenAIChatClient:
@@ -37,13 +39,19 @@ class OpenAIChatClient:
     async def generate(self, messages: list[dict[str, str]]) -> str:
         return await asyncio.to_thread(self._generate_sync, messages)
 
-    async def generate_streaming(self, messages: list[dict[str, str]]):  # AsyncGenerator[str, None]
+    async def generate_streaming(  # AsyncGenerator[str, None]
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ):
         import httpx  # lazy — only needed for streaming path
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
             "stream": True,
         }
         if self.disable_thinking:
@@ -97,7 +105,9 @@ class OpenAIChatClient:
             req = Request(self.base_url + "/models", method="GET")
             with urlopen(req, timeout=2) as resp:
                 return ServiceHealth(resp.status < 500, f"HTTP {resp.status}")
-        except (HTTPError, URLError, OSError) as exc:
+        except HTTPError as exc:
+            return ServiceHealth(False, f"HTTP {exc.code}", loading=exc.code == 503)
+        except (URLError, OSError) as exc:
             return ServiceHealth(False, str(exc))
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -172,6 +182,7 @@ class TTSClient:
         self.timeout = float(config.get("timeout_sec", 20))
         self.speaker = str(config.get("speaker", "eugene"))
         self.output_device = str(config.get("output_device", "")).strip()
+        self._current_play_proc: Any = None  # active aplay Popen handle for barge-in interrupt
 
     async def speak(self, text: str) -> dict[str, Any]:
         chunks = [chunk for chunk in split_sentences(text) if chunk.strip()]
@@ -202,12 +213,77 @@ class TTSClient:
         except (HTTPError, URLError, OSError) as exc:
             return {"ok": False, "status": 0, "error": str(exc), "text": text}
 
+    def _get_wav_bytes_sync(self, text: str) -> bytes | None:
+        """Synthesize text and return raw WAV bytes without triggering playback."""
+        payload: dict[str, Any] = {"text": text, "speaker": self.speaker}
+        body = json.dumps(payload).encode("utf-8")
+        req = Request(self.base_url + "/wav", data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urlopen(req, timeout=self.timeout) as resp:
+                return resp.read()
+        except (HTTPError, URLError, OSError):
+            return None
+
+    def _play_wav_bytes_sync(self, wav_bytes: bytes) -> dict[str, Any]:
+        """Play WAV bytes locally via aplay. Blocks until playback completes.
+
+        Uses Popen (not subprocess.run) so that interrupt_playback() can kill
+        the process mid-playback for barge-in support.
+        """
+        import shutil
+        import subprocess
+        import tempfile
+        import os
+        dev = self.output_device or "default"
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                f.write(wav_bytes)
+                wav_path = f.name
+        except OSError as exc:
+            return {"ok": False, "error": f"tempfile: {exc}"}
+        try:
+            player = shutil.which("aplay")
+            if not player:
+                return {"ok": False, "error": "aplay not found"}
+            self._current_play_proc = subprocess.Popen(
+                [player, "-q", "-D", dev, wav_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            returncode = self._current_play_proc.wait()
+            self._current_play_proc = None
+            return {"ok": returncode == 0, "returncode": returncode}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+        finally:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+
+    def interrupt_playback(self) -> None:
+        """Kill the active aplay process (barge-in). Safe to call from any thread."""
+        proc = self._current_play_proc
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=0.5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        self._current_play_proc = None
+
     def _health_sync(self) -> ServiceHealth:
         try:
             req = Request(self.base_url + "/health", method="GET")
             with urlopen(req, timeout=2) as resp:
                 return ServiceHealth(resp.status < 500, f"HTTP {resp.status}")
-        except (HTTPError, URLError, OSError) as exc:
+        except HTTPError as exc:
+            return ServiceHealth(False, f"HTTP {exc.code}", loading=exc.code == 503)
+        except (URLError, OSError) as exc:
             return ServiceHealth(False, str(exc))
 
     @staticmethod
@@ -316,7 +392,9 @@ class WhisperASRClient:
             req = Request(self.base_url + "/health", method="GET")
             with urlopen(req, timeout=2) as resp:
                 return ServiceHealth(resp.status < 500, f"HTTP {resp.status}")
-        except (HTTPError, URLError, OSError) as exc:
+        except HTTPError as exc:
+            return ServiceHealth(False, f"HTTP {exc.code}", loading=exc.code == 503)
+        except (URLError, OSError) as exc:
             return ServiceHealth(False, str(exc))
 
     async def transcribe_pcm(self, pcm: bytes) -> str:
@@ -342,11 +420,119 @@ class WhisperASRClient:
         return out.getvalue()
 
 
-def create_asr_client(config: dict[str, Any]) -> RivaASRClient | WhisperASRClient:
+class SpeachesASRClient:
+    """HTTP client for speaches OpenAI-compatible ASR (faster-whisper + CUDA via Docker).
+
+    API: POST /v1/audio/transcriptions  multipart/form-data
+    Response: {"text": "..."}  (OpenAI format)
+
+    Uses a persistent httpx session for connection reuse (avoids TCP handshake overhead).
+    """
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.base_url = str(config.get("base_url", "http://127.0.0.1:8000")).rstrip("/")
+        self.model = str(config.get("model", "Systran/faster-whisper-medium"))
+        self.language = str(config.get("language", "ru"))
+        self.sample_rate = int(config.get("sample_rate", 16000))
+        self.timeout = float(config.get("timeout_sec", 30))
+        self._session: Any = None  # httpx.Client, created lazily
+
+    def _get_session(self) -> Any:
+        if self._session is None or self._session.is_closed:
+            import httpx
+            self._session = httpx.Client(
+                base_url=self.base_url,
+                timeout=self.timeout,
+                trust_env=False,
+            )
+        return self._session
+
+    async def health(self) -> ServiceHealth:
+        return await asyncio.to_thread(self._health_sync)
+
+    def _health_sync(self) -> ServiceHealth:
+        try:
+            req = Request(self.base_url + "/v1/models", method="GET")
+            with urlopen(req, timeout=3) as resp:
+                return ServiceHealth(resp.status < 500, f"HTTP {resp.status}")
+        except HTTPError as exc:
+            return ServiceHealth(False, f"HTTP {exc.code}", loading=exc.code == 503)
+        except (URLError, OSError) as exc:
+            return ServiceHealth(False, str(exc))
+
+    async def transcribe_pcm(self, pcm: bytes) -> str:
+        return await asyncio.to_thread(self._transcribe_pcm_sync, pcm)
+
+    def _transcribe_pcm_sync(self, pcm: bytes) -> str:
+        if not pcm:
+            return ""
+        wav_bytes = self._pcm_to_wav(pcm)
+        body, content_type = self._build_multipart(wav_bytes)
+        try:
+            session = self._get_session()
+            resp = session.post(
+                "/v1/audio/transcriptions",
+                content=body,
+                headers={"Content-Type": content_type},
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+        except Exception:
+            # Fallback to urllib if httpx not available or session broken.
+            self._session = None
+            req = Request(self.base_url + "/v1/audio/transcriptions", data=body, method="POST")
+            req.add_header("Content-Type", content_type)
+            with urlopen(req, timeout=self.timeout) as resp_u:
+                raw = json.loads(resp_u.read().decode("utf-8"))
+        return str(raw.get("text", "")).strip()
+
+    def _build_multipart(self, wav_bytes: bytes) -> tuple[bytes, str]:
+        boundary = b"adam-asr-boundary-7x9k"
+        parts: list[bytes] = []
+
+        def field(name: str, value: str) -> bytes:
+            return (
+                b"--" + boundary + b"\r\n"
+                + f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+                + value.encode() + b"\r\n"
+            )
+
+        parts.append(
+            b"--" + boundary + b"\r\n"
+            + b'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+            + b"Content-Type: audio/wav\r\n\r\n"
+            + wav_bytes + b"\r\n"
+        )
+        parts.append(field("model", self.model))
+        parts.append(field("language", self.language))
+        parts.append(field("response_format", "json"))
+        parts.append(b"--" + boundary + b"--\r\n")
+        body = b"".join(parts)
+        content_type = f"multipart/form-data; boundary={boundary.decode()}"
+        return body, content_type
+
+    def _pcm_to_wav(self, pcm: bytes) -> bytes:
+        out = io.BytesIO()
+        with wave.open(out, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(self.sample_rate)
+            handle.writeframes(pcm)
+        return out.getvalue()
+
+
+def create_asr_client(config: dict[str, Any]) -> RivaASRClient | WhisperASRClient | SpeachesASRClient:
     provider = str(config.get("provider", "riva")).strip().lower()
     if provider == "whisper":
         return WhisperASRClient(config)
+    if provider == "speaches":
+        return SpeachesASRClient(config)
     return RivaASRClient(config)
+
+
+_VLM_DEFAULT_PROMPT = (
+    "Briefly describe the scene in one sentence: people present, movement, notable objects."
+)
 
 
 class VLMClient:
@@ -354,7 +540,8 @@ class VLMClient:
         self.base_url = str(config.get("base_url", "http://127.0.0.1:8050")).rstrip("/")
         self.timeout = float(config.get("timeout_sec", 5))
         self.model = str(config.get("model", "Efficient-Large-Model/VILA1.5-3b"))
-        self.max_new_tokens = int(config.get("max_new_tokens", 32))
+        self.max_new_tokens = int(config.get("max_new_tokens", 48))
+        self.prompt = str(config.get("prompt", _VLM_DEFAULT_PROMPT))
 
     async def health(self) -> ServiceHealth:
         return await asyncio.to_thread(self._health_sync)
@@ -362,14 +549,19 @@ class VLMClient:
     def _health_sync(self) -> ServiceHealth:
         paths = ("/health", "/v1/models", "/")
         last_error = "vlm health probe failed"
+        last_loading = False
         for path in paths:
             try:
                 req = Request(self.base_url + path, method="GET")
-                with urlopen(req, timeout=self.timeout) as resp:
+                with urlopen(req, timeout=2) as resp:  # short timeout for health only
                     return ServiceHealth(resp.status < 500, f"HTTP {resp.status} {path}")
-            except (HTTPError, URLError, OSError) as exc:
+            except HTTPError as exc:
+                last_error = f"HTTP {exc.code} {path}"
+                last_loading = exc.code == 503
+            except (URLError, OSError) as exc:
                 last_error = str(exc)
-        return ServiceHealth(False, last_error)
+                last_loading = False
+        return ServiceHealth(False, last_error, loading=last_loading)
 
     async def describe_jpeg(self, jpeg_bytes: bytes) -> str:
         return await asyncio.to_thread(self._describe_jpeg_sync, jpeg_bytes)
@@ -378,17 +570,13 @@ class VLMClient:
         if not jpeg_bytes:
             raise RuntimeError("empty scene snapshot")
         image_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
-        prompt = (
-            "Коротко опиши сцену для художественного голосового агента. "
-            "Ответь по-русски одним предложением: присутствие человека, движение, заметные объекты."
-        )
         payload = {
             "model": self.model,
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
+                        {"type": "text", "text": self.prompt},
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
                     ],
                 }
@@ -437,6 +625,7 @@ class SceneCache:
         self.updated_at = ""
         self.source = "manual"
         self.stale = True
+        self._updated_ts: float = 0.0
 
     def update(self, text: str, meta: dict[str, Any] | None = None) -> dict[str, Any]:
         self.text = text.strip()
@@ -444,6 +633,7 @@ class SceneCache:
         self.updated_at = str(self.meta.get("updated_at") or datetime.now(timezone.utc).isoformat())
         self.source = str(self.meta.get("source", "manual"))
         self.stale = bool(self.meta.get("stale", False))
+        self._updated_ts = time.monotonic()
         return self.as_dict()
 
     def mark_stale(self, error: str | None = None) -> dict[str, Any]:
@@ -451,6 +641,11 @@ class SceneCache:
         if error:
             self.meta = {**self.meta, "last_error": error}
         return self.as_dict()
+
+    def is_time_stale(self, stale_after_sec: float) -> bool:
+        if self._updated_ts == 0.0:
+            return True
+        return (time.monotonic() - self._updated_ts) > stale_after_sec
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -463,9 +658,15 @@ class SceneCache:
         }
 
 
+_WHITESPACE_RE = re.compile(r"\s+")
+# Split on sentence-ending punctuation followed by whitespace.
+# Includes em-dash (—) which is common in Russian text as a clause separator.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？—])\s+")
+
+
 def split_sentences(text: str) -> list[str]:
-    text = re.sub(r"\s+", " ", text.strip())
+    text = _WHITESPACE_RE.sub(" ", text.strip())
     if not text:
         return []
-    parts = re.split(r"(?<=[.!?。！？])\s+", text)
+    parts = _SENTENCE_SPLIT_RE.split(text)
     return [part.strip() for part in parts if part.strip()]

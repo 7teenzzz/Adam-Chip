@@ -18,7 +18,22 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit("FastAPI is required. Install with: python3 -m pip install -r System/requirements.txt") from exc
 
 
-app = FastAPI(title="Adam Chip Silero TTS", version="0.1.0")
+from contextlib import asynccontextmanager
+
+def _ensure_loaded() -> None:
+    global _MODEL
+    if _MODEL is None:
+        _MODEL = _load_model()  # warmup is included inside _load_model
+
+
+@asynccontextmanager
+async def _lifespan(application):  # noqa: ARG001
+    import asyncio
+    # Eagerly load model + run warmup on startup (warmup is inside _load_model).
+    await asyncio.to_thread(_ensure_loaded)
+    yield
+
+app = FastAPI(title="Adam Chip Silero TTS", version="0.1.0", lifespan=_lifespan)
 _MODEL: Any = None
 _MODEL_DEVICE = "cpu"
 _SAMPLE_RATE = 48000
@@ -91,14 +106,15 @@ async def wav(payload: dict[str, Any] = Body(...)) -> Response:
     return Response(_to_wav(audio, _SAMPLE_RATE), media_type="audio/wav")
 
 
-def synthesize(text: str, speaker: str = _DEFAULT_SPEAKER) -> list[float]:
+def synthesize(text: str, speaker: str = _DEFAULT_SPEAKER):  # -> np.ndarray
+    import numpy as np
     global _MODEL
     if _MODEL is None:
         _MODEL = _load_model()
     audio = _MODEL.apply_tts(text=text, speaker=speaker, sample_rate=_SAMPLE_RATE)
     if hasattr(audio, "detach"):
-        audio = audio.detach().cpu().numpy()
-    return [float(sample) for sample in audio]
+        return audio.detach().cpu().numpy()
+    return np.asarray(audio, dtype=np.float32)
 
 
 def _load_model() -> Any:
@@ -128,6 +144,9 @@ def _load_model() -> Any:
             ) from exc
         model, _ = silero_tts(language="ru", speaker=_MODEL_ID)
     model.to(device)
+    # JIT warmup — first apply_tts compiles CUDA kernels; do it now so real requests are instant.
+    import numpy as np  # noqa: F401 (imported here to keep top-level imports minimal)
+    model.apply_tts(text="прогрев", speaker=_DEFAULT_SPEAKER, sample_rate=_SAMPLE_RATE)
     return model
 
 
@@ -147,17 +166,16 @@ def _dependency_errors() -> list[str]:
     return errors
 
 
-def _to_wav(samples: list[float], sample_rate: int) -> bytes:
-    pcm = bytearray()
-    for sample in samples:
-        value = max(-1.0, min(1.0, sample))
-        pcm.extend(int(value * 32767).to_bytes(2, byteorder="little", signed=True))
+def _to_wav(samples, sample_rate: int) -> bytes:
+    import numpy as np
+    arr = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
+    pcm = (arr * 32767).astype(np.int16).tobytes()
     out = io.BytesIO()
     with wave.open(out, "wb") as handle:
         handle.setnchannels(1)
         handle.setsampwidth(2)
         handle.setframerate(sample_rate)
-        handle.writeframes(bytes(pcm))
+        handle.writeframes(pcm)
     return out.getvalue()
 
 
