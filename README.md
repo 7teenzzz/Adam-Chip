@@ -6,54 +6,90 @@ Adam Chip — художественно-исследовательская аг
 
 Проект реализуется на базе:
 
-- NVIDIA Jetson Orin NX Super 16 GB
-  - ARMv8 Processor rev 1 (v8l) x 8
-  - NVIDIA Tegra Orin GPU
-  - Ubuntu 22.04.5 LTS
-- ESP32S3 N16R8 WROOM CAM - низкоуровневый контроллер\ моторики, сенсоров 
-  - 16x12bit PWA: PCA9685
-  - Cam&Mic: INMP441 + OV5640
+- **NVIDIA Jetson Orin NX Super 16 GB**
+  - ARMv8 × 8 cores, NVIDIA Tegra Orin GPU
+  - Ubuntu 22.04.5 LTS / JetPack
+- **ESP32-S3 N16R8 WROOM CAM** — периферийный контроллер моторики и сенсоров
+  - 16×12bit PWM: PCA9685
+  - Camera & Mic: OV5640 + INMP441
   - Audio out: PCM5102A + PAM8403
   - ETH-SPI: W5500 LITE
-  - Sensors: TEMT600 (light), BTE16-19 (rip) 
+  - Sensors: TEMT6000 (light), BTE16-19 (rip)
 
 ## Архитектура
 
-Jetson — главный вычислительный узел:
+```
+Jetson (inference node)          ESP32-S3 (peripheral node)
+  FastAPI orchestrator      ←→     192.168.0.172
+  llama.cpp LLM                    PCA9685 PWM (motors)
+  VILA VLM (scene)                 INMP441 mic uplink
+  Whisper ASR (ru-RU)              PCM5102A speaker
+  Silero TTS (eugene)              WebSocket telemetry push
+  GStreamer video                  HTTP API (/api/*)
+  ALSA audio                       MJPEG camera stream
+  Episodic memory (SQLite)
+  EchoGate (dialogue filtering)
+  Hot-reloadable tuning
+```
 
-- power gate: exhibition mode требует `MAXN/Super`;
-- media acquisition: стрим звука и видео с камеры и микрофона ESP;
-- ASR: NVIDIA Riva Streaming ASR, `ru-RU`;
-- VLM: `nano_llm` + `Efficient-Large-Model/VILA1.5-3b`;
-- LLM: Ollama-first, локальная `gemma3:4b`, с сохранённой возможностью заменить runtime;
-- TTS: Silero `v5_5_ru`, голос `eugene`, быстрый локальный русский синтез;
-- orchestrator: FastAPI + asyncio, память, события, prompt builder, action layer, Host UI.
+## Inference Stack
+
+| Компонент | Runtime | Модель | Порт |
+|-----------|---------|--------|------|
+| LLM | llama.cpp (OpenAI-compat) | gemma-4-E4B-it-UD-Q4_K_XL | 8051 |
+| VLM | VILA 1.5-3b | Efficient-Large-Model/VILA1.5-3b | 8050 |
+| ASR | Whisper HTTP | tiny, ru-RU, wake word «адам» | 8095 |
+| TTS | Silero v5_5_ru | голос eugene | 8090 |
+| Orchestrator | FastAPI + asyncio | — | 8080 |
 
 ## Ключевой Принцип Диалога
 
-LLM отвечает на русском, пригодным для прямой озвучки.
+LLM отвечает чистым русским текстом, пригодным для прямой озвучки. Никакого JSON в LLM-ответе — action layer работает отдельно.
 
 ## Структура
 
-- `System/Orchestrator.py` — основной FastAPI orchestrator и Host UI.
-- `System/adam/` — конфиг, power gate, media health, память, события, action layer, MCU client, inference adapters.
-- `System/Speech/ASR.py` — adapter для NVIDIA Riva Streaming ASR.
-- `System/Speech/TTS.py` — HTTP service для Silero TTS.
-- `data/sounds/success.mp3` — локальный Jetson cue после успешной инициализации AI stack.
-- `Subsystem/AdamsServer/data/sounds/boot.wav` — ESP boot cue source asset.
-- `Subsystem/AdamsServer/data/sounds/success.wav` — ESP success cue source asset.
-- `System/Config.json` — основной runtime config.
-- `compose.yaml` — Docker Compose для orchestrator и optional Silero service.
-- `deploy/systemd/` — production units для выставочного автозапуска.
-- `scripts/adam_bootstrap_venv.sh` — создание project venv и установка базовых зависимостей.
-- `scripts/adam_torch_doctor.sh` — проверка Jetson PyTorch/Silero внутри project venv.
-- `scripts/adam_power_maxn.sh` — включение MAXN/Super и clocks.
-- `scripts/adam_media_probe.sh` — проверка камер и аудиоустройств.
-- `scripts/adam_install_systemd.sh` — установка systemd units.
-- `scripts/adam_tts_doctor.sh` — проверка Jetson TTS dependencies/service/playback.
-- `scripts/adam_tts_smoke.sh` — короткий smoke test локальной озвучки.
-- `docs/RUNBOOK_JETSON_EXHIBITION.md` — эксплуатационный runbook.
-- `Subsystem/AdamsServer/` — прошивка ESP32S3.
+```
+System/
+  Orchestrator.py          Главная точка входа (FastAPI + asyncio)
+  Config.json              Runtime конфиг
+  adam/
+    config.py              Загрузка Config.json + env overrides
+    inference.py           LLM / VLM / ASR / TTS адаптеры
+    prompt.py              Prompt builder (персона + история + сцена)
+    action.py              Action layer — валидация MCU-команд
+    device.py              HTTP клиент ESP32 MCU
+    memory.py              SQLite диалоговая + эпизодическая память
+    episodic.py            SessionAccumulator, salience scoring
+    echoes_gate.py         Пул готовых реплик (Echoes / Chinese)
+    tuning.py              Hot-reloadable параметры персоны
+    metrics.py             Метрики: timing, tokens, memory
+    api_runtime.py         Runtime API: config R/W, SSE, camera snapshot
+    events.py              Event bus + JSONL log
+    power.py               Jetson power gate (nvpmodel / jetson_clocks)
+    media.py               Video/audio health checks
+    sound.py               Jetson-side cue playback
+    ui.py                  Web UI backend (agent / dash / debug pages)
+    system.py              Systemd service control
+  Speech/
+    ASR_Whisper.py         Whisper HTTP сервис (основной ASR)
+    ASR.py                 NVIDIA Riva adapter (резерв)
+    TTS.py                 Silero TTS HTTP сервис
+  Interlayers/             Legacy модули
+  HostUI/ + WebUI/         Операторский web-интерфейс
+data/
+  adam/
+    memory.sqlite3         Эпизодическая память
+    events.jsonl           Поток событий
+    notes/ summaries/      Заметки и суммари сессий
+  sounds/success.mp3       Jetson init-cue
+Subsystem/AdamsServer/     Прошивка ESP32-S3 (PlatformIO)
+Agent Adam Chip/About/     Персона: Identity.md, Lore.md, Abilities.md
+Agent Adam Chip/Tuning.json  Hot-reload параметры персоны
+docs/RUNBOOK_JETSON_EXHIBITION.md  Production runbook
+deploy/systemd/            Systemd units для выставочного запуска
+scripts/                   Диагностика, деплой, управление
+Engineering/consolidator.py  Консолидация памяти (daily cron)
+```
 
 ## Быстрый Запуск Orchestrator
 
@@ -65,7 +101,7 @@ PYTHONPATH=System ADAM_MODE=maintenance ./.venv/bin/python System/Orchestrator.p
 
 Открыть:
 
-```text
+```
 http://JETSON_IP:8080
 ```
 
@@ -81,7 +117,7 @@ curl -fsS http://127.0.0.1:8080/api/agent/gate | python3 -m json.tool
 ```bash
 curl -fsS http://127.0.0.1:8080/api/agent/turn \
   -H 'Content-Type: application/json' \
-  -d '{"transcript":"Салют, дохлый!"}' | python3 -m json.tool
+  -d '{"transcript":"Адам, ты меня слышишь?"}' | python3 -m json.tool
 ```
 
 ## Docker
@@ -91,10 +127,11 @@ cp .env.example .env
 docker compose up --build adam-orchestrator
 ```
 
-Optional Silero TTS service:
+Optional сервисы:
 
 ```bash
 docker compose --profile speech-local up --build adam-tts-silero
+docker compose --profile speech-local up --build adam-asr-whisper
 ```
 
 ## Production Boot
@@ -103,8 +140,12 @@ docker compose --profile speech-local up --build adam-tts-silero
 ./scripts/adam_bootstrap_venv.sh
 ./scripts/adam_torch_doctor.sh
 ./scripts/adam_install_systemd.sh
+
+sudo systemctl start adam-llm.service
 sudo systemctl start adam-tts-silero.service
+sudo systemctl start adam-asr-whisper.service
 sudo systemctl start adam-orchestrator.service
+
 ./scripts/adam_service_status.sh
 ./scripts/adam_set_mode.sh exhibition
 ```
@@ -120,47 +161,49 @@ sudo systemctl start adam-orchestrator.service
 
 ```bash
 ./scripts/adam_service_logs.sh adam-orchestrator.service
+./scripts/adam_service_logs.sh adam-llm.service
 ./scripts/adam_service_logs.sh adam-tts-silero.service
 ```
 
-Проверка TTS:
+## Диагностика
 
 ```bash
-./scripts/adam_torch_doctor.sh
+./scripts/adam_healthcheck.sh
+./scripts/adam_media_probe.sh       # камеры и аудиоустройства
+./scripts/adam_torch_doctor.sh      # Jetson PyTorch/Silero
 ./scripts/adam_tts_doctor.sh
-./scripts/adam_tts_smoke.sh
+./scripts/adam_tts_smoke.sh         # smoke test озвучки
+./scripts/adam_service_status.sh
 ```
 
-PyTorch для Silero ставится в `./.venv` только Jetson-compatible способом под активный JetPack. После установки NVIDIA PyTorch ставить Silero без dependency resolver:
+PyTorch для Silero ставится только Jetson-compatible способом. После установки NVIDIA PyTorch:
 
 ```bash
 ./.venv/bin/python -m pip install --no-deps "silero>=0.5.0"
 ```
 
-NVIDIA Jetson PyTorch docs:
+## Firmware: сборка и прошивка (с Windows dev-машины)
 
-https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html
-https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform-release-notes/pytorch-jetson-rel.html
+```powershell
+# Список портов
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1 -ListPorts
 
-## Media Policy
+# Сборка + прошивка (COM7)
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1
 
-Основной видео-вход для AI:
+# OTA по Wi-Fi
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_ota.ps1 -Host 192.168.0.172
+```
 
-- ESP cam
-- USB cam
+COM-порты: `COM7` = прошивка, `COM6` = логи приложения
 
-Основной аудио-вход для ASR:
-
-- ESP mic
-
-
-## Материалы
+## Материалы для опоры
 
 - Jetson AI Lab: https://www.jetson-ai-lab.com/
-- NanoVLM / VILA archive: https://www.jetson-ai-lab.com/archive/tutorial_nano-vlm.html
-- Live LLaVa: [text](https://www.jetson-ai-lab.com/archive/tutorial_live-llava.html)
-- NanoOWL archive: https://www.jetson-ai-lab.com/archive/vit/tutorial_nanoowl.html
 - NVIDIA Riva ASR: https://docs.nvidia.com/deeplearning/riva/user-guide/docs/asr/asr-overview.html
-- Jetson Platform Services VLM: https://docs.nvidia.com/jetson/jps/inference-services/vlm.html
 - Jetson Containers: https://github.com/dusty-nv/jetson-containers
 - Silero Models: https://github.com/snakers4/silero-models
+- NVIDIA PyTorch (Jetson): https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html
+- Realtime VLM:
+  - [text](https://www.jetson-ai-lab.com/archive/tutorial_nano-vlm.html)
+  - [text](https://www.jetson-ai-lab.com/archive/tutorial_live-llava.html)
