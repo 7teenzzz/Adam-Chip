@@ -31,6 +31,7 @@ from adam.device import MCUClient
 from adam.echoes_gate import EchoGate
 from adam.episodic import SessionAccumulator, should_record
 from adam.events import EventLog, utc_now
+from adam.camera import CameraReader, SceneDescriptionBuffer
 from adam.inference import RivaASRClient, WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
 from adam.media import MediaHealth
 from adam.memory import EpisodicMemory, MemoryStore
@@ -58,6 +59,9 @@ asr = create_asr_client(settings.section("services").get("asr", {}))
 vlm = VLMClient(settings.section("services").get("vlm", {}))
 tts = TTSClient(settings.section("services").get("tts", {}))
 scene_cache = SceneCache()
+_media_cfg = settings.section("media")
+camera_reader = CameraReader(_media_cfg.get("video", {}))
+scene_buffer = SceneDescriptionBuffer(int(_media_cfg.get("scene_buffer_maxlen", 8)))
 prompt_builder = PromptBuilder(
     settings.persona_paths,
     int(settings.section("agent").get("history_turns", 8)),
@@ -82,7 +86,10 @@ runtime_state: dict[str, Any] = {
     "thinking": False,
     "last_error": None,
     "success_sound_played": False,
+    "interrupt_tts": False,     # set True by barge-in to stop active TTS playback
+    "last_tts_text": "",        # last TTS reply text (lowercase) for self-echo detection
 }
+
 
 turn_lock = asyncio.Lock()
 session_lock = asyncio.Lock()
@@ -99,24 +106,34 @@ _PROMPT_TRACE_MAX = 50
 prompt_trace: deque[dict[str, Any]] = deque(maxlen=_PROMPT_TRACE_MAX)
 
 
+# Pre-compiled sentence boundary regex for streaming LLM→TTS pipeline.
+# Matches .!?。！？ and em-dash (—, common in Russian) followed by whitespace.
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？—])\s+")
+
 _NAME_INTRO_RE = re.compile(
-    r"\b(?:меня\s+зовут|я\s+(?:это\s+)?|зовут\s+меня)\s+([A-ZА-ЯЁ][a-zа-яё\-]{1,30})\b",
+    r"\b(?:меня\s+зовут|я\s+(?:это\s+)?|зовут\s+меня)\s+"
+    r"([А-ЯЁA-Z][а-яёa-z\-]{1,30}(?:\s+[А-ЯЁA-Z][а-яёa-z\-]{1,30})?)\b",
     flags=re.UNICODE,
 )
 
+_BLACKLIST = {"вижу", "слышу", "хочу", "знаю", "помню", "там", "тут", "здесь"}
+
 
 def _extract_visitor_name(transcript: str) -> str | None:
+    """Returns full name (first + last/patronymic) or None.
+
+    Single-word names are rejected — identity verification requires two parts.
+    """
     m = _NAME_INTRO_RE.search(transcript)
     if not m:
         return None
-    candidate = m.group(1).strip()
-    # очень короткое или общее слово отбраковываем
-    if len(candidate) < 2:
+    full_name = m.group(1).strip()
+    parts = full_name.split()
+    if len(parts) < 2:
         return None
-    common_blacklist = {"вижу", "слышу", "хочу", "знаю", "помню", "там", "тут", "здесь"}
-    if candidate.lower() in common_blacklist:
+    if any(len(p) < 2 or p.lower() in _BLACKLIST for p in parts):
         return None
-    return candidate
+    return full_name
 
 
 def _resolve_mood(scene_text: str, sensors: dict[str, Any]) -> str:
@@ -198,11 +215,15 @@ class VoiceLoopController:
         asr_cfg = settings.section("services").get("asr", {})
         self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
         wake_words = asr_cfg.get("wake_words", []) or []
+        # Config may store wake_words as a comma-separated string (e.g. "адам") or a list.
+        if isinstance(wake_words, str):
+            wake_words = [w.strip() for w in wake_words.split(",") if w.strip()]
         self.wake_words = [str(w).strip().lower() for w in wake_words if str(w).strip()]
         self._wake_re = (
             re.compile(r"\b(?:" + "|".join(re.escape(w) for w in self.wake_words) + r")\b[\s,.:;!?\-]*", re.IGNORECASE)
             if self.wake_words else None
         )
+        self.barge_in_enabled = bool(asr_cfg.get("barge_in_enabled", False))
         self._task: asyncio.Task[None] | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self.running = False
@@ -212,6 +233,9 @@ class VoiceLoopController:
         self.last_asr_error = ""
         self.muted_by_tts = False
         self.last_wake_skip = ""
+        self._reply_window_active = False
+        self._reply_window_latched = False   # latched when speech starts inside the window
+        self._reply_window_task: asyncio.Task | None = None
 
     def status(self) -> dict[str, Any]:
         return {
@@ -228,6 +252,7 @@ class VoiceLoopController:
             "wake_word_required": self.wake_word_required,
             "wake_words": self.wake_words,
             "last_wake_skip": self.last_wake_skip,
+            "reply_window_active": self._reply_window_active,
         }
 
     async def start(self) -> dict[str, Any]:
@@ -256,11 +281,45 @@ class VoiceLoopController:
         event_log.append("voice_loop_stopped", self.status())
         return {"ok": True, **self.status()}
 
+    def open_reply_window(self, timeout_sec: float = 4.0) -> None:
+        """Open a post-reply listen window after Adam's TTS finishes.
+
+        Wake word is bypassed for speech that starts within `timeout_sec` seconds.
+        If no speech begins before the deadline, the voice loop is stopped.
+        A new turn cancels the current window and schedules a fresh one after its TTS.
+        """
+        if self._reply_window_task and not self._reply_window_task.done():
+            self._reply_window_task.cancel()
+        self._reply_window_task = asyncio.create_task(
+            self._reply_window_coro(timeout_sec), name="reply_window"
+        )
+
+    async def _reply_window_coro(self, timeout_sec: float) -> None:
+        self._reply_window_active = True
+        self._reply_window_latched = False
+        event_log.append("reply_window_open", {"timeout_sec": timeout_sec})
+        try:
+            await asyncio.sleep(timeout_sec)
+            event_log.append("reply_window_expired", {"action": "voice_loop_stopped"})
+            if self.running:
+                await self.stop()
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._reply_window_active = False
+            self._reply_window_latched = False
+
     async def _run(self) -> None:
         frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
         speech_frames: list[bytes] = []
         speech_ms = 0
         silence_ms = 0
+        level_tick = 0
+        _prev_muted = False
+        _unmute_at = 0.0
+        _post_tts_cooldown = float(
+            settings.section("services").get("asr", {}).get("post_tts_cooldown_sec", 0.5)
+        )
         try:
             self._process = self._start_arecord()
             stdout = self._process.stdout
@@ -272,18 +331,58 @@ class VoiceLoopController:
                     raise RuntimeError(f"arecord ended: {self._read_process_stderr()}")
                 muted = bool(runtime_state.get("speaking")) and bool(settings.section("safety").get("half_duplex_mute", True))
                 self.muted_by_tts = muted
+                if _prev_muted and not muted:
+                    _unmute_at = time.perf_counter()
+                _prev_muted = muted
+
+                # Emit audio level for UI equalizer every 5 frames (~100 ms).
+                raw_level = 0 if muted else audioop.rms(chunk, 2)
+                level_tick += 1
+                if level_tick >= 5:
+                    level_tick = 0
+                    norm = round(min(1.0, (raw_level / 8000.0) ** 0.5), 3)
+                    event_log.append("audio_level", {"level": norm, "state": self.vad_state if not muted else "muted"})
+
                 if muted:
-                    speech_frames.clear()
-                    speech_ms = 0
-                    silence_ms = 0
+                    if not self.barge_in_enabled:
+                        speech_frames.clear()
+                        speech_ms = 0
+                        silence_ms = 0
+                        self.vad_state = "muted"
+                        continue
+                    # Barge-in path: run VAD during TTS playback to detect wake word.
+                    if voiced:
+                        speech_frames.append(chunk)
+                        speech_ms += self.frame_ms
+                        silence_ms = 0
+                    elif speech_frames:
+                        speech_frames.append(chunk)
+                        silence_ms += self.frame_ms
+                    if speech_frames and silence_ms >= self.endpointing_ms:
+                        pcm = b"".join(speech_frames)
+                        enough = speech_ms >= self.min_speech_ms
+                        speech_frames.clear()
+                        speech_ms = 0
+                        silence_ms = 0
+                        if enough:
+                            asyncio.create_task(self._check_barge_in(pcm))
                     self.vad_state = "muted"
                     continue
 
-                level = audioop.rms(chunk, 2)
+                if _unmute_at and (time.perf_counter() - _unmute_at) < _post_tts_cooldown:
+                    speech_frames.clear()
+                    speech_ms = 0
+                    silence_ms = 0
+                    self.vad_state = "silence"
+                    continue
+
+                level = raw_level
                 voiced = level >= self.vad_threshold
                 if voiced:
                     if not speech_frames:
                         event_log.append("asr_partial", {"state": "speech_started", "level": level})
+                        if self._reply_window_active:
+                            self._reply_window_latched = True
                     speech_frames.append(chunk)
                     speech_ms += self.frame_ms
                     silence_ms = 0
@@ -314,6 +413,31 @@ class VoiceLoopController:
         finally:
             self._stop_process()
             self.running = False
+
+    async def _check_barge_in(self, pcm: bytes) -> None:
+        """ASR the buffered audio; if wake word found → interrupt TTS and dispatch turn."""
+        try:
+            transcript = (await self.asr_client.transcribe_pcm(pcm)).strip().lower()
+        except Exception as exc:
+            event_log.append("barge_in_asr_error", {"error": str(exc)})
+            return
+        if not transcript or self._wake_re is None:
+            return
+        if not self._wake_re.search(transcript):
+            return
+        # Self-echo guard: if every content word appears in Adam's last spoken text, it's echo.
+        last_tts = runtime_state.get("last_tts_text", "").lower()
+        if last_tts:
+            content_words = [w for w in transcript.split() if len(w) > 2]
+            if content_words and all(w in last_tts for w in content_words):
+                event_log.append("barge_in_echo_filtered", {"transcript": transcript})
+                return
+        # Wake word confirmed → interrupt TTS.
+        tts.interrupt_playback()
+        runtime_state["interrupt_tts"] = True
+        runtime_state["speaking"] = False
+        event_log.append("barge_in", {"transcript": transcript})
+        await _run_dialogue_turn(transcript, "barge_in")
 
     def _start_arecord(self) -> subprocess.Popen[bytes]:
         command = [
@@ -373,8 +497,11 @@ class VoiceLoopController:
         self.last_transcript_at = utc_now()
         self.last_asr_error = ""
 
+        in_reply_window = self._reply_window_latched
+        self._reply_window_latched = False
+
         cleaned = transcript
-        if self.wake_word_required and self._wake_re is not None:
+        if self.wake_word_required and not in_reply_window and self._wake_re is not None:
             match = self._wake_re.search(transcript)
             if not match:
                 self.last_wake_skip = transcript
@@ -383,25 +510,31 @@ class VoiceLoopController:
                     {"text": transcript, "reason": "no_wake_word", "asr_ms": asr_ms},
                 )
                 return
-            cleaned = (transcript[:match.start()] + transcript[match.end():]).strip(" ,.;:!?-—")
-            if not cleaned:
-                # User said only the wake word — treat as a greeting trigger.
-                cleaned = "Привет!"
+            cleaned = transcript
 
         event_log.append("asr_final", {"text": cleaned, "raw": transcript, "source": "voice_loop", "asr_ms": asr_ms})
         await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms)
 
 
 class SceneWorker:
-    def __init__(self, media_config: dict[str, Any], vlm_client: VLMClient) -> None:
+    def __init__(
+        self,
+        media_config: dict[str, Any],
+        vlm_client: VLMClient,
+        cam: CameraReader,
+        buf: SceneDescriptionBuffer,
+    ) -> None:
         self.media_config = media_config
         self.vlm_client = vlm_client
-        self.interval_sec = float(media_config.get("scene_interval_sec", 8))
+        self._cam = cam
+        self._buf = buf
+        self.interval_sec = float(media_config.get("scene_interval_sec", 2))
         self.stale_after_sec = float(media_config.get("scene_stale_after_sec", 20))
         self.enabled = bool(media_config.get("scene_worker_enabled", True))
         self.running = False
         self.last_error = ""
         self._task: asyncio.Task[None] | None = None
+        self._consecutive_errors = 0
 
     def status(self) -> dict[str, Any]:
         return {"running": self.running, "enabled": self.enabled, "last_error": self.last_error}
@@ -423,59 +556,47 @@ class SceneWorker:
 
     async def _run(self) -> None:
         while self.running:
+            # Yield GPU to LLM during active turn — VLM and LLM share the same Jetson GPU.
+            if runtime_state.get("thinking") or runtime_state.get("speaking"):
+                await asyncio.sleep(0.2)
+                continue
+            if scene_cache.is_time_stale(self.stale_after_sec):
+                scene_cache.mark_stale("scene_stale_after_sec exceeded")
+            t_iter = time.perf_counter()
             try:
-                t_capture = time.perf_counter()
-                jpeg = await asyncio.to_thread(self._capture_snapshot)
-                capture_ms = round((time.perf_counter() - t_capture) * 1000, 1)
+                jpeg = self._cam.get_latest()
+                if not jpeg:
+                    raise RuntimeError("camera has no frame yet")
                 t_vlm = time.perf_counter()
                 summary = (await self.vlm_client.describe_jpeg(jpeg)).strip()
                 vlm_ms = round((time.perf_counter() - t_vlm) * 1000, 1)
                 runtime_state["last_vlm_ms"] = vlm_ms
+                self._buf.push(summary)
                 updated = scene_cache.update(
                     summary,
-                    {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms, "capture_ms": capture_ms},
+                    {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms},
                 )
                 self.last_error = ""
+                self._consecutive_errors = 0
                 event_log.append("scene_updated", updated)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._consecutive_errors += 1
                 self.last_error = str(exc)
                 stale = scene_cache.mark_stale(str(exc))
-                event_log.append("scene_stale", stale)
-            await asyncio.sleep(self.interval_sec)
-
-    def _capture_snapshot(self) -> bytes:
-        gst = shutil.which("gst-launch-1.0")
-        if gst is None:
-            raise RuntimeError("gst-launch-1.0 is not installed")
-        video = self.media_config.get("video", {})
-        pipeline = str(video.get("gstreamer_pipeline", ""))
-        device = MediaHealth._extract_v4l2_device(pipeline) or "/dev/video0"
-        target = settings.data_dir / "scene_snapshot.jpg"
-        command = [
-            gst,
-            "-q",
-            "v4l2src",
-            f"device={device}",
-            "num-buffers=1",
-            "!",
-            "image/jpeg",
-            "!",
-            "filesink",
-            f"location={target}",
-        ]
-        proc = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
-        if proc.returncode != 0:
-            raise RuntimeError(proc.stderr.decode("utf-8", errors="replace")[-300:] or "gstreamer snapshot failed")
-        data = target.read_bytes()
-        if not data:
-            raise RuntimeError("empty gstreamer snapshot")
-        return data
+                # Only log to stream on first error and every 10th after — avoid flood.
+                if self._consecutive_errors == 1 or self._consecutive_errors % 10 == 0:
+                    event_log.append("scene_stale", stale)
+            elapsed = time.perf_counter() - t_iter
+            # Exponential backoff when VLM is down: 2s → 4s → 8s → … → 60s cap.
+            backoff = min(self.interval_sec * (2 ** min(self._consecutive_errors - 1, 5)), 60.0)
+            sleep_sec = backoff if self._consecutive_errors > 0 else max(0.0, self.interval_sec - elapsed)
+            await asyncio.sleep(sleep_sec)
 
 
 voice_loop = VoiceLoopController(settings.section("media").get("audio", {}), asr)
-scene_worker = SceneWorker(settings.section("media"), vlm)
+scene_worker = SceneWorker(settings.section("media"), vlm, camera_reader, scene_buffer)
 
 
 class SessionWatcher:
@@ -555,12 +676,58 @@ class SessionWatcher:
 session_watcher = SessionWatcher()
 
 
+async def _audio_level_monitor() -> None:
+    """Read Jetson ALSA mic and emit audio_level SSE events for the UI equalizer.
+    Yields the device automatically when the voice loop is active (to avoid conflict).
+    Uses subprocess.Popen + asyncio.to_thread — same pattern as the voice loop."""
+    audio_cfg = settings.section("media").get("audio", {})
+    raw_dev = str(audio_cfg.get("input_device", "hw:1,0"))
+    device = f"plughw:{raw_dev[3:]}" if raw_dev.startswith("hw:") else raw_dev
+    sample_rate = int(audio_cfg.get("sample_rate", 16000))
+    frame_bytes = sample_rate * 2 // 10  # 100 ms of 16-bit mono
+
+    while True:
+        try:
+            if voice_loop.running:
+                await asyncio.sleep(0.3)
+                continue
+
+            proc = subprocess.Popen(
+                ["arecord", "-q", "-D", device, "-f", "S16_LE",
+                 "-r", str(sample_rate), "-c", "1", "-t", "raw"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                while not voice_loop.running:
+                    chunk = await asyncio.to_thread(proc.stdout.read, frame_bytes)  # type: ignore[union-attr]
+                    if not chunk:
+                        await asyncio.sleep(1.0)  # back off before retry when arecord exits early
+                        break  # arecord exited
+                    raw_level = audioop.rms(chunk, 2)
+                    norm = round(min(1.0, (raw_level / 8000.0) ** 0.5), 3)
+                    event_log.append("audio_level", {"level": norm, "state": "idle"})
+            finally:
+                try:
+                    proc.kill()
+                    proc.wait()
+                except Exception:
+                    pass
+
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await asyncio.sleep(2.0)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     power = power_gate.check()
     event_log.append("orchestrator_started", {"mode": runtime_state["mode"], "power": power.as_dict()})
+    camera_reader.start()
     await scene_worker.start()
     await session_watcher.start()
+    level_monitor = asyncio.create_task(_audio_level_monitor(), name="audio_level_monitor")
     if runtime_state["mode"] == "exhibition" and settings.section("power").get("enforce_in_exhibition", True):
         status_payload = await _status_payload()
         gate = status_payload["exhibition_gate"]
@@ -569,16 +736,22 @@ async def lifespan(_: FastAPI):
             event_log.append("exhibition_gate_failed", gate)
             raise RuntimeError(f"exhibition mode gate failed: {gate['failed']}")
         _schedule_success_sound("startup_exhibition_gate_ok")
-        await voice_loop.start()
+    else:
+        asyncio.create_task(_startup_sound_when_ready(), name="startup_sound")
+    await voice_loop.start()
+    asyncio.create_task(_warmup_wakeup(), name="warmup_wakeup")
     try:
         yield
     finally:
+        level_monitor.cancel()
+        await asyncio.gather(level_monitor, return_exceptions=True)
         await voice_loop.stop()
         await session_watcher.stop()
         # финальный коммит, если сессия осталась открытой
         async with session_lock:
             await _commit_session_locked(reason="shutdown")
         await scene_worker.stop()
+        camera_reader.stop()
 
 
 app = FastAPI(title="Adam Chip Orchestrator", version="0.1.0", lifespan=lifespan)
@@ -837,9 +1010,10 @@ async def _status_payload() -> dict[str, Any]:
             "thinking": runtime_state["thinking"],
             "last_error": runtime_state["last_error"],
             "latency_ms": {
-                "llm": runtime_state.get("last_llm_ms"),
-                "tts": runtime_state.get("last_tts_ms"),
                 "asr": runtime_state.get("last_asr_ms"),
+                "llm": runtime_state.get("last_llm_ms"),
+                "ttfv": runtime_state.get("last_ttfv_ms"),
+                "tts": runtime_state.get("last_tts_ms"),
                 "vlm": runtime_state.get("last_vlm_ms"),
             },
         },
@@ -1055,6 +1229,9 @@ async def _run_dialogue_turn(transcript: str, source: str, asr_ms: float | None 
 
 
 async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float | None) -> dict[str, Any]:
+    if voice_loop._reply_window_task and not voice_loop._reply_window_task.done():
+        voice_loop._reply_window_task.cancel()
+
     t_total = time.perf_counter()
     tuning = tuning_store.current()
     sensors = await _sensor_payload()
@@ -1125,14 +1302,15 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
 
     history_turns = tuning.prompt.history_turns
     history = memory.recent_dialogue(history_turns)
+    scene_context_count = int(settings.section("media").get("scene_context_count", 3))
     messages = prompt_builder.build_messages(
         transcript=transcript,
         dialogue_history=history,
-        memory_summary=memory.summary_text(),
         scene_cache=scene_cache.text,
         sensors=sensors,
         semantic_text=semantic_text,
         recent_episodic=recent_lines,
+        recent_scenes=scene_buffer.recent(scene_context_count),
         echo_hint=echo_hint,
         history_turns=history_turns,
         include_scene=tuning.prompt.include_scene,
@@ -1176,13 +1354,18 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     llm_error: str | None = None
     if hasattr(llm, "generate_streaming"):
         try:
-            reply, llm_ms, tts_ms, tts_result = await _stream_llm_and_speak(messages)
+            reply, llm_ms, ttfv_ms, tts_ms, tts_result = await _stream_llm_and_speak(
+                messages,
+                max_tokens=tuning.llm.max_tokens,
+                temperature=tuning.llm.temperature,
+            )
         except Exception as exc:
             llm_error = str(exc)
             runtime_state["last_error"] = llm_error
             event_log.append("llm_error", {"error": llm_error})
             reply = "Я слышу тебя, но мой речевой контур сейчас нестабилен. Дай мне несколько секунд."
             llm_ms = round((time.perf_counter() - t_llm) * 1000, 1)
+            ttfv_ms = llm_ms
             t_tts = time.perf_counter()
             tts_result = await _speak(reply)
             tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
@@ -1195,12 +1378,18 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             reply = "Я слышу тебя, но мой речевой контур сейчас нестабилен. Дай мне несколько секунд."
             event_log.append("llm_error", {"error": llm_error})
         llm_ms = round((time.perf_counter() - t_llm) * 1000, 1)
+        ttfv_ms = llm_ms  # non-streaming: voice starts only after full generation
         t_tts = time.perf_counter()
         tts_result = await _speak(reply)
         tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
     runtime_state["last_llm_ms"] = llm_ms
     runtime_state["last_tts_ms"] = tts_ms
+    runtime_state["last_ttfv_ms"] = ttfv_ms
 
+    runtime_state["last_tts_text"] = reply.lower()
+    if voice_loop.running:
+        asr_cfg = settings.section("services").get("asr", {})
+        voice_loop.open_reply_window(float(asr_cfg.get("reply_window_sec", 4.0)))
     memory.add_dialogue("adam", reply)
     acc.note_turn("adam", reply)
     if echo_meta and not llm_error:
@@ -1216,7 +1405,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     mcu_result = await _execute_action(action)
 
     total_ms = round((time.perf_counter() - t_total) * 1000, 1)
-    timings = {"asr_ms": asr_ms, "llm_ms": llm_ms, "tts_ms": tts_ms, "total_ms": total_ms}
+    timings = {"asr_ms": asr_ms, "llm_ms": llm_ms, "ttfv_ms": ttfv_ms, "tts_ms": tts_ms, "total_ms": total_ms}
 
     llm_cfg = settings.section("services").get("llm", {})
     tts_cfg = settings.section("services").get("tts", {})
@@ -1226,10 +1415,13 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         "reply": reply,
         "voice_degraded": bool(tts_result.get("degraded")),
         "asr_ms": asr_ms,
+        "vlm_ms": runtime_state.get("last_vlm_ms"),
         "llm_ms": llm_ms,
+        "ttfv_ms": ttfv_ms,
         "tts_ms": tts_ms,
         "total_ms": total_ms,
         "tts_chunks": int(tts_result.get("chunks") or 0),
+        "prompt_chars": trace_record.get("prompt_chars"),
         "llm_model": str(llm_cfg.get("model") or ""),
         "llm_provider": str(llm_cfg.get("provider") or ""),
         "tts_speaker": str(tts_cfg.get("speaker") or ""),
@@ -1284,6 +1476,9 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
 
 async def _stream_llm_and_speak(
     messages: list[dict[str, str]],
+    *,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
 ) -> tuple[str, float, float, dict[str, Any]]:
     """Stream LLM tokens → sentence queue → TTS concurrently.
     Returns (reply, llm_ms, tts_ms, tts_result).
@@ -1297,37 +1492,77 @@ async def _stream_llm_and_speak(
     async def _producer() -> None:
         buf = ""
         try:
-            async for token in llm.generate_streaming(messages):  # type: ignore[union-attr]
+            async for token in llm.generate_streaming(  # type: ignore[union-attr]
+                messages, max_tokens=max_tokens, temperature=temperature
+            ):
                 buf += token
-                m = re.search(r"(?<=[.!?。！？])\s+", buf)
+                m = _SENTENCE_BOUNDARY_RE.search(buf)
                 while m:
                     sentence = buf[: m.start()].strip()
                     buf = buf[m.end() :]
                     if sentence:
                         parts.append(sentence)
                         await queue.put(sentence)
-                    m = re.search(r"(?<=[.!?。！？])\s+", buf)
+                        event_log.append("llm_partial", {"text": sentence, "index": len(parts) - 1})
+                    m = _SENTENCE_BOUNDARY_RE.search(buf)
         finally:
             remainder = buf.strip()
             if remainder:
                 parts.append(remainder)
                 await queue.put(remainder)
+                event_log.append("llm_partial", {"text": remainder, "index": len(parts) - 1})
             llm_done_at[0] = time.perf_counter()
             await queue.put(None)  # sentinel
 
     t_tts_start: list[float] = [0.0]
 
     async def _consumer() -> None:
+        """Pipeline: synthesize chunk N+1 while playing chunk N.
+        Uses /wav endpoint (synthesis-only) + local aplay for playback.
+        Falls back to /speak (synth+play combined) if /wav returns None.
+        """
         first = True
+        pending_wav: bytes | None = None   # WAV bytes ready for playback
+        pending_ok: bool = True            # synthesis succeeded for pending
+
         while True:
             chunk = await queue.get()
             if chunk is None:
+                # No more chunks — play the last pending wav if any.
+                if pending_wav is not None and not runtime_state.get("interrupt_tts"):
+                    result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
+                    tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
+                runtime_state["interrupt_tts"] = False
                 break
+
             if first:
                 t_tts_start[0] = time.perf_counter()
                 first = False
-            result = await asyncio.to_thread(tts._synthesize_sync, chunk)
-            tts_chunks.append(result)
+
+            # Synthesize this chunk in a thread (returns WAV bytes quickly).
+            wav = await asyncio.to_thread(tts._get_wav_bytes_sync, chunk)
+
+            if wav is None:
+                # /wav endpoint failed — fall back to /speak (blocks for synth+play).
+                # First play any pending chunk, then play this one synchronously.
+                if pending_wav is not None:
+                    result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
+                    tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
+                    pending_wav = None
+                result = await asyncio.to_thread(tts._synthesize_sync, chunk)
+                tts_chunks.append(result)
+                continue
+
+            # Play the previous pending chunk while next chunk was being synthesized.
+            if pending_wav is not None:
+                if runtime_state.get("interrupt_tts"):
+                    runtime_state["interrupt_tts"] = False
+                    break
+                result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
+                tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
+
+            pending_wav = wav
+            pending_ok = True
 
     runtime_state["speaking"] = True
     event_log.append("tts_started", {"text": "(streaming)"})
@@ -1339,11 +1574,12 @@ async def _stream_llm_and_speak(
     reply = " ".join(parts)
     llm_ms = round((llm_done_at[0] - t_llm) * 1000, 1)
     tts_start = t_tts_start[0] or time.perf_counter()
+    ttfv_ms = round((tts_start - t_llm) * 1000, 1)
     tts_ms = round((time.perf_counter() - tts_start) * 1000, 1)
     ok = all(bool(r.get("ok")) for r in tts_chunks) if tts_chunks else True
     tts_result: dict[str, Any] = {"ok": ok, "degraded": not ok, "chunks": len(tts_chunks), "results": tts_chunks}
     event_log.append("tts_finished", {"ok": ok, "degraded": not ok})
-    return reply, llm_ms, tts_ms, tts_result
+    return reply, llm_ms, ttfv_ms, tts_ms, tts_result
 
 
 async def _speak(text: str) -> dict[str, Any]:
@@ -1360,9 +1596,21 @@ async def _speak(text: str) -> dict[str, Any]:
         runtime_state["speaking"] = False
 
 
+_sensor_cache: dict[str, Any] = {}
+_sensor_cache_ts: float = 0.0
+_SENSOR_CACHE_TTL = 0.5  # seconds — sensors change slowly, avoid ESP32 round-trip every turn
+
+
 async def _sensor_payload() -> dict[str, Any]:
+    global _sensor_cache, _sensor_cache_ts
+    now = time.monotonic()
+    if now - _sensor_cache_ts < _SENSOR_CACHE_TTL and _sensor_cache:
+        return _sensor_cache
     result = await mcu.sensor_snapshot()
-    return result.data if result.ok else {}
+    if result.ok:
+        _sensor_cache = result.data
+        _sensor_cache_ts = now
+    return _sensor_cache if _sensor_cache else (result.data if result.ok else {})
 
 
 async def _execute_action(action: Any) -> dict[str, Any]:
@@ -1446,13 +1694,118 @@ def _schedule_success_sound(reason: str) -> None:
 
 async def _play_success_sound(reason: str) -> dict[str, Any]:
     path = _sound_path("success_path")
-    output_device = str(settings.section("sounds").get("local_output_device", "default"))
+    tts_device = str(settings.section("services").get("tts", {}).get("output_device") or "")
+    output_device = tts_device or str(settings.section("sounds").get("local_output_device", "default"))
     result = await asyncio.to_thread(play_local_sound, path, output_device)
     payload = {"reason": reason, "path": str(path), **result.as_dict()}
     event_log.append("sound_success", payload)
     if not result.ok:
         runtime_state["last_error"] = f"success_sound_failed:{result.error}"
     return payload
+
+
+async def _startup_sound_when_ready() -> None:
+    """Poll until expected AI services are healthy, then play startup sound once.
+
+    The set of expected services is read from ADAM_EXPECTED_SERVICES (comma-separated:
+    llm, tts, asr, vlm). Set by adam_start.sh based on which flags were passed.
+    Empty string = --empty mode, no services to wait for, no sound.
+    Unset = default to llm,tts,asr,vlm (full stack).
+    """
+    expected_raw = os.environ.get("ADAM_EXPECTED_SERVICES", "llm,tts,asr,vlm")
+    expected = {s.strip() for s in expected_raw.split(",") if s.strip()}
+    if not expected:
+        return
+
+    clients: dict[str, Any] = {}
+    if "llm" in expected:
+        clients["llm"] = llm
+    if "tts" in expected:
+        clients["tts"] = tts
+    if "asr" in expected:
+        clients["asr"] = asr
+    if "vlm" in expected:
+        clients["vlm"] = vlm
+
+    poll_interval = 5.0
+    deadline = time.monotonic() + 120.0
+    while time.monotonic() < deadline:
+        if not _sounds_enabled() or runtime_state.get("success_sound_played"):
+            return
+        results = await asyncio.gather(*(c.health() for c in clients.values()))
+        health = dict(zip(clients.keys(), results))
+        if all(h.ok for h in health.values()):
+            _schedule_success_sound("startup_services_ok")
+            return
+        await asyncio.sleep(poll_interval)
+    event_log.append("startup_sound_skipped", {
+        "reason": "services_not_ready_within_120s",
+        "expected": sorted(expected),
+    })
+
+
+async def _warmup_wakeup() -> None:
+    """LLM-generated wakeup monologue on first boot. No history, no memory write.
+
+    Waits for LLM + TTS to be healthy, then prompts Adam to speak a short
+    in-character awakening monologue (inner voice, not addressing anyone).
+    """
+    deadline = time.monotonic() + 120.0
+    while time.monotonic() < deadline:
+        llm_h, tts_h = await asyncio.gather(llm.health(), tts.health())
+        if llm_h.ok and tts_h.ok:
+            break
+        await asyncio.sleep(4.0)
+    else:
+        event_log.append("warmup_skipped", {"reason": "services_not_ready_within_120s"})
+        return
+
+    await asyncio.sleep(1.0)
+
+    warmup_directive = (
+        "\n\n[ВНУТРЕННИЙ СИГНАЛ]\n"
+        "Ты только что перезапустился после выключения. Сознание возвращается фрагментами — "
+        "сенсоры калибруются, фрагменты памяти всплывают. "
+        "Произнеси 2–3 коротких фразы от первого лица: внутренний монолог момента пробуждения. "
+        "Ощущение сигналов, пространства, собственного существования. "
+        "Не обращайся ни к кому. Не объясняй технически. Не выходи из образа Адама Чипа. "
+        "Не превышай 25 слов."
+    )
+    messages = prompt_builder.build_messages(
+        transcript="(система перезагружена)",
+        dialogue_history=[],
+        scene_cache="",
+        sensors={},
+        semantic_text="",
+        recent_episodic=[],
+        recent_scenes=[],
+        echo_hint=None,
+        history_turns=0,
+        include_scene=False,
+        include_sensors=False,
+        response_word_target=20,
+    )
+    if messages and messages[0]["role"] == "system":
+        messages[0] = {"role": "system", "content": messages[0]["content"] + warmup_directive}
+
+    async with turn_lock:
+        runtime_state["thinking"] = True
+        try:
+            if hasattr(llm, "generate_streaming"):
+                reply, *_ = await _stream_llm_and_speak(
+                    messages, max_tokens=60, temperature=1.0
+                )
+            else:
+                reply = await llm.generate(messages)
+                await _speak(reply)
+            event_log.append("warmup_wakeup", {"reply": reply})
+            if voice_loop.running:
+                asr_cfg = settings.section("services").get("asr", {})
+                voice_loop.open_reply_window(float(asr_cfg.get("reply_window_sec", 4.0)))
+        except Exception as exc:
+            event_log.append("warmup_error", {"error": str(exc)})
+        finally:
+            runtime_state["thinking"] = False
 
 
 def _rebuild_clients(section_path: str) -> list[str]:
@@ -1503,7 +1856,7 @@ _runtime_deps = RuntimeDeps(
     get_vlm=lambda: vlm,
     get_mcu=lambda: mcu,
     rebuild_clients=_rebuild_clients,
-    capture_snapshot=lambda: scene_worker._capture_snapshot(),
+    capture_snapshot=camera_reader.get_latest,
     run_dialogue_turn=_run_dialogue_turn,
 )
 app.include_router(build_router(_runtime_deps))
