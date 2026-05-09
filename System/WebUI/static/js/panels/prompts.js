@@ -54,7 +54,12 @@ function injectionsBadges(item) {
 function turnRow(item, onShow) {
   const time = fmtTime(item.ts);
   const llmMs = item.timings?.llm_ms;
-  const totalMs = item.timings?.total_ms;
+  const detailsBox = el("div");
+  const detailsBtn = el("button", {
+    class: "btn btn-ghost",
+    style: "font-size:11px; padding:2px 8px",
+    onclick: () => onShow(item, detailsBox, detailsBtn),
+  }, item.system_prompt_available ? "PROMPT" : "DETAILS");
   return el("div", { class: "card", style: "margin-bottom:8px" }, [
     el("div", {
       class: "card-header",
@@ -65,11 +70,7 @@ function turnRow(item, onShow) {
       el("span", { style: "flex:1; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap" }, item.transcript || ""),
       el("span", { class: "mono", style: "color:var(--accent); min-width:80px; text-align:right" },
         llmMs != null ? `${Math.round(llmMs)}мс` : "—"),
-      el("button", {
-        class: "btn btn-ghost",
-        style: "font-size:11px; padding:2px 8px",
-        onclick: () => onShow(item),
-      }, item.system_prompt_available ? "PROMPT" : "DETAILS"),
+      detailsBtn,
     ]),
     el("div", { class: "card-body", style: "display:flex; flex-direction:column; gap:8px" }, [
       item.transcript ? el("div", { style: "color:var(--muted); font-size:12px" }, item.transcript) : null,
@@ -82,29 +83,23 @@ function turnRow(item, onShow) {
         style: "color:var(--bad); font-family:var(--font-mono); font-size:12px",
       }, "Ошибка: " + item.llm_error) : null,
     ]),
+    detailsBox,
   ]);
 }
 
-function detailModal(item, fullData) {
-  // Простой inline-блок (не overlay) — кладём в конец списка, переопределяемый.
-  const closeBtn = el("button", { class: "btn btn-ghost", style: "float:right" }, "× закрыть");
-  const wrap = el("div", { class: "card", style: "margin:12px 0; border-color:var(--accent)" }, [
-    el("div", { class: "card-header" }, [closeBtn, el("span", { class: "card-title" }, "Полный промт turn'а")]),
-    el("div", { class: "card-body" }, [
-      el("div", { class: "mono dim", style: "font-size:11px; margin-bottom:8px" },
-        `ts=${item.ts}  source=${item.source}  prompt=${item.prompt_chars}ch  echo=${item.echo ? item.echo.pool + ":" + item.echo.id : "—"}`,
-      ),
-      el("div", { class: "mono", style: "white-space:pre-wrap; font-size:12px; max-height:60vh; overflow:auto; background:var(--bg-elev, #111); padding:12px; border-radius:4px; border:1px solid var(--border, #333)" },
-        fullData?.system_prompt || "[system_prompt not captured — enable tuning.diagnostics.trace_prompts]",
-      ),
-      el("div", { style: "margin-top:8px; color:var(--muted); font-size:12px" },
-        `transcript: ${item.transcript || ""}`),
-      el("div", { style: "margin-top:4px; color:var(--accent); font-size:12px" },
-        `reply: ${item.reply || ""}`),
-    ]),
+function buildDetailContent(item, fullData) {
+  return el("div", { style: "padding:8px 0" }, [
+    el("div", { class: "mono dim", style: "font-size:11px; margin-bottom:8px; padding:0 16px" },
+      `ts=${item.ts}  source=${item.source}  prompt=${item.prompt_chars}ch  echo=${item.echo ? item.echo.pool + ":" + item.echo.id : "—"}`,
+    ),
+    el("div", { class: "mono", style: "white-space:pre-wrap; font-size:12px; max-height:60vh; overflow:auto; background:var(--bg-elev, #111); padding:12px; margin:0 0 8px; border-radius:4px; border:1px solid var(--border, #333)" },
+      fullData?.system_prompt || "[system_prompt not captured — enable tuning.diagnostics.trace_prompts]",
+    ),
+    el("div", { style: "color:var(--muted); font-size:12px; padding:0 2px" },
+      `transcript: ${item.transcript || ""}`),
+    el("div", { style: "margin-top:4px; color:var(--accent); font-size:12px; padding:0 2px" },
+      `reply: ${item.reply || ""}`),
   ]);
-  closeBtn.addEventListener("click", () => wrap.remove());
-  return wrap;
 }
 
 export function mount(target) {
@@ -136,10 +131,16 @@ export function mount(target) {
   ]);
   target.appendChild(header);
 
-  async function showFull(item) {
+  async function showFull(item, detailsBox, btn) {
+    // Toggle: collapse if already open.
+    if (detailsBox.children.length > 0) {
+      detailsBox.innerHTML = "";
+      if (btn) btn.textContent = item.system_prompt_available ? "PROMPT" : "DETAILS";
+      return;
+    }
+    if (btn) btn.textContent = "…";
     let fullData = item;
     if (!item.system_prompt) {
-      // запросить полный список с full=true и найти запись по ts
       try {
         const data = await api.get(`/api/agent/prompts?limit=${Number(limitInput.value) || 20}&full=true`);
         const found = (data.items || []).find((x) => x.ts === item.ts);
@@ -151,8 +152,10 @@ export function mount(target) {
         status.textContent = "ошибка: " + e.message;
       }
     }
-    list.appendChild(detailModal(item, fullData));
-    list.lastChild.scrollIntoView({ behavior: "smooth", block: "start" });
+    detailsBox.innerHTML = "";
+    detailsBox.appendChild(buildDetailContent(item, fullData));
+    if (btn) btn.textContent = "▲ СВЕРНУТЬ";
+    detailsBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   async function refresh() {
@@ -175,6 +178,6 @@ export function mount(target) {
   }
 
   refresh();
-  const timer = setInterval(refresh, 5000);
+  const timer = setInterval(refresh, 30000);
   return () => clearInterval(timer);
 }

@@ -22,6 +22,7 @@ export function statusDot(kind, label, title) {
 export function kindFromHealth(h) {
   if (!h) return "";
   if (h.ok === true) return "ok";
+  if (h.loading === true) return "amber";
   if (h.ok === false) return "bad";
   return "warn";
 }

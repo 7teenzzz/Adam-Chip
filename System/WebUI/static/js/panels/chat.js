@@ -76,6 +76,80 @@ export function mount(target) {
   const jetStatus = el("span", { style: "font-size:10px; color:var(--muted); font-family:var(--font-mono)" }, "—");
   const sceneCaption = el("div", { style: "color:var(--muted); font-size:12px; white-space:pre-wrap; line-height:1.5" }, "Сцена не описана.");
 
+  // ---- Equalizer — driven by server-side audio_level SSE events ----
+  // Shows what Adam actually hears from the Jetson ALSA mic. No browser mic needed.
+  const eqCanvas = el("canvas", {
+    style: "width:100%; height:52px; border-radius:4px; display:block; background:var(--bg-2)",
+  });
+  const BAR_N = 28;
+  const eqPeaks = new Float32Array(BAR_N);
+  let eqServerLevel = 0;   // latest normalized level (0–1) from audio_level SSE event
+  let eqRafId = null;
+
+  // Spectral shape: voice-like curve peaking around bar 6-10 (mid-low frequencies).
+  const EQ_SHAPE = Float32Array.from({ length: BAR_N }, (_, i) => {
+    const x = i / (BAR_N - 1);
+    const peak = Math.exp(-((x - 0.28) ** 2) / 0.06);        // main voice peak ~1kHz
+    const low  = Math.exp(-((x - 0.0)  ** 2) / 0.015) * 0.4; // sub-bass presence
+    return Math.max(0.06, Math.min(1.0, peak + low));
+  });
+
+  function drawEqualizer() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = eqCanvas.getBoundingClientRect();
+    if (rect.width > 0) {
+      const cw = Math.round(rect.width * dpr), ch = Math.round(rect.height * dpr);
+      if (eqCanvas.width !== cw || eqCanvas.height !== ch) {
+        eqCanvas.width = cw;
+        eqCanvas.height = ch;
+      }
+      const ctx = eqCanvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const w = rect.width, h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const gap = 2;
+      const barW = (w - (BAR_N - 1) * gap) / BAR_N;
+      const t = Date.now() * 0.0015; // slow wobble clock
+
+      // Update peaks with spectral shaping + per-bar organic wobble.
+      const displayLevel = Math.min(1.0, eqServerLevel * 4.0); // boost idle signal for visibility
+      for (let i = 0; i < BAR_N; i++) {
+        const wobble = 1 + 0.12 * Math.sin(t + i * 0.85);
+        const target = displayLevel * EQ_SHAPE[i] * wobble;
+        eqPeaks[i] = Math.max(target, eqPeaks[i] * 0.87);
+      }
+
+      // Dim baseline — always rendered so canvas looks active.
+      ctx.fillStyle = "rgba(67,209,122,0.10)";
+      for (let i = 0; i < BAR_N; i++) {
+        ctx.fillRect(Math.round(i * (barW + gap)), h - 2, Math.max(1, Math.round(barW)), 2);
+      }
+
+      // Active bars.
+      for (let i = 0; i < BAR_N; i++) {
+        const v = eqPeaks[i];
+        if (v < 0.008) continue;
+        const bh = v * (h - 3);
+        ctx.fillStyle = `rgba(67,209,122,${0.35 + v * 0.65})`;
+        ctx.fillRect(
+          Math.round(i * (barW + gap)),
+          Math.round(h - 2 - bh),
+          Math.max(1, Math.round(barW)),
+          Math.max(1, Math.round(bh)),
+        );
+      }
+    }
+    eqRafId = requestAnimationFrame(drawEqualizer);
+  }
+  eqRafId = requestAnimationFrame(drawEqualizer);
+
+  // ---- ASR live display ----
+  const asrBox = el("div", {
+    style: "min-height:28px; padding:6px 8px; border-radius:4px; background:var(--bg-2); font-size:12px; color:var(--muted); font-family:var(--font-mono); white-space:pre-wrap; word-break:break-word; line-height:1.4",
+  }, "—");
+  let asrClearTimer = null;
+
   let jetTimer = null, jetInflight = false;
 
   function refreshSnapshot() {
@@ -110,8 +184,14 @@ export function mount(target) {
     if (!sc?.text) { sceneCaption.textContent = "Сцена не описана."; return; }
     sceneCaption.textContent = sc.text + (sc.stale ? " (устарело)" : "");
   }
-  const unsubScene = state.subscribe("status", paintScene);
+  let voiceLoopActive = false;
+  function paintVoiceLoop() {
+    const running = !!state.get("status")?.voice_loop?.running;
+    if (running !== voiceLoopActive) syncVoiceLoopBtn(running);
+  }
+  const unsubScene = state.subscribe("status", () => { paintScene(); paintVoiceLoop(); });
   paintScene();
+  paintVoiceLoop();
   startJetTimer();
 
   // ---- Transcript ----
@@ -152,6 +232,9 @@ export function mount(target) {
 
   async function ensureMicStream() {
     if (micStream) return micStream;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Микрофон доступен только по HTTPS или localhost");
+    }
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, sampleRate: 16000, noiseSuppression: true, echoCancellation: true },
       video: false,
@@ -159,8 +242,13 @@ export function mount(target) {
     micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = micAudioCtx.createMediaStreamSource(micStream);
     micAnalyser = micAudioCtx.createAnalyser();
-    micAnalyser.fftSize = 1024;
+    micAnalyser.fftSize = 2048;
     source.connect(micAnalyser);
+    // AudioContext may start suspended (autoplay policy); resume immediately.
+    // On localhost this usually succeeds without a gesture.
+    if (micAudioCtx.state === "suspended") {
+      micAudioCtx.resume().catch(() => {});
+    }
     return micStream;
   }
 
@@ -257,6 +345,36 @@ export function mount(target) {
     } else { stopVad(); }
   });
 
+  // ---- Jetson voice loop toggle (used when getUserMedia is unavailable, e.g. HTTP from LAN) ----
+  const hasMicApi = !!navigator.mediaDevices?.getUserMedia;
+
+  function syncVoiceLoopBtn(running) {
+    if (!voiceLoopBtn) return;
+    voiceLoopActive = !!running;
+    voiceLoopBtn.textContent = running ? "⏹ Jetson mic вкл" : "🎤 Jetson mic";
+    voiceLoopBtn.style.borderColor = running ? "var(--bad)" : "";
+  }
+
+  const voiceLoopBtn = el("button", {
+    class: "btn",
+    title: "Запустить голосовой цикл Jetson (mic → ASR). Транскрипты появятся в чате автоматически.",
+    onclick: async () => {
+      try {
+        if (!voiceLoopActive) {
+          await api.post("/api/agent/listen/start", {});
+          voiceLoopActive = true;
+          voiceLoopBtn.textContent = "⏹ Jetson mic вкл";
+          voiceLoopBtn.style.borderColor = "var(--bad)";
+        } else {
+          await api.post("/api/agent/listen/stop", {});
+          voiceLoopActive = false;
+          voiceLoopBtn.textContent = "🎤 Jetson mic";
+          voiceLoopBtn.style.borderColor = "";
+        }
+      } catch (e) { toast(e.message, "bad"); }
+    },
+  }, "🎤 Jetson mic");
+
   // ---- Layout ----
   const card = el("section", { class: "card", style: "flex:1; display:flex; flex-direction:column; min-height:0" }, [
     el("div", { class: "card-header" }, [
@@ -270,12 +388,14 @@ export function mount(target) {
         transcript,
         el("div", { class: "row-stretch", style: "gap:8px" }, [input]),
         el("div", { class: "row", style: "gap:6px; align-items:center; flex-wrap:wrap" }, [
-          sendBtn, sayBtn, micBtn,
+          sendBtn, sayBtn,
+          hasMicApi ? micBtn : null,
           el("span", { class: "spacer" }),
-          vadLabel, clearBtn,
+          hasMicApi ? vadLabel : voiceLoopBtn,
+          clearBtn,
         ]),
       ]),
-      // Right: vision
+      // Right: vision + mic + asr
       el("div", { style: "display:flex; flex-direction:column; gap:8px; padding:12px; overflow-y:auto; min-width:0" }, [
         el("div", { style: "display:flex; gap:8px; align-items:center" }, [
           el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Jetson"),
@@ -284,11 +404,18 @@ export function mount(target) {
         jetImg,
         el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Сцена"),
         sceneCaption,
+        el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Микрофон"),
+        eqCanvas,
+        el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "ASR"),
+        asrBox,
       ]),
     ]),
   ]);
 
   target.appendChild(card);
+
+  // Streaming Adam bubble: created by llm_partial events, finalized by adam_reply or send().
+  let pendingAdamBubble = null;
 
   let pending = false;
   async function send() {
@@ -301,13 +428,20 @@ export function mount(target) {
     scrollBottom();
     try {
       const result = await api.post("/api/agent/turn", { transcript: text });
-      transcript.appendChild(bubble({
+      const finalBubble = bubble({
         speaker: "adam",
         text: result.reply || "(пусто)",
         ts: new Date().toISOString(),
         timings: result.timings,
         voice_degraded: result.voice_degraded,
-      }));
+      });
+      if (pendingAdamBubble) {
+        // Streaming bubble was created by llm_partial — replace with final version that has timings.
+        transcript.replaceChild(finalBubble, pendingAdamBubble);
+        pendingAdamBubble = null;
+      } else {
+        transcript.appendChild(finalBubble);
+      }
       setState(result.voice_degraded ? "голос деградирован" : "ответ получен");
       scrollBottom();
     } catch (e) {
@@ -335,12 +469,78 @@ export function mount(target) {
     if (ev.type === "viewer_transcript" && ev.payload?.source === "voice_loop") {
       transcript.appendChild(bubble({ speaker: "viewer", text: ev.payload.text, ts: ev.ts }));
       scrollBottom();
+    } else if (ev.type === "viewer_transcript" && ev.payload?.source === "barge_in") {
+      transcript.appendChild(bubble({ speaker: "viewer", text: ev.payload.text, ts: ev.ts }));
+      scrollBottom();
+    } else if (ev.type === "llm_partial") {
+      const text = ev.payload?.text || "";
+      const idx = ev.payload?.index ?? 0;
+      if (!text) return;
+      if (idx === 0 || !pendingAdamBubble) {
+        // First sentence: create a streaming Adam bubble with subtle opacity indicating in-progress.
+        pendingAdamBubble = bubble({ speaker: "adam", text, ts: ev.ts });
+        pendingAdamBubble.style.opacity = "0.75";
+        transcript.appendChild(pendingAdamBubble);
+      } else {
+        // Append sentence to existing streaming bubble (children[1] = body div).
+        const bodyEl = pendingAdamBubble.children[1];
+        if (bodyEl) bodyEl.textContent += " " + text;
+      }
+      scrollBottom();
     } else if (ev.type === "adam_reply" && ev.payload?.source !== "manual") {
-      transcript.appendChild(bubble({
+      const finalBubble = bubble({
         speaker: "adam", text: ev.payload.text, ts: ev.ts,
         timings: ev.payload.timings, voice_degraded: ev.payload.voice_degraded,
-      }));
+      });
+      if (pendingAdamBubble) {
+        // Replace streaming bubble with final version that has timings.
+        transcript.replaceChild(finalBubble, pendingAdamBubble);
+        pendingAdamBubble = null;
+      } else {
+        transcript.appendChild(finalBubble);
+      }
       scrollBottom();
+    } else if (ev.type === "audio_level") {
+      eqServerLevel = typeof ev.payload?.level === "number" ? ev.payload.level : 0;
+    } else if (ev.type === "scene_updated") {
+      const text = ev.payload?.text || ev.payload?.summary || "";
+      if (text) {
+        sceneCaption.textContent = text + (ev.payload?.stale ? " (устарело)" : "");
+        sceneCaption.style.color = "var(--text)";
+      }
+    } else if (ev.type === "barge_in") {
+      // TTS was interrupted — discard any incomplete streaming bubble.
+      pendingAdamBubble = null;
+    } else if (ev.type === "voice_loop_started") {
+      syncVoiceLoopBtn(true);
+    } else if (ev.type === "voice_loop_stopped") {
+      syncVoiceLoopBtn(false);
+    } else if (ev.type === "asr_partial") {
+      if (ev.payload?.state === "speech_started") {
+        asrBox.textContent = "🎤 слушаю…";
+        asrBox.style.color = "var(--muted)";
+        if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
+      }
+    } else if (ev.type === "asr_wake_skip") {
+      const raw = ev.payload?.text || "";
+      if (raw) {
+        asrBox.textContent = `(без «Адам»): ${raw}`;
+        asrBox.style.color = "var(--muted)";
+        if (asrClearTimer) clearTimeout(asrClearTimer);
+        asrClearTimer = setTimeout(() => { asrBox.textContent = "—"; asrBox.style.color = "var(--muted)"; asrClearTimer = null; }, 8000);
+      }
+    } else if (ev.type === "asr_final") {
+      const text = ev.payload?.text || "";
+      asrBox.textContent = text || "—";
+      asrBox.style.color = text ? "var(--text)" : "var(--muted)";
+      if (asrClearTimer) clearTimeout(asrClearTimer);
+      if (text) {
+        asrClearTimer = setTimeout(() => {
+          asrBox.textContent = "—";
+          asrBox.style.color = "var(--muted)";
+          asrClearTimer = null;
+        }, 10000);
+      }
     }
   });
 
@@ -350,6 +550,8 @@ export function mount(target) {
     unsubScene();
     stopJetTimer();
     stopVad();
+    if (eqRafId) { cancelAnimationFrame(eqRafId); eqRafId = null; }
+    if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
     if (micRecorder?.state === "recording") { try { micRecorder.stop(); } catch (_) {} }
     if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
     if (micAudioCtx) { try { micAudioCtx.close(); } catch (_) {} micAudioCtx = null; }

@@ -23,6 +23,64 @@ const SERVICE_META = {
   asr: { label: "ASR (Whisper)",         unit: "adam-asr-whisper.service",  desc: "Распознавание речи, порт :8095" },
 };
 
+// ── VLM Docker card (не systemd, управляется через Docker API) ──────────
+
+function buildVlmCard() {
+  let busy = false;
+  const statusDot  = el("span", { class: "dot muted" });
+  const statusText = el("span", { class: "muted", text: "загрузка…" });
+  const btnStart   = el("button", { class: "btn btn-sm",           onclick: () => action("start")   }, "▶ Start");
+  const btnStop    = el("button", { class: "btn btn-sm btn-danger", onclick: () => action("stop")    }, "■ Stop");
+
+  async function action(verb) {
+    if (busy) return;
+    busy = true;
+    btnStart.disabled = true;
+    btnStop.disabled  = true;
+    statusText.textContent = verb === "start" ? "запуск…" : "остановка…";
+    try {
+      await api.post(`/api/live_vlm/${verb}`);
+      toast(`VLM: ${verb}`, "ok");
+    } catch (err) {
+      toast(`VLM: ${err.message || err}`, "error");
+    } finally {
+      busy = false;
+      await refresh();
+    }
+  }
+
+  async function refresh() {
+    try {
+      const data = await api.get("/api/live_vlm/status");
+      const running = !!data.running;
+      statusDot.className  = running ? "dot good" : "dot bad";
+      statusText.textContent = running ? "running" : "stopped";
+      btnStart.disabled = running || busy;
+      btnStop.disabled  = !running || busy;
+    } catch {
+      statusDot.className = "dot bad";
+      statusText.textContent = "нет связи";
+    }
+  }
+
+  const card = el("div", { class: "card" }, [
+    el("div", { class: "card-header" }, [
+      el("div", { class: "row", style: "gap:8px;align-items:center" }, [
+        statusDot,
+        el("span", { class: "card-title", text: "VLM (VILA1.5-3b)" }),
+        statusText,
+      ]),
+    ]),
+    el("div", { class: "card-body" }, [
+      el("div", { class: "muted", style: "margin-bottom:10px;font-size:12px", text: "adam-live-vlm (Docker)" }),
+      el("div", { class: "muted", style: "margin-bottom:12px", text: "Описание сцены через камеру, порт :8050" }),
+      el("div", { class: "row", style: "gap:8px" }, [btnStart, btnStop]),
+    ]),
+  ]);
+
+  return { card, refresh };
+}
+
 const STATE_STYLE = {
   active:       { dot: "good",  text: "active" },
   activating:   { dot: "warn",  text: "activating" },
@@ -34,7 +92,7 @@ const STATE_STYLE = {
 };
 
 function dot(kind) {
-  return el("span", { class: `status-dot ${kind}` });
+  return el("span", { class: `dot ${kind}` });
 }
 
 function buildServiceCard(name, meta) {
@@ -73,14 +131,14 @@ function buildServiceCard(name, meta) {
       const active = !!svc.active;
       const style  = STATE_STYLE[state] || STATE_STYLE.unknown;
 
-      statusDot.className = `status-dot ${style.dot}`;
+      statusDot.className = `dot ${style.dot}`;
       statusText.textContent = style.text;
 
       btnStart.disabled   = active || busy;
       btnStop.disabled    = !active || busy;
       btnRestart.disabled = !active || busy;
     } catch {
-      statusDot.className = "status-dot bad";
+      statusDot.className = "dot bad";
       statusText.textContent = "нет связи";
     }
   }
@@ -107,6 +165,7 @@ export function mount(root) {
   const cards = Object.entries(SERVICE_META).map(([name, meta]) =>
     buildServiceCard(name, meta)
   );
+  const vlmCard = buildVlmCard();
 
   const note = el("div", { class: "card" }, [
     el("div", { class: "card-body muted", style: "font-size:12px" }, [
@@ -127,7 +186,7 @@ export function mount(root) {
   const refreshBtn = el("button", { class: "btn btn-sm", style: "margin-bottom:16px" }, "↺ Обновить");
 
   async function refreshAll() {
-    await Promise.all(cards.map((c) => c.refresh()));
+    await Promise.all([...cards.map((c) => c.refresh()), vlmCard.refresh()]);
   }
 
   refreshBtn.addEventListener("click", refreshAll);
@@ -139,6 +198,7 @@ export function mount(root) {
     ])
   );
   cards.forEach((c) => root.appendChild(c.card));
+  root.appendChild(vlmCard.card);
   root.appendChild(note);
 
   refreshAll();

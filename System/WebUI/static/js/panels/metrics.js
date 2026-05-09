@@ -56,13 +56,15 @@ function turnRow(t) {
   return el("tr", { class: "fade-in" }, [
     el("td", { class: "mono dim", style: "padding:6px 8px; white-space:nowrap" }, ts),
     el("td", { class: "mono", style: "padding:6px 8px; color:var(--muted)" }, t.source || "—"),
-    el("td", { style: "padding:6px 8px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" }, t.transcript || ""),
-    el("td", { style: "padding:6px 8px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--accent)" }, t.reply || ""),
+    el("td", { style: "padding:6px 8px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" }, t.transcript || ""),
+    el("td", { style: "padding:6px 8px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--accent)" }, t.reply || ""),
     el("td", { class: "mono", style: "padding:6px 8px; text-align:right" }, fmtMs(t.asr_ms)),
+    el("td", { class: "mono dim", style: "padding:6px 8px; text-align:right" }, fmtMs(t.vlm_ms)),
     el("td", { class: "mono", style: "padding:6px 8px; text-align:right" }, fmtMs(t.llm_ms)),
     el("td", { class: "mono", style: "padding:6px 8px; text-align:right" }, fmtMs(t.tts_ms)),
     el("td", { class: "mono", style: "padding:6px 8px; text-align:right; color:var(--accent)" }, fmtMs(t.total_ms)),
-    el("td", { class: "mono dim", style: "padding:6px 8px; text-align:right" }, t.tts_chunks ?? "—"),
+    el("td", { class: "mono dim", style: "padding:6px 8px; text-align:right" }, String(t.tts_chunks ?? "—")),
+    el("td", { class: "mono dim", style: "padding:6px 8px; text-align:right" }, t.prompt_chars ? String(t.prompt_chars) : "—"),
   ]);
 }
 
@@ -93,6 +95,13 @@ function injectionsBadges(item) {
 function promptTurnRow(item, onShow) {
   const time = (item.ts || "").slice(11, 19);
   const llmMs = item.timings?.llm_ms;
+  // Inline details container — expands below this card when Details is clicked.
+  const detailsBox = el("div");
+  const detailsBtn = el("button", {
+    class: "btn btn-ghost",
+    style: "font-size:11px; padding:2px 8px",
+    onclick: () => onShow(item, detailsBox, detailsBtn),
+  }, item.system_prompt_available ? "PROMPT" : "DETAILS");
   return el("div", { class: "card", style: "margin-bottom:8px" }, [
     el("div", {
       class: "card-header",
@@ -103,36 +112,26 @@ function promptTurnRow(item, onShow) {
       el("span", { style: "flex:1; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap" }, item.transcript || ""),
       el("span", { class: "mono", style: "color:var(--accent); min-width:80px; text-align:right" },
         llmMs != null ? `${Math.round(llmMs)}мс` : "—"),
-      el("button", {
-        class: "btn btn-ghost",
-        style: "font-size:11px; padding:2px 8px",
-        onclick: () => onShow(item),
-      }, item.system_prompt_available ? "PROMPT" : "DETAILS"),
+      detailsBtn,
     ]),
     el("div", { class: "card-body", style: "display:flex; flex-direction:column; gap:8px" }, [
       item.reply ? el("div", { style: "color:var(--accent); font-size:13px; white-space:pre-wrap" }, "→ " + item.reply) : null,
       el("div", { style: "display:flex; flex-wrap:wrap; gap:4px; align-items:center" }, injectionsBadges(item)),
       item.llm_error ? el("div", { style: "color:var(--bad); font-family:var(--font-mono); font-size:12px" }, "Ошибка: " + item.llm_error) : null,
     ]),
+    detailsBox,
   ]);
 }
 
-function detailModal(item, fullData, container) {
-  const closeBtn = el("button", { class: "btn btn-ghost", style: "float:right" }, "× закрыть");
-  const wrap = el("div", { class: "card", style: "margin:12px 0; border-color:var(--accent)" }, [
-    el("div", { class: "card-header" }, [closeBtn, el("span", { class: "card-title" }, "Полный промт turn'а")]),
-    el("div", { class: "card-body" }, [
-      el("div", { class: "mono dim", style: "font-size:11px; margin-bottom:8px" },
-        `ts=${item.ts}  source=${item.source}  prompt=${item.prompt_chars}ch  echo=${item.echo ? item.echo.pool + ":" + item.echo.id : "—"}`),
-      el("div", { class: "mono", style: "white-space:pre-wrap; font-size:12px; max-height:60vh; overflow:auto; background:var(--bg-elev, #111); padding:12px; border-radius:4px; border:1px solid var(--border, #333)" },
-        fullData?.system_prompt || "[system_prompt не захвачен — включи tuning.diagnostics.trace_prompts]"),
-      el("div", { style: "margin-top:8px; color:var(--muted); font-size:12px" }, `transcript: ${item.transcript || ""}`),
-      el("div", { style: "margin-top:4px; color:var(--accent); font-size:12px" }, `reply: ${item.reply || ""}`),
-    ]),
+function buildDetailContent(item, fullData) {
+  return el("div", { style: "padding:8px 0" }, [
+    el("div", { class: "mono dim", style: "font-size:11px; margin-bottom:8px; padding:0 16px" },
+      `ts=${item.ts}  source=${item.source}  prompt=${item.prompt_chars}ch  echo=${item.echo ? item.echo.pool + ":" + item.echo.id : "—"}`),
+    el("div", { class: "mono", style: "white-space:pre-wrap; font-size:12px; max-height:60vh; overflow:auto; background:var(--bg-elev, #111); padding:12px; margin:0 0 8px; border-radius:4px; border:1px solid var(--border, #333)" },
+      fullData?.system_prompt || "[system_prompt не захвачен — включи tuning.diagnostics.trace_prompts]"),
+    el("div", { style: "color:var(--muted); font-size:12px; padding:0 2px" }, `transcript: ${item.transcript || ""}`),
+    el("div", { style: "margin-top:4px; color:var(--accent); font-size:12px; padding:0 2px" }, `reply: ${item.reply || ""}`),
   ]);
-  closeBtn.addEventListener("click", () => wrap.remove());
-  container.appendChild(wrap);
-  wrap.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // ── Mount ─────────────────────────────────────────────────────────────
@@ -199,10 +198,12 @@ export function mount(target) {
             el("th", { style: "padding:8px; text-align:left" }, "Зритель"),
             el("th", { style: "padding:8px; text-align:left" }, "Адам"),
             el("th", { style: "padding:8px; text-align:right" }, "ASR"),
+            el("th", { style: "padding:8px; text-align:right; opacity:0.6" }, "VLM"),
             el("th", { style: "padding:8px; text-align:right" }, "LLM"),
             el("th", { style: "padding:8px; text-align:right" }, "TTS"),
             el("th", { style: "padding:8px; text-align:right" }, "∑"),
             el("th", { style: "padding:8px; text-align:right" }, "Чанки"),
+            el("th", { style: "padding:8px; text-align:right; opacity:0.6" }, "Sys.ch"),
           ])),
           tableBody,
         ]),
@@ -280,7 +281,14 @@ export function mount(target) {
   }
 
   // ── Prompts refresh ──
-  async function showFull(item) {
+  async function showFull(item, detailsBox, btn) {
+    // Toggle: collapse if already open.
+    if (detailsBox.children.length > 0) {
+      detailsBox.innerHTML = "";
+      if (btn) btn.textContent = item.system_prompt_available ? "PROMPT" : "DETAILS";
+      return;
+    }
+    if (btn) btn.textContent = "…";
     let fullData = item;
     if (!item.system_prompt) {
       try {
@@ -292,7 +300,10 @@ export function mount(target) {
         promptStatus.textContent = "ошибка: " + e.message;
       }
     }
-    detailModal(item, fullData, promptList);
+    detailsBox.innerHTML = "";
+    detailsBox.appendChild(buildDetailContent(item, fullData));
+    if (btn) btn.textContent = "▲ СВЕРНУТЬ";
+    detailsBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   async function refreshPrompts() {
@@ -350,7 +361,7 @@ export function mount(target) {
   const metricsInterval = setInterval(refresh, 15000);
   const promptsInterval = setInterval(() => {
     if (activeTab === "prompts") refreshPrompts();
-  }, 5000);
+  }, 30000);
 
   return () => {
     unsubscribe();
