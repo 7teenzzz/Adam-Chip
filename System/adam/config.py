@@ -18,6 +18,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mode": "maintenance",
         "data_dir": "data/adam",
         "persona_paths": [
+            "Agent Adam Chip/About/System.md",
             "Agent Adam Chip/About/Identity.md",
             "Agent Adam Chip/About/Lore.md",
             "Agent Adam Chip/About/Abilities.md",

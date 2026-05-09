@@ -71,7 +71,11 @@ class MediaHealth:
             video_device = remote_rtsp_url
             video_detail = remote_rtsp_url or "remote_rtsp_url is not configured"
         else:
-            device = self._extract_v4l2_device(pipeline) or "/dev/video0"
+            device = (
+                str(video.get("video_device", "")).strip()
+                or self._extract_v4l2_device(pipeline)
+                or "/dev/video0"
+            )
             video_device = device
             video_ready = Path(device).exists()
             video_detail = f"{device} exists" if video_ready else f"{device} not found"

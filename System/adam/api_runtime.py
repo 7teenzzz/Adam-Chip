@@ -246,14 +246,35 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
 
     @router.get("/api/live_vlm/status")
     async def live_vlm_status() -> dict[str, Any]:
-        """Probe the adam-live-vlm Docker container.
+        """Probe the adam-live-vlm Docker container."""
+        return await asyncio.to_thread(_docker_inspect, "adam-live-vlm")
 
-        Returns running flag, viewer URL, and (if running) seconds since the
-        container started. Used by #/camera UI to swap between snapshot and
-        WebRTC viewer.
-        """
-        info = await asyncio.to_thread(_docker_inspect, "adam-live-vlm")
-        return info
+    @router.post("/api/live_vlm/start")
+    async def live_vlm_start() -> dict[str, Any]:
+        """Start the VLM Docker container via adam_live_vlm.sh bg."""
+        import subprocess, pathlib
+        root = pathlib.Path(__file__).resolve().parents[2]
+        script = root / "scripts" / "adam_live_vlm.sh"
+        result = await asyncio.to_thread(
+            subprocess.run, [str(script), "bg"],
+            capture_output=True, text=True, timeout=30,
+        )
+        ok = result.returncode == 0
+        return {"ok": ok, "stdout": result.stdout[-500:], "stderr": result.stderr[-500:]}
+
+    @router.post("/api/live_vlm/stop")
+    async def live_vlm_stop() -> dict[str, Any]:
+        """Stop and remove the VLM Docker container."""
+        import subprocess
+        r1 = await asyncio.to_thread(
+            subprocess.run, ["docker", "stop", "adam-live-vlm"],
+            capture_output=True, text=True, timeout=30,
+        )
+        r2 = await asyncio.to_thread(
+            subprocess.run, ["docker", "rm", "adam-live-vlm"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return {"ok": r1.returncode == 0, "stop_rc": r1.returncode, "rm_rc": r2.returncode}
 
     @router.post("/api/agent/asr/upload")
     async def asr_upload(request: Request, auto_turn: bool = Query(False)) -> dict[str, Any]:
@@ -305,7 +326,6 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
                         yield ":\n\n"
                         continue
                     payload = json.dumps(event, ensure_ascii=False)
-                    yield f"event: {event.get('type', 'event')}\n"
                     yield f"id: {event.get('id', '')}\n"
                     yield f"data: {payload}\n\n"
             finally:
