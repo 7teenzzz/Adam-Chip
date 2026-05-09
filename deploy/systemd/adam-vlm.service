@@ -1,0 +1,28 @@
+[Unit]
+Description=Adam Chip VLM HTTP Service (VILA1.5-3b via nano_llm)
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+User=i17jet
+Group=i17jet
+SupplementaryGroups=render video docker
+WorkingDirectory=/home/i17jet/Agents/Adam-Chip
+EnvironmentFile=-/etc/adam-chip/adam.env
+Environment=JETSON_CONTAINERS_DIR=/home/i17jet/Agents/jetson-containers
+Environment=ADAM_VLM_MODEL=Efficient-Large-Model/VILA1.5-3b
+Environment=ADAM_VLM_HTTP_PORT=8050
+Environment=ADAM_VLM_MAX_TOKENS=48
+# Pre-stop any leftover container from previous run.
+ExecStartPre=-/usr/bin/docker stop adam-live-vlm
+ExecStartPre=-/usr/bin/docker rm adam-live-vlm
+ExecStart=/home/i17jet/Agents/Adam-Chip/scripts/adam_live_vlm.sh fg
+ExecStop=/usr/bin/docker stop adam-live-vlm
+Restart=on-failure
+RestartSec=10
+# VILA model load inside container takes 60-120 seconds.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
