@@ -84,11 +84,13 @@ ensure_env_line "ADAM_AUDIO_OUTPUT_DEVICE" "default"
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-orchestrator.service" /etc/systemd/system/adam-orchestrator.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-tts-silero.service" /etc/systemd/system/adam-tts-silero.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-asr-speaches.service" /etc/systemd/system/adam-asr-speaches.service
+install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-asr-whisper.service" /etc/systemd/system/adam-asr-whisper.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-llm.service" /etc/systemd/system/adam-llm.service
+install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-vlm.service" /etc/systemd/system/adam-vlm.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-exhibition.target" /etc/systemd/system/adam-exhibition.target
 
 systemctl daemon-reload
-systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-speaches.service adam-llm.service adam-exhibition.target
+systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-speaches.service adam-asr-whisper.service adam-llm.service adam-exhibition.target
 
 echo "Installed Adam Chip systemd units."
 echo "Edit ${ENV_FILE} for device/service overrides."
