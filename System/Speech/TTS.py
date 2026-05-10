@@ -40,9 +40,9 @@ _SAMPLE_RATE = 48000
 _MODEL_ID = "v5_5_ru"
 _DEFAULT_SPEAKER = "eugene"
 _PLAYBACK_ENABLED = os.environ.get("ADAM_TTS_PLAYBACK", "1") != "0"
-# Default to plughw:0,3 (HDMI 0 on Jetson Orin NX HDA card).
+# Default to plughw:1,3 (HDMI 0 on Jetson Orin NX HDA card).
 # Override via ADAM_TTS_OUTPUT_DEVICE env var.
-_PLAYBACK_DEVICE = os.environ.get("ADAM_TTS_OUTPUT_DEVICE", "plughw:0,3")
+_PLAYBACK_DEVICE = os.environ.get("ADAM_TTS_OUTPUT_DEVICE", "plughw:1,3")
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_MODELS_DIR = _PROJECT_ROOT / "Subsystem" / "Models"
@@ -277,7 +277,7 @@ def main() -> None:
     import uvicorn
 
     host = os.environ.get("ADAM_TTS_HOST", "0.0.0.0")
-    port = int(os.environ.get("ADAM_TTS_PORT", "8090"))
+    port = int(os.environ.get("ADAM_TTS_PORT", "8082"))
     app_dir = str(Path(__file__).resolve().parents[1])
     uvicorn.run("Speech.TTS:app", host=host, port=port, reload=False, app_dir=app_dir)
 

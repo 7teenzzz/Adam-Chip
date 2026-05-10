@@ -44,6 +44,9 @@ class MemoryStore:
                 """
             )
             conn.execute(
+                "CREATE INDEX IF NOT EXISTS dialogue_turns_speaker_idx ON dialogue_turns(speaker)"
+            )
+            conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS notes (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,6 +55,9 @@ class MemoryStore:
                   body TEXT NOT NULL
                 )
                 """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS notes_ts_idx ON notes(ts)"
             )
 
     def add_dialogue(self, speaker: str, text: str, meta_json: str = "{}") -> None:
@@ -145,15 +151,19 @@ class EpisodicMemory:
                 if ep.ts_end >= since:
                     yield ep
 
-    def query_by_name(self, name: str, limit: int = 2) -> list[Episode]:
+    def query_by_name(self, name: str, limit: int = 2, lookup_days: int = 30) -> list[Episode]:
         if not name:
             return []
         target = name.strip().lower()
+        cutoff_stem = (datetime.now(timezone.utc) - timedelta(days=lookup_days)).strftime(_EPISODE_DATE_FMT)
         matches: list[Episode] = []
-        for ep in self.iter_episodes():
-            stored = (ep.visitor.introduced_name or "").strip().lower()
-            if stored and stored == target:
-                matches.append(ep)
+        for path in sorted(self.episodes_dir.glob("*.jsonl")):
+            if path.stem < cutoff_stem:
+                continue
+            for ep in self._iter_jsonl(path):
+                stored = (ep.visitor.introduced_name or "").strip().lower()
+                if stored and stored == target:
+                    matches.append(ep)
         matches.sort(key=lambda e: e.ts_end, reverse=True)
         return matches[: max(0, limit)]
 

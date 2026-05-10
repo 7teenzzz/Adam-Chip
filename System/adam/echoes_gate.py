@@ -239,9 +239,13 @@ class EchoGate:
             if self._rng.random() > effective_weight:
                 return None
 
-            self.memory.record_echo_used(top.id, pool=self.pool)
+            echo_id = top.id
             self._last_use_turn = self._turn_counter
-            return InjectedEcho(entry=top, score=score, matched_tags=matched)
+            injected = InjectedEcho(entry=top, score=score, matched_tags=matched)
+
+        # Record use outside the lock to avoid holding it during file I/O.
+        self.memory.record_echo_used(echo_id, pool=self.pool)
+        return injected
 
     def note_turn(self) -> None:
         """Просто увеличить счётчик turn'ов без попытки инжекта.
@@ -264,11 +268,7 @@ class EchoGate:
     # ----- internal -----
 
     def _cooldown_days(self, tuning: EchoesTuning | ChineseTuning) -> int:
-        if isinstance(tuning, EchoesTuning):
-            return tuning.per_echo_cooldown_days
-        # для chinese нет per-echo days в tuning — используем то же что глобально
-        # (можно расширить в Tuning.json при необходимости)
-        return 7
+        return tuning.per_echo_cooldown_days
 
     def _score_match(self, entry: EchoEntry, transcript: str) -> tuple[float, list[str]]:
         """Tag-based матч: считаем сколько тегов entry присутствуют в transcript.

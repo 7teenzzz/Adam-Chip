@@ -35,10 +35,10 @@ class MetricsLog:
         if not self.path.exists():
             return
         try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()
+            lines = _tail_lines(self.path, self._recent.maxlen or 500)
         except OSError:
             return
-        for line in lines[-self._recent.maxlen:]:
+        for line in lines:
             try:
                 self._recent.append(json.loads(line))
             except json.JSONDecodeError:
@@ -80,6 +80,25 @@ class MetricsLog:
                 "n": len(values),
             }
         return out
+
+
+def _tail_lines(path: Path, n: int, chunk_size: int = 8192) -> list[str]:
+    """Read last *n* newline-delimited lines from *path* without loading the whole file."""
+    with path.open("rb") as fh:
+        fh.seek(0, 2)
+        remaining = fh.tell()
+        buf = b""
+        lines: list[bytes] = []
+        while remaining > 0 and len(lines) <= n:
+            read_size = min(chunk_size, remaining)
+            remaining -= read_size
+            fh.seek(remaining)
+            buf = fh.read(read_size) + buf
+            lines = buf.split(b"\n")
+        # First element may be an incomplete line if we didn't reach the start.
+        if remaining > 0 and lines:
+            lines = lines[1:]
+    return [line.decode("utf-8", errors="replace") for line in lines[-n:] if line.strip()]
 
 
 def _p95(values: list[float]) -> float:

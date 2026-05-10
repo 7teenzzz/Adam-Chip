@@ -21,7 +21,13 @@ class EventLog:
         self._lock = threading.Lock()
         self._recent: deque[dict[str, Any]] = deque(maxlen=memory_limit)
         self._subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]] = []
+        self._dropped_count: int = 0
         self.data_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def dropped_count(self) -> int:
+        with self._lock:
+            return self._dropped_count
 
     def append(self, event_type: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         event = {
@@ -76,8 +82,7 @@ class EventLog:
                 # Loop already closed — drop the subscriber on next sweep.
                 self.unsubscribe(queue)
 
-    @staticmethod
-    def _enqueue(queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
+    def _enqueue(self, queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
@@ -88,4 +93,5 @@ class EventLog:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                pass
+                with self._lock:
+                    self._dropped_count += 1

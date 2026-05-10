@@ -1,0 +1,64 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Adam Dash</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0a0a0b;--panel:#151515;--panel2:#101010;--line:#303030;--text:#f2f2f2;--muted:#a8a8a8;--ok:#43d17a;--bad:#ff6363;--warn:#f0b84a;--cyan:#64c8ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.35 system-ui,Segoe UI,Arial,sans-serif}
+a{color:var(--cyan);text-decoration:none}button,input,select{font:inherit}button{min-height:34px;border:1px solid #3b3b3b;border-radius:7px;background:#222;color:var(--text);cursor:pointer;padding:7px 10px}button.primary{background:#145a35;border-color:#247a4a}button.danger{background:#5a1d1d;border-color:#813030}
+input,select{width:100%;min-height:34px;background:#0b0b0b;color:var(--text);border:1px solid #333;border-radius:7px;padding:7px 9px}label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}
+.app{min-height:100vh;display:grid;grid-template-rows:auto 1fr}.top{position:sticky;top:0;z-index:4;background:#111;border-bottom:1px solid var(--line);padding:10px 14px}
+.topline{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.brand{font-weight:700;font-size:16px}.nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.flags{display:grid;grid-template-columns:repeat(6,minmax(78px,1fr));gap:8px;margin-top:10px}.flag{border:1px solid var(--line);background:#181818;border-radius:7px;padding:8px;min-width:0}.flag b{display:block;font-size:12px;text-transform:uppercase}.dot{display:inline-block;width:9px;height:9px;border-radius:99px;background:var(--bad);margin-right:6px}.flag.ok .dot{background:var(--ok)}.flag .small{font-size:12px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.layout{display:grid;grid-template-columns:290px minmax(0,1fr) 320px;gap:12px;padding:12px}.panel{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:12px;min-width:0}.panel+ .panel{margin-top:12px}h1,h2,h3{margin:0}h2{font-size:15px;margin-bottom:10px}h3{font-size:13px;color:var(--muted);margin-bottom:8px}
+.fields{display:grid;gap:9px}.twocol{display:grid;grid-template-columns:1fr 1fr;gap:8px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.kv{display:grid;grid-template-columns:minmax(94px,auto) 1fr;gap:7px 10px;align-items:center}.k{color:var(--muted)}.v{overflow-wrap:anywhere}.oktext{color:var(--ok)}.badtext{color:var(--bad)}.muted{color:var(--muted)}.mono{font-family:Consolas,Menlo,monospace}
+.stream-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(240px,.9fr);gap:12px}.streambox{background:#050505;border:1px solid var(--line);border-radius:8px;overflow:hidden;min-height:220px}.streambox img{width:100%;aspect-ratio:4/3;display:block;object-fit:contain;background:#000}audio{width:100%;margin-top:8px}
+.pca-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.line{border:1px solid #343434;border-radius:7px;background:#111;padding:8px;min-width:0}.line-head{display:flex;justify-content:space-between;gap:8px;font-size:12px}.bar{height:6px;background:#2b2b2b;border-radius:99px;overflow:hidden;margin-top:7px}.bar span{display:block;height:100%;background:var(--cyan);width:0%}.err{border-color:#693030;background:#241313;color:#ffc6c6}
+@media(max-width:1100px){.layout{grid-template-columns:1fr}.stream-grid{grid-template-columns:1fr}.flags{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:560px){.flags{grid-template-columns:repeat(2,minmax(0,1fr))}.pca-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.twocol{grid-template-columns:1fr}}
+</style></head><body><div class="app">
+<header class="top"><div class="topline"><div><div class="brand">Adam Dash</div><div id="sensorLine" class="muted">loading...</div></div><nav class="nav"><a href="/debug">/debug</a><a href="/agent">/agent</a><a id="espLink" target="_blank">ESP</a></nav></div><div id="flags" class="flags"></div></header>
+<main class="layout">
+<aside>
+  <section class="panel"><h2>Camera Settings</h2><div class="fields"><div><label>Preset</label><select id="camPreset"></select></div><div class="twocol"><div><label>Framesize</label><select id="camFramesize"></select></div><div><label>Quality</label><input id="camQuality" type="number" min="4" max="63"></div></div></div><div class="actions"><button class="primary" id="applyCamPreset">Apply preset</button><button id="applyCam">Apply camera</button><button id="reloadCam">Reload stream</button></div><div id="camMsg" class="muted" style="margin-top:8px"></div></section>
+  <section class="panel"><h2>Mic Settings</h2><div class="fields"><div><label>Profile</label><select id="micProfile"></select></div><div class="twocol"><div><label>Gain</label><input id="micGain" type="number" min="0.25" max="32" step="0.25"></div><div><label>DC Block</label><select id="micDc"><option value="true">on</option><option value="false">off</option></select></div></div><div class="twocol"><div><label>Slot</label><select id="micSlot"><option value="1">left</option><option value="2">right</option></select></div><div><label>Shift</label><input id="micShift" type="number" min="0" max="24"></div></div></div><div class="actions"><button class="primary" id="applyMic">Apply mic</button></div><div id="micMsg" class="muted" style="margin-top:8px"></div></section>
+</aside>
+<section>
+  <section class="panel"><h2>Streams</h2><div class="stream-grid"><div><h3>Camera</h3><div class="streambox"><img id="camStream" alt="camera stream"></div><div id="camMeta" class="muted" style="margin-top:8px"></div></div><div><h3>Mic</h3><div class="panel" style="margin:0;background:var(--panel2)"><div id="micMeta" class="kv"></div><audio id="micStream" controls></audio><div class="actions"><a id="micOpen" target="_blank">open stream</a></div></div></div></div></section>
+  <section class="panel"><h2>PCA</h2><div id="pcaSummary" class="kv"></div><div id="pcaLines" class="pca-grid" style="margin-top:10px"></div></section>
+</section>
+<aside>
+  <section class="panel"><h2>ESP System</h2><div id="systemStatus" class="kv"></div><div class="actions"><a id="otaLink" target="_blank">OTA</a><button id="resetLatency">Reset video latency</button></div><div id="systemMsg" class="muted" style="margin-top:8px"></div></section>
+  <section class="panel"><h2>Errors</h2><div id="errorStatus" class="kv"></div></section>
+</aside>
+</main></div>
+<script>
+const UI_CONFIG=__ADAM_CONFIG__;
+let state=null; let controlsReady=false;
+const q=(id)=>document.getElementById(id);
+async function api(path,opts){const r=await fetch(path,opts);const text=await r.text();let data={};try{data=JSON.parse(text)}catch{data={raw:text}}if(!r.ok)throw new Error(data.detail||data.error||text||r.status);return data;}
+function esc(v){return String(v??'n/a').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function okClass(v){return v?'oktext':'badtext';}function yn(v){return `<span class="${okClass(v)}">${v?'ok':'fail'}</span>`;}
+function kv(id,rows){q(id).innerHTML=rows.map(([k,v])=>`<div class="k">${esc(k)}</div><div class="v">${v}</div>`).join('');}
+function fmtBytes(v){v=Number(v||0);if(v>1048576)return `${(v/1048576).toFixed(1)} MB`;if(v>1024)return `${Math.round(v/1024)} KB`;return `${v} B`;}
+function fmtMs(v){v=Number(v||0);return v>999?`${(v/1000).toFixed(1)} s`:`${v} ms`;}
+function cameraObj(){const c=state?.camera||{};return c.camera||c;}function audioObj(){return state?.audio||{};}function pcaObj(){const p=state?.pca||{};return p.pca9685||p;}
+function fillControls(){const c=cameraObj();const preset=q('camPreset');preset.innerHTML='';(c.presets||[]).forEach(p=>{const o=document.createElement('option');o.value=p.name;o.textContent=p.builtin?`${p.name} [builtin]`:p.name;preset.appendChild(o);});if(c.preset)preset.value=c.preset;const fs=q('camFramesize');fs.innerHTML='';((c.capabilities||{}).framesize_options||[]).forEach(x=>{const o=document.createElement('option');o.value=x.value;o.textContent=`${x.name} (${x.value})`;fs.appendChild(o);});if(!fs.options.length)fs.appendChild(new Option(String(c.framesize??0),String(c.framesize??0)));if(c.framesize!==undefined)fs.value=String(c.framesize);if(c.quality!==undefined)q('camQuality').value=c.quality;
+const a=audioObj().capture||{};const profile=q('micProfile');profile.innerHTML='';(a.profiles||[]).forEach(name=>profile.appendChild(new Option(name,name)));if(a.profile)profile.value=a.profile;q('micGain').value=Number(a.software_gain??1).toFixed(2);q('micDc').value=String(!!a.dc_block);q('micSlot').value=String(a.preferred_slot||1);q('micShift').value=a.sample_shift??0;controlsReady=true;}
+function render(){if(!state)return;const mods=state.modules||{};q('flags').innerHTML=['mic','cam','pcm5102','pca9685','temt600','pir'].map(name=>`<div class="flag ${mods[name]?'ok':''}"><b><span class="dot"></span>${name}</b><div class="small">${mods[name]?'ready':'offline'}</div></div>`).join('');
+const sensors=state.sensors||{};q('sensorLine').textContent=`light ${sensors.light_raw??'n/a'} / ${sensors.light_norm??'n/a'} | motion ${sensors.motion?'yes':'no'} | changed ${fmtMs(sensors.motion_changed_ms_ago)} ago`;
+q('espLink').href=state.esp?.base_url||'#';q('otaLink').href=(state.esp?.base_url||'')+'/ota';const c=cameraObj();const a=audioObj();const cap=a.capture||{};const play=a.playback||{};const d=state.dashboard||{};const s=state.status||{};const p=pcaObj();
+q('camMeta').textContent=`${c.preset||d.camera_preset||'preset n/a'} | ${d.fps||c.capture_fps||0} FPS | clients ${d.video_clients??s.video_clients??0}`;
+kv('micMeta', [['capture',yn(!!cap.ready)],['profile',esc(cap.profile)],['signal',esc(cap.signal_state)],['peak / avg',`${esc(cap.selected_peak)} / ${esc(cap.average_level)}`],['clients',esc(a.clients??s.audio_clients)]]);
+kv('pcaSummary', [['ready',yn(!!p.ready)],['scene',esc(p.active_scene)],['active',esc(p.active_channels)],['frequency',esc(p.frequency)],['address',esc(p.address)]]);
+q('pcaLines').innerHTML=(p.channels||Array(16).fill(0)).map((v,i)=>{const pct=Math.max(0,Math.min(100,Number(v||0)/4095*100));return `<div class="line"><div class="line-head"><b>CH ${i}</b><span class="mono">${v}</span></div><div class="bar"><span style="width:${pct}%"></span></div></div>`;}).join('');
+kv('systemStatus', [['Wi-Fi',yn(!!(d.wifi_connected??s.wifi_connected))],['IP',esc(d.ip||s.ip)],['RSSI',esc(d.wifi_rssi_cached??s.wifi_rssi_cached??s.wifi_rssi)],['Boot',esc(d.boot_stage||s.boot_stage)],['Heap',fmtBytes(s.heap_free)],['PSRAM',fmtBytes(s.psram_free)],['Camera',yn(!!(d.camera_ready??s.camera_ready))],['PCM5102',yn(!!(d.speaker_ready??s.speaker_ready??play.ready))]]);
+kv('errorStatus', [['Init',esc(d.last_init_error||s.last_init_error||'none')],['Stream',esc(d.last_stream_error||s.last_stream_error||'none')],['Sound',esc(d.last_sound_result||s.last_sound_result||'idle')],['Upload bytes',esc(d.last_sound_bytes||s.last_sound_bytes||0)]]);
+if(!controlsReady)fillControls();}
+async function refresh(){try{state=await api('/api/ui/status');render();}catch(e){q('systemMsg').textContent=String(e);}}
+function reloadCamera(){q('camStream').src=(state?.esp?.camera_stream_url||UI_CONFIG._ui.camera_stream_url)+'?ts='+Date.now();}
+q('micStream').src=UI_CONFIG._ui.mic_stream_url;q('micOpen').href=UI_CONFIG._ui.mic_stream_url;reloadCamera();
+q('reloadCam').onclick=reloadCamera;q('applyCamPreset').onclick=async()=>{try{await api('/api/ui/camera/preset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preset:q('camPreset').value})});controlsReady=false;await refresh();reloadCamera();q('camMsg').textContent='applied';}catch(e){q('camMsg').textContent=String(e);}};
+q('applyCam').onclick=async()=>{try{await api('/api/ui/camera',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({framesize:Number(q('camFramesize').value),quality:Number(q('camQuality').value)})});controlsReady=false;await refresh();reloadCamera();q('camMsg').textContent='applied';}catch(e){q('camMsg').textContent=String(e);}};
+q('applyMic').onclick=async()=>{try{await api('/api/ui/audio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:q('micProfile').value,software_gain:Number(q('micGain').value),dc_block:q('micDc').value==='true',slot:Number(q('micSlot').value),shift:Number(q('micShift').value)})});controlsReady=false;await refresh();q('micMsg').textContent='applied';}catch(e){q('micMsg').textContent=String(e);}};
+q('resetLatency').onclick=async()=>{try{await api('/api/ui/video-latency/reset',{method:'POST'});q('systemMsg').textContent='latency reset';}catch(e){q('systemMsg').textContent=String(e);}};
+refresh();setInterval(refresh,1200);
+</script></body></html>

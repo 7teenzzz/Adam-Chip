@@ -29,6 +29,7 @@ function buildTopbar() {
   ]);
 
   const onlineDot = statusDot("warn", "online");
+  onlineDot.id = "topbar-online-dot";
   const services = el("div", { class: "row", id: "topbar-services" });
 
   const modeSelect = el("select", {
@@ -74,9 +75,8 @@ const NAV_STRUCTURE = [
     id: "config",
     children: [
       { sectionLabel: "Система" },
-      { key: "settings",   label: "Конфигурация" },
+      { key: "settings",   label: "Настройки" },
       { key: "models",     label: "Модели" },
-      { key: "tuning",     label: "Тюнинг" },
       { key: "subsystem",  label: "Подсистема" },
       { key: "services",   label: "Сервисы" },
       { separator: true },
@@ -192,6 +192,15 @@ function paintLatency(status) {
   });
 }
 
+function overallKind(services, mcu) {
+  const healths = [...Object.values(services || {}), mcu].filter(Boolean);
+  if (!healths.length) return "warn";
+  if (healths.every((h) => h?.ok === true)) return "ok";
+  if (healths.some((h) => h?.loading === true)) return "amber";
+  if (healths.some((h) => h?.ok === false)) return "bad";
+  return "warn";
+}
+
 function paintTopbarStatus(status) {
   const root = document.getElementById("topbar-services");
   if (!root) return;
@@ -210,6 +219,12 @@ function paintTopbarStatus(status) {
   });
   const mcu = status?.mcu;
   root.appendChild(statusDot(kindFromHealth(mcu), "ESP", `ESP32: ${mcu?.error || (mcu?.ok ? "ok" : "—")}`));
+
+  const onlineWrap = document.getElementById("topbar-online-dot");
+  if (onlineWrap) {
+    const dot = onlineWrap.querySelector(".dot");
+    if (dot) dot.className = `dot ${overallKind(services, mcu)}`;
+  }
 }
 
 function paintMode(status) {

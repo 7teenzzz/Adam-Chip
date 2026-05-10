@@ -18,9 +18,9 @@ function el(tag, attrs, children = []) {
 }
 
 const SERVICE_META = {
-  llm: { label: "LLM (llama-server)",   unit: "adam-llm.service",          desc: "Inference на GPU, порт :8051" },
-  tts: { label: "TTS (Silero)",          unit: "adam-tts-silero.service",   desc: "Синтез речи, порт :8090" },
-  asr: { label: "ASR (Whisper)",         unit: "adam-asr-whisper.service",  desc: "Распознавание речи, порт :8095" },
+  llm: { label: "LLM (llama-server)",   unit: "adam-llm.service",           desc: "Inference на GPU, порт :8081" },
+  tts: { label: "TTS (Silero)",          unit: "adam-tts-silero.service",   desc: "Синтез речи, порт :8082" },
+  asr: { label: "ASR (speaches)",        unit: "adam-asr-speaches.service", desc: "Распознавание речи, порт :8083" },
 };
 
 // ── VLM Docker card (не systemd, управляется через Docker API) ──────────
@@ -53,7 +53,7 @@ function buildVlmCard() {
     try {
       const data = await api.get("/api/live_vlm/status");
       const running = !!data.running;
-      statusDot.className  = running ? "dot good" : "dot bad";
+      statusDot.className  = running ? "dot ok" : "dot bad";
       statusText.textContent = running ? "running" : "stopped";
       btnStart.disabled = running || busy;
       btnStop.disabled  = !running || busy;
@@ -73,7 +73,7 @@ function buildVlmCard() {
     ]),
     el("div", { class: "card-body" }, [
       el("div", { class: "muted", style: "margin-bottom:10px;font-size:12px", text: "adam-live-vlm (Docker)" }),
-      el("div", { class: "muted", style: "margin-bottom:12px", text: "Описание сцены через камеру, порт :8050" }),
+      el("div", { class: "muted", style: "margin-bottom:12px", text: "Описание сцены через камеру, порт :8084" }),
       el("div", { class: "row", style: "gap:8px" }, [btnStart, btnStop]),
     ]),
   ]);
@@ -82,7 +82,7 @@ function buildVlmCard() {
 }
 
 const STATE_STYLE = {
-  active:       { dot: "good",  text: "active" },
+  active:       { dot: "ok",    text: "active" },
   activating:   { dot: "warn",  text: "activating" },
   deactivating: { dot: "warn",  text: "stopping" },
   inactive:     { dot: "bad",   text: "inactive" },
@@ -167,22 +167,6 @@ export function mount(root) {
   );
   const vlmCard = buildVlmCard();
 
-  const note = el("div", { class: "card" }, [
-    el("div", { class: "card-body muted", style: "font-size:12px" }, [
-      el("strong", {}, "Требования: "),
-      "кнопки Start/Stop используют ",
-      el("code", {}, "sudo -n systemctl"),
-      ". Для работы из WebUI добавь NOPASSWD-правило:",
-      el("pre", { style: "margin-top:6px;font-size:11px" },
-        `%i17jet ALL=(ALL) NOPASSWD: /usr/bin/systemctl start adam-*.service\n` +
-        `%i17jet ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop adam-*.service\n` +
-        `%i17jet ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart adam-*.service`
-      ),
-      "Или запусти: ",
-      el("code", {}, "sudo visudo -f /etc/sudoers.d/adam-services"),
-    ]),
-  ]);
-
   const refreshBtn = el("button", { class: "btn btn-sm", style: "margin-bottom:16px" }, "↺ Обновить");
 
   async function refreshAll() {
@@ -199,7 +183,6 @@ export function mount(root) {
   );
   cards.forEach((c) => root.appendChild(c.card));
   root.appendChild(vlmCard.card);
-  root.appendChild(note);
 
   refreshAll();
   const interval = setInterval(refreshAll, 5000);

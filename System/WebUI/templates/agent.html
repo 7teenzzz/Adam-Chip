@@ -1,0 +1,55 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Adam Chip</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{margin:0;background:#070707;color:#f4f4f4;font:14px/1.4 system-ui,Segoe UI,Arial,sans-serif}
+.wrap{max-width:1320px;margin:0 auto;padding:16px}.top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px}
+.panel{border:1px solid #2a2a2a;background:#111;padding:12px;border-radius:8px;min-height:128px}
+.panel h3{margin:0 0 8px 0;font-size:15px}.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 10px}.k{color:#aaa}.v{overflow-wrap:anywhere}
+.ok{color:#55d17a}.bad{color:#ff6868}.muted{color:#aaa}pre{white-space:pre-wrap;margin:0;max-height:280px;overflow:auto}
+button,input{font:inherit}button{padding:8px 10px;background:#1d7f43;color:white;border:0;border-radius:6px;cursor:pointer}
+button.secondary{background:#333}.row{display:flex;gap:8px;flex-wrap:wrap}.turn{display:flex;gap:8px;margin-top:12px}
+input{flex:1;min-width:220px;padding:9px;background:#050505;color:#fff;border:1px solid #333;border-radius:6px}
+@media(max-width:980px){.grid{grid-template-columns:1fr}.kv{grid-template-columns:96px 1fr}.turn{flex-direction:column}}
+</style></head><body><div class="wrap">
+<div class="top"><div><h1 style="margin:0">Adam Chip</h1><div class="muted" id="mode">mode</div></div>
+<div class="row"><a href="/dash" style="color:#55d17a">/dash</a><a href="/debug" style="color:#55d17a">/debug</a><button onclick="setMode('maintenance')" class="secondary">maintenance</button><button onclick="setMode('exhibition')">exhibition</button><button onclick="listenStart()">listen start</button><button onclick="listenStop()" class="secondary">listen stop</button><button onclick="stopAgent()" class="secondary">stop/idle</button><button onclick="testVoice()" class="secondary">test voice</button></div></div>
+<div class="turn"><input id="text" placeholder="Тестовая реплика зрителя"><button onclick="turn()">test turn</button></div>
+<div class="grid">
+  <section class="panel"><h3>Power</h3><div class="kv" id="power"></div></section>
+  <section class="panel"><h3>Media</h3><div class="kv" id="media"></div></section>
+  <section class="panel"><h3>LLM</h3><div class="kv" id="llm"></div></section>
+  <section class="panel"><h3>TTS</h3><div class="kv" id="tts"></div></section>
+  <section class="panel"><h3>ASR</h3><div class="kv" id="asr"></div></section>
+  <section class="panel"><h3>VLM</h3><div class="kv" id="vlm"></div></section>
+  <section class="panel"><h3>Voice Loop</h3><div class="kv" id="voice"></div></section>
+  <section class="panel"><h3>Scene</h3><div class="kv" id="scene"></div></section>
+  <section class="panel"><h3>ESP / MCU</h3><div class="kv" id="mcu"></div></section>
+  <section class="panel"><h3>Exhibition Gate</h3><div class="kv" id="gate"></div></section>
+</div>
+<div class="grid"><section class="panel" style="grid-column:1/-1"><h3>Events</h3><pre id="events">loading</pre></section></div>
+</div><script>
+async function j(url, opts){const r=await fetch(url, opts); const t=await r.text(); try{return JSON.parse(t)}catch{return t}}
+function yes(v){return v?'<span class="ok">ok</span>':'<span class="bad">fail</span>'}
+function kv(root, rows){document.getElementById(root).innerHTML=rows.map(([k,v])=>`<div class="k">${k}</div><div class="v">${v}</div>`).join('')}
+async function refresh(){const s=await j('/api/agent/status'); mode.textContent=`${s.agent.mode}${s.agent.speaking?' | speaking':''}`;
+kv('power',[['gate',yes(s.power.ok)],['mode',yes(s.power.mode_ok)],['clocks',yes(s.power.clocks_ok)],['errors',(s.power.errors||[]).join(', ')||'none']]);
+kv('media',[['video',`${yes(s.media.video.ready)} ${s.media.video.device||''}`],['input',`${yes(s.media.audio.input_ready)} ${s.media.audio.input_device}`],['output',`${yes(s.media.audio.output_ready)} ${s.media.audio.output_device}`]]);
+kv('llm',[['state',yes(s.services.llm.ok)],['detail',s.services.llm.detail||'']]);
+kv('tts',[['state',yes(s.services.tts.ok)],['detail',s.services.tts.detail||'']]);
+kv('asr',[['state',yes(s.services.asr.ok)],['detail',s.services.asr.detail||'']]);
+kv('vlm',[['state',yes(s.services.vlm.ok)],['detail',s.services.vlm.detail||''],['blocking',(s.exhibition_gate.non_blocking||[]).includes('vlm')?'no':'yes']]);
+kv('voice',[['running',yes(s.voice_loop.running)],['vad',s.voice_loop.vad_state||'idle'],['muted',String(!!s.voice_loop.muted_by_tts)],['last',s.voice_loop.last_transcript||'none'],['error',s.voice_loop.last_asr_error||'none']]);
+kv('scene',[['state',s.scene_cache.stale?'<span class="bad">stale</span>':'<span class="ok">fresh</span>'],['source',s.scene_cache.source||'manual'],['updated',s.scene_cache.updated_at||'never'],['summary',s.scene_cache.summary||'none']]);
+kv('mcu',[['state',yes(s.mcu.ok)],['ip',s.mcu.data?.ip||'n/a'],['boot',s.mcu.data?.boot_stage||'n/a']]);
+kv('gate',[['state',yes(s.exhibition_gate.ok)],['failed',(s.exhibition_gate.failed||[]).join(', ')||'none']]);
+events.textContent=JSON.stringify(await j('/api/agent/events?limit=30'), null, 2)}
+async function setMode(m){await j('/api/agent/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m})}); refresh()}
+async function listenStart(){await j('/api/agent/listen/start',{method:'POST'}); refresh()}
+async function listenStop(){await j('/api/agent/listen/stop',{method:'POST'}); refresh()}
+async function stopAgent(){await j('/api/agent/stop',{method:'POST'}); refresh()}
+async function testVoice(){await j('/api/agent/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'Проверка голоса Adam Chip.'})}); refresh()}
+async function turn(){const transcript=document.getElementById('text').value; await j('/api/agent/turn',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript})}); document.getElementById('text').value=''; refresh()}
+refresh(); setInterval(refresh,3000)
+</script></body></html>

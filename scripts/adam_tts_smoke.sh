@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TTS_URL="${ADAM_TTS_URL:-http://127.0.0.1:8090}"
+TTS_URL="${ADAM_TTS_URL:-http://127.0.0.1:8082}"
 TEXT="${1:-Проверка голоса Adam Chip.}"
 TMP="$(mktemp)"
 trap 'rm -f "${TMP}"' EXIT

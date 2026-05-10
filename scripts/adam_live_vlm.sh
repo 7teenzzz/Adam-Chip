@@ -3,7 +3,7 @@
 #
 # Запускает Docker-контейнер dustynv/nano_llm с FastAPI HTTP-сервисом VLM.py.
 # Сервис принимает кадры в OpenAI vision формате и возвращает описание сцены.
-# Совместим с VLMClient оркестратора: http://127.0.0.1:8050/v1/chat/completions
+# Совместим с VLMClient оркестратора: http://127.0.0.1:8084/v1/chat/completions
 #
 # Использование:
 #   scripts/adam_live_vlm.sh          # foreground (Ctrl-C для остановки)
@@ -14,7 +14,7 @@
 #
 # ENV overrides:
 #   ADAM_VLM_MODEL        Efficient-Large-Model/VILA1.5-3b
-#   ADAM_VLM_HTTP_PORT    8050          (HTTP REST API порт)
+#   ADAM_VLM_HTTP_PORT    8084          (HTTP REST API порт)
 #   ADAM_VLM_MAX_TOKENS   48
 #   ADAM_VLM_IMAGE        dustynv/nano_llm:r36.4.0  (override image tag)
 #   JETSON_CONTAINERS_DIR /home/i17jet/Agents/jetson-containers
@@ -26,7 +26,7 @@ JC="${JETSON_CONTAINERS_DIR:-/home/i17jet/Agents/jetson-containers}"
 CONTAINER_NAME="adam-live-vlm"
 
 MODEL="${ADAM_VLM_MODEL:-Efficient-Large-Model/VILA1.5-3b}"
-HTTP_PORT="${ADAM_VLM_HTTP_PORT:-8050}"
+HTTP_PORT="${ADAM_VLM_HTTP_PORT:-8084}"
 MAX_TOKENS="${ADAM_VLM_MAX_TOKENS:-48}"
 
 VLM_PY="${ROOT_DIR}/System/Speech/VLM.py"

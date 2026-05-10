@@ -1,5 +1,5 @@
 [Unit]
-Description=Adam Chip · llama-server (LLM inference, OpenAI-compatible API :8051)
+Description=Adam Chip · llama-server (LLM inference, OpenAI-compatible API :8081)
 Documentation=https://github.com/ggerganov/llama.cpp
 After=network-online.target
 Wants=network-online.target
@@ -16,7 +16,7 @@ EnvironmentFile=-/etc/adam-chip/adam.env
 # Defaults — override in /etc/adam-chip/adam.env
 Environment=ADAM_LLM_LLAMACPP_DIR=/home/i17jet/Agents/Adam-Chip/Subsystem/llama.cpp
 Environment=ADAM_LLM_GGUF_PATH=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf
-Environment=ADAM_LLM_PORT=8051
+Environment=ADAM_LLM_PORT=8081
 Environment=ADAM_LLM_CTX=8192
 Environment=ADAM_LLM_GPU_LAYERS=99
 
@@ -37,9 +37,15 @@ ExecStart=/bin/bash -c \
     --cache-type-v q8_0'
 
 Restart=on-failure
+StartLimitIntervalSec=120
+StartLimitBurst=5
 RestartSec=5
 TimeoutStartSec=180
 # llama-server loads the model into GPU memory on startup — can take 30–120s.
+
+# cgroup limits: leave ~1 GB for OS and other services on 16 GB Jetson.
+MemoryMax=15G
+CPUQuota=90%
 
 [Install]
 WantedBy=multi-user.target

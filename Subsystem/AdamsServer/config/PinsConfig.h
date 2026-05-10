@@ -58,9 +58,9 @@
 //   MO (Module Output) = физически ESP MOSI (GPIO 21)
 
 #define ETH_SPI_SCK   14   // SCK
-#define ETH_SPI_MISO  46   // подключить к MI на модуле
-#define ETH_SPI_MOSI  21   // подключить к MO на модуле
-#define ETH_SPI_CS    45   // CS (physical pin exists on this board, shared with strapping)
+#define ETH_SPI_MISO  46   // MI22222
+#define ETH_SPI_MOSI  21   // MO
+#define ETH_SPI_CS    45   // CS
 
 #define ETH_INT       -1   // INT not connected, W5500 works in polling mode
 #define ETH_RST       -1   // RST -> 10K Omh -> 3V3

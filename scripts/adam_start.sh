@@ -6,11 +6,7 @@
 #   ./scripts/adam_start.sh --llm --tts      # только LLM + TTS
 #   ./scripts/adam_start.sh --empty          # только UI/оркестратор, без моделей
 #
-# Флаги (можно комбинировать):
-#   --llm     llama-server (LLM inference)
-#   --tts     Silero TTS
-#   --asr     Whisper ASR
-#   --vlm     Live VLM (Docker)
+# Флаги (можно комбинировать): --llm --tts --asr --vlm     
 #   --empty   только оркестратор (UI, настройки) — ни одна модель не стартует
 #
 # Если флаги не переданы — запускается вся система (режим "всё").
@@ -30,7 +26,7 @@ MODELS_DIR="${ADAM_MODELS_DIR:-${ROOT_DIR}/Subsystem/Models}"
 LIVE_VLM_CONTAINER="adam-live-vlm"
 LIVE_VLM_CAMERA="${ADAM_VLM_CAMERA:-/dev/video0}"
 LLAMACPP_DIR="${ADAM_LLM_LLAMACPP_DIR:-${ROOT_DIR}/Subsystem/llama.cpp}"
-LLM_PORT="${ADAM_LLM_PORT:-8051}"
+LLM_PORT="${ADAM_LLM_PORT:-8081}"
 
 # --------- argument parsing --------------------------------------------------
 EXPLICIT_NODES=false
@@ -102,7 +98,7 @@ fi
 # Build speech services list
 SPEECH_SERVICES=()
 ${START_TTS} && SPEECH_SERVICES+=(adam-tts-silero.service)
-${START_ASR} && SPEECH_SERVICES+=(adam-asr-whisper.service)
+${START_ASR} && SPEECH_SERVICES+=(adam-asr-speaches.service)
 
 mkdir -p "${LOG_DIR}" \
   "${MODELS_DIR}/silero" "${MODELS_DIR}/whisper" "${MODELS_DIR}/vlm" "${MODELS_DIR}/hf/hub"
@@ -148,7 +144,7 @@ if ${START_LLM}; then
     echo "  ! adam-llm.service не установлен. Сначала: scripts/adam_install_systemd.sh"
   else
     if ! systemctl is-active --quiet adam-llm; then
-      echo "⏵ Запуск adam-llm.service (sudo):"
+      echo "⏵ Запуск adam-llm.service:"
       # Kill stray llama-server that might hold port 8051 from a previous session.
       strays="$(pgrep -f 'llama-server' || true)"
       if [[ -n "${strays}" ]]; then
@@ -170,30 +166,33 @@ fi
 
 # --------- 2. Speech services (TTS / ASR) ------------------------------------
 if [[ ${#SPEECH_SERVICES[@]} -gt 0 ]]; then
-  need_systemd=false
+  SERVICES_AVAILABLE=()
   for s in "${SPEECH_SERVICES[@]}"; do
     if ! systemctl cat "${s}" >/dev/null 2>&1; then
       echo "  ! ${s} не установлен. Сначала: scripts/adam_install_systemd.sh"
-      continue
-    fi
-    if ! systemctl is-active --quiet "${s}"; then
-      need_systemd=true
-    fi
-  done
-
-  if ${need_systemd}; then
-    echo "⏵ Запуск speech-сервисов (sudo):"
-    sudo systemctl start "${SPEECH_SERVICES[@]}" >/dev/null 2>&1 || true
-    sleep 2
-  fi
-
-  for s in "${SPEECH_SERVICES[@]}"; do
-    if systemctl is-active --quiet "${s}" 2>/dev/null; then
-      echo "  ✓ ${s}"
     else
-      echo "  ✗ ${s} (см. journalctl -u ${s} -n 30)"
+      SERVICES_AVAILABLE+=("${s}")
     fi
   done
+
+  if [[ ${#SERVICES_AVAILABLE[@]} -gt 0 ]]; then
+    need_systemd=false
+    for s in "${SERVICES_AVAILABLE[@]}"; do
+      if ! systemctl is-active --quiet "${s}"; then need_systemd=true; fi
+    done
+
+    if ${need_systemd}; then
+      echo "⏵ Запуск speech-сервисов:"
+      sudo systemctl start "${SERVICES_AVAILABLE[@]}" >/dev/null 2>&1 || true
+      sleep 2
+    fi
+
+    for s in "${SERVICES_AVAILABLE[@]}"; do
+      systemctl is-active --quiet "${s}" 2>/dev/null \
+        && echo "  ✓ ${s}" \
+        || echo "  ✗ ${s} (см. journalctl -u ${s} -n 30)"
+    done
+  fi
 fi
 
 # --------- resolve VLM & expected services before orchestrator ---------------
@@ -291,7 +290,7 @@ IP="$(hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^192\.168\./){
 
 vlm_url=""
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${LIVE_VLM_CONTAINER}"; then
-  vlm_url="http://${IP}:8050/"
+  vlm_url="http://${IP}:8084/"
 fi
 
 cat <<EOF

@@ -5,7 +5,6 @@ import base64
 import io
 import json
 import re
-import socket
 import time
 import wave
 from dataclasses import dataclass
@@ -27,7 +26,7 @@ class ServiceHealth:
 
 class OpenAIChatClient:
     def __init__(self, config: dict[str, Any]) -> None:
-        self.base_url = str(config.get("base_url", "http://127.0.0.1:8000/v1")).rstrip("/")
+        self.base_url = str(config.get("base_url", "http://127.0.0.1:8081/v1")).rstrip("/")
         self.model = str(config.get("model", "qwen3-4b-quantized"))
         self.timeout = float(config.get("timeout_sec", 30))
         self.temperature = float(config.get("temperature", 0.7))
@@ -118,71 +117,24 @@ class OpenAIChatClient:
             return json.loads(resp.read().decode("utf-8"))
 
 
-class OllamaChatClient:
-    def __init__(self, config: dict[str, Any]) -> None:
-        self.base_url = str(config.get("base_url", "http://127.0.0.1:11434")).rstrip("/")
-        self.model = str(config.get("model", "gemma3:4b"))
-        self.timeout = float(config.get("timeout_sec", 30))
-        self.temperature = float(config.get("temperature", 0.7))
-        self.max_tokens = int(config.get("max_tokens", 220))
-
-    async def generate(self, messages: list[dict[str, str]]) -> str:
-        return await asyncio.to_thread(self._generate_sync, messages)
-
-    async def health(self) -> ServiceHealth:
-        return await asyncio.to_thread(self._health_sync)
-
-    def _generate_sync(self, messages: list[dict[str, str]]) -> str:
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "temperature": self.temperature,
-                "num_predict": self.max_tokens,
-            },
-        }
-        raw = self._post("/api/chat", payload)
-        content = raw.get("message", {}).get("content", "")
-        if not content:
-            raise RuntimeError("ollama returned empty message")
-        return str(content).strip()
-
-    def _health_sync(self) -> ServiceHealth:
-        try:
-            req = Request(self.base_url + "/api/tags", method="GET")
-            with urlopen(req, timeout=2) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
-            models = raw.get("models", [])
-            model_names = {str(item.get("name", "")) for item in models if isinstance(item, dict)}
-            if self.model in model_names:
-                return ServiceHealth(True, f"ollama model ready: {self.model}")
-            return ServiceHealth(False, f"ollama reachable, model not found: {self.model}")
-        except (HTTPError, URLError, OSError, json.JSONDecodeError) as exc:
-            return ServiceHealth(False, str(exc))
-
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        body = json.dumps(payload).encode("utf-8")
-        req = Request(self.base_url + path, data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
-        with urlopen(req, timeout=self.timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-
-
-def create_llm_client(config: dict[str, Any]) -> OpenAIChatClient | OllamaChatClient:
-    provider = str(config.get("provider", "openai")).strip().lower()
-    if provider == "ollama":
-        return OllamaChatClient(config)
+def create_llm_client(config: dict[str, Any]) -> OpenAIChatClient:
     return OpenAIChatClient(config)
 
 
 class TTSClient:
     def __init__(self, config: dict[str, Any]) -> None:
-        self.base_url = str(config.get("base_url", "http://127.0.0.1:8090")).rstrip("/")
+        self.base_url = str(config.get("base_url", "http://127.0.0.1:8082")).rstrip("/")
         self.timeout = float(config.get("timeout_sec", 20))
         self.speaker = str(config.get("speaker", "eugene"))
         self.output_device = str(config.get("output_device", "")).strip()
         self._current_play_proc: Any = None  # active aplay Popen handle for barge-in interrupt
+        self._session: Any = None
+
+    def _get_session(self) -> Any:
+        if self._session is None or self._session.is_closed:
+            import httpx
+            self._session = httpx.Client(base_url=self.base_url, timeout=self.timeout, trust_env=False)
+        return self._session
 
     async def speak(self, text: str) -> dict[str, Any]:
         chunks = [chunk for chunk in split_sentences(text) if chunk.strip()]
@@ -199,37 +151,33 @@ class TTSClient:
         payload: dict[str, Any] = {"text": text, "speaker": self.speaker}
         if self.output_device:
             payload["output_device"] = self.output_device
-        body = json.dumps(payload).encode("utf-8")
-        req = Request(self.base_url + "/speak", data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
         try:
-            with urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-                body = self._decode(raw)
-                playback = body.get("playback", {}) if isinstance(body.get("playback"), dict) else {}
-                playback_ok = bool(playback.get("ok", True)) if playback.get("enabled", True) else True
-                body_ok = bool(body.get("ok", True))
-                return {"ok": resp.status < 500 and body_ok and playback_ok, "status": resp.status, "body": body}
-        except (HTTPError, URLError, OSError) as exc:
+            resp = self._get_session().post("/speak", json=payload)
+            body = self._decode(resp.text)
+            playback = body.get("playback", {}) if isinstance(body.get("playback"), dict) else {}
+            playback_ok = bool(playback.get("ok", True)) if playback.get("enabled", True) else True
+            body_ok = bool(body.get("ok", True))
+            return {"ok": resp.status_code < 500 and body_ok and playback_ok, "status": resp.status_code, "body": body}
+        except Exception as exc:
             return {"ok": False, "status": 0, "error": str(exc), "text": text}
 
     def _get_wav_bytes_sync(self, text: str) -> bytes | None:
         """Synthesize text and return raw WAV bytes without triggering playback."""
         payload: dict[str, Any] = {"text": text, "speaker": self.speaker}
-        body = json.dumps(payload).encode("utf-8")
-        req = Request(self.base_url + "/wav", data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
         try:
-            with urlopen(req, timeout=self.timeout) as resp:
-                return resp.read()
-        except (HTTPError, URLError, OSError):
+            resp = self._get_session().post("/wav", json=payload)
+            resp.raise_for_status()
+            return resp.content
+        except Exception:
             return None
 
     def _play_wav_bytes_sync(self, wav_bytes: bytes) -> dict[str, Any]:
-        """Play WAV bytes locally via aplay. Blocks until playback completes.
+        """Play WAV bytes locally. Blocks until playback completes.
 
         Uses Popen (not subprocess.run) so that interrupt_playback() can kill
         the process mid-playback for barge-in support.
+
+        Try order: paplay (PulseAudio) → aplay <device> → aplay default.
         """
         import shutil
         import subprocess
@@ -242,21 +190,44 @@ class TTSClient:
                 wav_path = f.name
         except OSError as exc:
             return {"ok": False, "error": f"tempfile: {exc}"}
+
+        def _candidates() -> list[list[str]]:
+            # Prefer explicit ALSA device (reliable for HDMI output).
+            # Fall back to default ALSA, then PulseAudio default sink.
+            cmds: list[list[str]] = []
+            if ap := shutil.which("aplay"):
+                cmds.append([ap, "-q", "-D", dev, wav_path])
+                if dev != "default":
+                    cmds.append([ap, "-q", "-D", "default", wav_path])
+            if pp := shutil.which("paplay"):
+                cmds.append([pp, wav_path])
+            return cmds
+
+        candidates = _candidates()
+        if not candidates:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+            return {"ok": False, "error": "no audio player found"}
+
+        last_rc = -1
         try:
-            player = shutil.which("aplay")
-            if not player:
-                return {"ok": False, "error": "aplay not found"}
-            self._current_play_proc = subprocess.Popen(
-                [player, "-q", "-D", dev, wav_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            returncode = self._current_play_proc.wait()
-            self._current_play_proc = None
-            return {"ok": returncode == 0, "returncode": returncode}
+            for cmd in candidates:
+                self._current_play_proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                last_rc = self._current_play_proc.wait()
+                self._current_play_proc = None
+                if last_rc == 0:
+                    return {"ok": True, "returncode": 0, "player": cmd[0]}
+            return {"ok": False, "returncode": last_rc, "player": candidates[-1][0]}
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
         finally:
+            self._current_play_proc = None
             try:
                 os.unlink(wav_path)
             except OSError:
@@ -295,94 +266,21 @@ class TTSClient:
             return {"raw": raw}
 
 
-class RivaASRClient:
-    def __init__(self, config: dict[str, Any]) -> None:
-        self.host = str(config.get("host", "127.0.0.1"))
-        self.port = int(config.get("port", 50051))
-        self.language_code = str(config.get("language_code", "ru-RU"))
-        self.sample_rate = int(config.get("sample_rate", 16000))
-        self.audio_channel_count = int(config.get("audio_channel_count", 1))
-        self.chunk_bytes = int(config.get("chunk_bytes", 3200))
-
-    async def health(self) -> ServiceHealth:
-        return await asyncio.to_thread(self._health_sync)
-
-    def _health_sync(self) -> ServiceHealth:
-        try:
-            with socket.create_connection((self.host, self.port), timeout=1.5):
-                return ServiceHealth(True, f"riva reachable: {self.host}:{self.port}")
-        except OSError as exc:
-            return ServiceHealth(False, str(exc))
-
-    async def transcribe_pcm(self, pcm: bytes) -> str:
-        return await asyncio.to_thread(self._transcribe_pcm_sync, pcm)
-
-    def _transcribe_pcm_sync(self, pcm: bytes) -> str:
-        if not pcm:
-            return ""
-        try:
-            import riva.client  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise RuntimeError("nvidia-riva-client is not installed") from exc
-
-        auth = riva.client.Auth(uri=f"{self.host}:{self.port}")
-        asr_service = riva.client.ASRService(auth)
-        config = riva.client.RecognitionConfig(
-            language_code=self.language_code,
-            encoding=riva.client.AudioEncoding.LINEAR_PCM,
-            sample_rate_hertz=self.sample_rate,
-            audio_channel_count=self.audio_channel_count,
-            max_alternatives=1,
-            enable_automatic_punctuation=True,
-        )
-        streaming_config = riva.client.StreamingRecognitionConfig(config=config, interim_results=True)
-
-        def chunks() -> Any:
-            for offset in range(0, len(pcm), self.chunk_bytes):
-                yield pcm[offset : offset + self.chunk_bytes]
-
-        if hasattr(asr_service, "streaming_response_generator"):
-            transcript = ""
-            responses = asr_service.streaming_response_generator(chunks(), streaming_config)
-            for response in responses:
-                for result in getattr(response, "results", []):
-                    alternatives = getattr(result, "alternatives", [])
-                    if not alternatives:
-                        continue
-                    text = str(getattr(alternatives[0], "transcript", "")).strip()
-                    if getattr(result, "is_final", False) and text:
-                        transcript = text
-            return transcript
-
-        wav_bytes = self._pcm_to_wav(pcm)
-        response = asr_service.offline_recognize(wav_bytes, config)
-        return self._best_transcript(response)
-
-    def _pcm_to_wav(self, pcm: bytes) -> bytes:
-        out = io.BytesIO()
-        with wave.open(out, "wb") as handle:
-            handle.setnchannels(self.audio_channel_count)
-            handle.setsampwidth(2)
-            handle.setframerate(self.sample_rate)
-            handle.writeframes(pcm)
-        return out.getvalue()
-
-    @staticmethod
-    def _best_transcript(response: Any) -> str:
-        for result in getattr(response, "results", []):
-            alternatives = getattr(result, "alternatives", [])
-            if alternatives:
-                return str(getattr(alternatives[0], "transcript", "")).strip()
-        return ""
-
 
 class WhisperASRClient:
     """HTTP client for the ASR_Whisper.py microservice (faster-whisper)."""
 
     def __init__(self, config: dict[str, Any]) -> None:
-        self.base_url = str(config.get("base_url", "http://127.0.0.1:8095")).rstrip("/")
+        self.base_url = str(config.get("base_url", "http://127.0.0.1:8083")).rstrip("/")
         self.sample_rate = int(config.get("sample_rate", 16000))
         self.timeout = float(config.get("timeout_sec", 30))
+        self._session: Any = None
+
+    def _get_session(self) -> Any:
+        if self._session is None or self._session.is_closed:
+            import httpx
+            self._session = httpx.Client(base_url=self.base_url, timeout=self.timeout, trust_env=False)
+        return self._session
 
     async def health(self) -> ServiceHealth:
         return await asyncio.to_thread(self._health_sync)
@@ -404,11 +302,16 @@ class WhisperASRClient:
         if not pcm:
             return ""
         wav_bytes = self._pcm_to_wav(pcm)
-        req = Request(self.base_url + "/transcribe", data=wav_bytes, method="POST")
-        req.add_header("Content-Type", "audio/wav")
-        with urlopen(req, timeout=self.timeout) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
-        return str(raw.get("transcript", "")).strip()
+        try:
+            resp = self._get_session().post("/transcribe", content=wav_bytes, headers={"Content-Type": "audio/wav"})
+            resp.raise_for_status()
+            return str(resp.json().get("transcript", "")).strip()
+        except Exception:
+            req = Request(self.base_url + "/transcribe", data=wav_bytes, method="POST")
+            req.add_header("Content-Type", "audio/wav")
+            with urlopen(req, timeout=self.timeout) as resp_u:
+                raw = json.loads(resp_u.read().decode("utf-8"))
+            return str(raw.get("transcript", "")).strip()
 
     def _pcm_to_wav(self, pcm: bytes) -> bytes:
         out = io.BytesIO()
@@ -430,7 +333,7 @@ class SpeachesASRClient:
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
-        self.base_url = str(config.get("base_url", "http://127.0.0.1:8000")).rstrip("/")
+        self.base_url = str(config.get("base_url", "http://127.0.0.1:8083")).rstrip("/")
         self.model = str(config.get("model", "Systran/faster-whisper-medium"))
         self.language = str(config.get("language", "ru"))
         self.sample_rate = int(config.get("sample_rate", 16000))
@@ -479,7 +382,6 @@ class SpeachesASRClient:
             raw = resp.json()
         except Exception:
             # Fallback to urllib if httpx not available or session broken.
-            self._session = None
             req = Request(self.base_url + "/v1/audio/transcriptions", data=body, method="POST")
             req.add_header("Content-Type", content_type)
             with urlopen(req, timeout=self.timeout) as resp_u:
@@ -521,13 +423,11 @@ class SpeachesASRClient:
         return out.getvalue()
 
 
-def create_asr_client(config: dict[str, Any]) -> RivaASRClient | WhisperASRClient | SpeachesASRClient:
-    provider = str(config.get("provider", "riva")).strip().lower()
-    if provider == "whisper":
-        return WhisperASRClient(config)
+def create_asr_client(config: dict[str, Any]) -> WhisperASRClient | SpeachesASRClient:
+    provider = str(config.get("provider", "whisper")).strip().lower()
     if provider == "speaches":
         return SpeachesASRClient(config)
-    return RivaASRClient(config)
+    return WhisperASRClient(config)
 
 
 _VLM_DEFAULT_PROMPT = (
@@ -537,11 +437,18 @@ _VLM_DEFAULT_PROMPT = (
 
 class VLMClient:
     def __init__(self, config: dict[str, Any]) -> None:
-        self.base_url = str(config.get("base_url", "http://127.0.0.1:8050")).rstrip("/")
-        self.timeout = float(config.get("timeout_sec", 5))
+        self.base_url = str(config.get("base_url", "http://127.0.0.1:8084")).rstrip("/")
+        self.timeout = float(config.get("timeout_sec", 15))
         self.model = str(config.get("model", "Efficient-Large-Model/VILA1.5-3b"))
         self.max_new_tokens = int(config.get("max_new_tokens", 48))
         self.prompt = str(config.get("prompt", _VLM_DEFAULT_PROMPT))
+        self._session: Any = None
+
+    def _get_session(self) -> Any:
+        if self._session is None or self._session.is_closed:
+            import httpx
+            self._session = httpx.Client(base_url=self.base_url, timeout=self.timeout, trust_env=False)
+        return self._session
 
     async def health(self) -> ServiceHealth:
         return await asyncio.to_thread(self._health_sync)
@@ -596,11 +503,16 @@ class VLMClient:
         raise RuntimeError("; ".join(errors) or "vlm returned no scene description")
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        body = json.dumps(payload).encode("utf-8")
-        req = Request(self.base_url + path, data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
-        with urlopen(req, timeout=self.timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        try:
+            resp = self._get_session().post(path, json=payload, headers={"Content-Type": "application/json"})
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            body = json.dumps(payload).encode("utf-8")
+            req = Request(self.base_url + path, data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            with urlopen(req, timeout=self.timeout) as resp_u:
+                return json.loads(resp_u.read().decode("utf-8"))
 
     @staticmethod
     def _extract_chat_text(raw: dict[str, Any]) -> str:

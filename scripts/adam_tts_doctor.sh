@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TTS_URL="${ADAM_TTS_URL:-http://127.0.0.1:8090}"
+TTS_URL="${ADAM_TTS_URL:-http://127.0.0.1:8082}"
 OUTPUT_DEVICE="${ADAM_TTS_OUTPUT_DEVICE:-${ADAM_AUDIO_OUTPUT_DEVICE:-default}}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="${ADAM_VENV:-${ROOT_DIR}/.venv}"

@@ -12,7 +12,8 @@ WorkingDirectory=/home/i17jet/Agents/Adam-Chip
 EnvironmentFile=-/etc/adam-chip/adam.env
 Environment=PYTHONPATH=/home/i17jet/Agents/Adam-Chip/System
 Environment=ADAM_VENV=/home/i17jet/Agents/Adam-Chip/.venv
-Environment=ADAM_TTS_OUTPUT_DEVICE=plughw:0,3
+Environment=ADAM_TTS_PORT=8082
+Environment=ADAM_TTS_OUTPUT_DEVICE=plughw:1,3
 Environment=ADAM_MODELS_DIR=/home/i17jet/Agents/Adam-Chip/Subsystem/Models
 Environment=ADAM_TTS_MODEL_PATH=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/silero/v5_5_ru.pt
 # Lets the service push audio through the operator's PulseAudio session.
@@ -23,6 +24,8 @@ ExecStartPre=/usr/bin/test -x /home/i17jet/Agents/Adam-Chip/.venv/bin/python
 ExecStartPre=-/usr/bin/pulseaudio --start --daemonize=yes
 ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python -m Speech.TTS
 Restart=on-failure
+StartLimitIntervalSec=120
+StartLimitBurst=5
 RestartSec=3
 TimeoutStartSec=60
 

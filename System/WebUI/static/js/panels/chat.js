@@ -1,7 +1,6 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
 import { toast } from "../widgets/toast.js";
-import { encodeWav } from "../widgets/wav.js";
 
 function el(tag, attrs, children = []) {
   const node = document.createElement(tag);
@@ -184,14 +183,8 @@ export function mount(target) {
     if (!sc?.text) { sceneCaption.textContent = "Сцена не описана."; return; }
     sceneCaption.textContent = sc.text + (sc.stale ? " (устарело)" : "");
   }
-  let voiceLoopActive = false;
-  function paintVoiceLoop() {
-    const running = !!state.get("status")?.voice_loop?.running;
-    if (running !== voiceLoopActive) syncVoiceLoopBtn(running);
-  }
-  const unsubScene = state.subscribe("status", () => { paintScene(); paintVoiceLoop(); });
+  const unsubScene = state.subscribe("status", () => { paintScene(); });
   paintScene();
-  paintVoiceLoop();
   startJetTimer();
 
   // ---- Transcript ----
@@ -213,167 +206,7 @@ export function mount(target) {
   });
 
   const sendBtn = el("button", { class: "btn btn-primary", onclick: () => send() }, "Отправить ⏎");
-  const sayBtn = el("button", {
-    class: "btn",
-    title: "Просто проговорить вслух (без диалога)",
-    onclick: async () => {
-      const text = input.value.trim();
-      if (!text) return;
-      try { await api.post("/api/agent/say", { text }); toast("Голос отправлен в TTS", "ok"); }
-      catch (e) { toast(e.message, "bad"); }
-    },
-  }, "Озвучить");
   const clearBtn = el("button", { class: "btn btn-ghost", onclick: () => { input.value = ""; input.focus(); } }, "Очистить");
-
-  // ---- Mic (PTT) ----
-  const micBtn = el("button", { class: "btn btn-icon", title: "Голосовой ввод (удерживай)" }, "🎙");
-  let micStream = null, micRecorder = null, micChunks = [], micBusy = false;
-  let micAudioCtx = null, micAnalyser = null;
-
-  async function ensureMicStream() {
-    if (micStream) return micStream;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Микрофон доступен только по HTTPS или localhost");
-    }
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, sampleRate: 16000, noiseSuppression: true, echoCancellation: true },
-      video: false,
-    });
-    micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = micAudioCtx.createMediaStreamSource(micStream);
-    micAnalyser = micAudioCtx.createAnalyser();
-    micAnalyser.fftSize = 2048;
-    source.connect(micAnalyser);
-    // AudioContext may start suspended (autoplay policy); resume immediately.
-    // On localhost this usually succeeds without a gesture.
-    if (micAudioCtx.state === "suspended") {
-      micAudioCtx.resume().catch(() => {});
-    }
-    return micStream;
-  }
-
-  async function micStart() {
-    if (micBusy || micRecorder?.state === "recording") return;
-    try { await ensureMicStream(); }
-    catch (e) { toast("Микрофон недоступен: " + e.message, "bad"); return; }
-    micChunks = [];
-    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"]
-      .find((t) => MediaRecorder.isTypeSupported(t)) || "";
-    micRecorder = new MediaRecorder(micStream, mime ? { mimeType: mime } : {});
-    micRecorder.ondataavailable = (ev) => { if (ev.data?.size) micChunks.push(ev.data); };
-    micRecorder.onstop = micProcess;
-    micRecorder.start();
-    micBtn.textContent = "⏺"; micBtn.style.borderColor = "var(--bad)";
-  }
-
-  async function micStop() {
-    if (!micRecorder || micRecorder.state !== "recording") return;
-    micBtn.textContent = "⏳"; micBtn.style.borderColor = "";
-    micRecorder.stop();
-  }
-
-  async function micProcess() {
-    const blob = new Blob(micChunks, { type: micRecorder?.mimeType || "audio/webm" });
-    micChunks = [];
-    if (blob.size < 1500) { micBtn.textContent = "🎙"; return; }
-    micBusy = true;
-    try {
-      const wav = await encodeWav(blob, 16000);
-      const res = await fetch("/api/agent/asr/upload?auto_turn=true", {
-        method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav,
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (data.transcript) {
-        transcript.appendChild(bubble({ speaker: "viewer", text: data.transcript, ts: new Date().toISOString() }));
-        scrollBottom();
-      }
-      if (data.turn?.ok && data.turn.reply) {
-        transcript.appendChild(bubble({
-          speaker: "adam", text: data.turn.reply, ts: new Date().toISOString(),
-          timings: data.turn.timings, voice_degraded: data.turn.voice_degraded,
-        }));
-        scrollBottom();
-      }
-    } catch (e) { toast(e.message, "bad"); }
-    finally { micBusy = false; micBtn.textContent = "🎙"; micBtn.style.borderColor = ""; }
-  }
-
-  micBtn.addEventListener("mousedown", (e) => { e.preventDefault(); micStart(); });
-  micBtn.addEventListener("mouseup",   (e) => { e.preventDefault(); micStop(); });
-  micBtn.addEventListener("mouseleave", () => { if (micRecorder?.state === "recording") micStop(); });
-  micBtn.addEventListener("touchstart", (e) => { e.preventDefault(); micStart(); }, { passive: false });
-  micBtn.addEventListener("touchend",   (e) => { e.preventDefault(); micStop(); }, { passive: false });
-
-  // ---- VAD toggle ----
-  let vadTimer = null;
-
-  function startVad() {
-    if (vadTimer) return;
-    let aboveSince = 0, belowSince = 0;
-    const THRESHOLD = 0.025, ENTER_MS = 200, EXIT_MS = 700;
-    vadTimer = setInterval(() => {
-      if (!micAnalyser) return;
-      const buf = new Float32Array(micAnalyser.fftSize);
-      micAnalyser.getFloatTimeDomainData(buf);
-      let sum = 0; for (const v of buf) sum += v * v;
-      const rms = Math.sqrt(sum / buf.length);
-      const now = performance.now(), recording = micRecorder?.state === "recording";
-      if (rms > THRESHOLD) {
-        if (!aboveSince) aboveSince = now;
-        belowSince = 0;
-        if (!recording && !micBusy && now - aboveSince > ENTER_MS) micStart();
-      } else {
-        if (recording) { if (!belowSince) belowSince = now; if (now - belowSince > EXIT_MS) micStop(); }
-        aboveSince = 0;
-      }
-    }, 80);
-  }
-  function stopVad() { if (vadTimer) { clearInterval(vadTimer); vadTimer = null; } }
-
-  const vadCheckbox = el("input", { type: "checkbox", id: "chat-vad-toggle", style: "accent-color:var(--accent)" });
-  const vadLabel = el("label", {
-    for: "chat-vad-toggle",
-    style: "display:flex; gap:5px; align-items:center; cursor:pointer; font-size:10px; color:var(--muted); letter-spacing:0.05em; text-transform:uppercase; white-space:nowrap",
-  }, [vadCheckbox, el("span", null, "VAD")]);
-
-  vadCheckbox.addEventListener("change", async (e) => {
-    if (e.target.checked) {
-      try { await ensureMicStream(); }
-      catch (err) { toast("Микрофон недоступен: " + err.message, "bad"); e.target.checked = false; return; }
-      startVad();
-    } else { stopVad(); }
-  });
-
-  // ---- Jetson voice loop toggle (used when getUserMedia is unavailable, e.g. HTTP from LAN) ----
-  const hasMicApi = !!navigator.mediaDevices?.getUserMedia;
-
-  function syncVoiceLoopBtn(running) {
-    if (!voiceLoopBtn) return;
-    voiceLoopActive = !!running;
-    voiceLoopBtn.textContent = running ? "⏹ Jetson mic вкл" : "🎤 Jetson mic";
-    voiceLoopBtn.style.borderColor = running ? "var(--bad)" : "";
-  }
-
-  const voiceLoopBtn = el("button", {
-    class: "btn",
-    title: "Запустить голосовой цикл Jetson (mic → ASR). Транскрипты появятся в чате автоматически.",
-    onclick: async () => {
-      try {
-        if (!voiceLoopActive) {
-          await api.post("/api/agent/listen/start", {});
-          voiceLoopActive = true;
-          voiceLoopBtn.textContent = "⏹ Jetson mic вкл";
-          voiceLoopBtn.style.borderColor = "var(--bad)";
-        } else {
-          await api.post("/api/agent/listen/stop", {});
-          voiceLoopActive = false;
-          voiceLoopBtn.textContent = "🎤 Jetson mic";
-          voiceLoopBtn.style.borderColor = "";
-        }
-      } catch (e) { toast(e.message, "bad"); }
-    },
-  }, "🎤 Jetson mic");
 
   // ---- Layout ----
   const card = el("section", { class: "card", style: "flex:1; display:flex; flex-direction:column; min-height:0" }, [
@@ -388,10 +221,8 @@ export function mount(target) {
         transcript,
         el("div", { class: "row-stretch", style: "gap:8px" }, [input]),
         el("div", { class: "row", style: "gap:6px; align-items:center; flex-wrap:wrap" }, [
-          sendBtn, sayBtn,
-          hasMicApi ? micBtn : null,
+          sendBtn,
           el("span", { class: "spacer" }),
-          hasMicApi ? vadLabel : voiceLoopBtn,
           clearBtn,
         ]),
       ]),

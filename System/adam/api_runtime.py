@@ -31,10 +31,6 @@ from .memory import MemoryStore
 from .metrics import MetricsLog
 
 
-# Hardcoded Silero v5_5_ru speakers — the model is fixed at install time so
-# enumerating a remote API would be wasted overhead.
-SILERO_RU_SPEAKERS = ["aidar", "baya", "kseniya", "xenia", "eugene", "random"]
-
 WHISPER_SIZES = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
 
 # Sections whose patches require which client to be rebuilt. Keys are dotted
@@ -128,7 +124,7 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             "provider": str(tts_cfg.get("provider", "silero")),
             "model": str(tts_cfg.get("model", "v5_5_ru")),
             "current": str(tts_cfg.get("speaker", "eugene")),
-            "available": [{"name": speaker} for speaker in SILERO_RU_SPEAKERS],
+            "available": [{"name": s} for s in tts_cfg.get("available_speakers", ["eugene"])],
         }
 
     @router.get("/api/models/asr")
@@ -137,7 +133,7 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         provider = str(asr_cfg.get("provider", "riva"))
         whisper_current = str(asr_cfg.get("model", "medium")) if provider == "whisper" else "medium"
         whisper_status: dict[str, Any] = {"provider_active": provider == "whisper"}
-        whisper_base = str(asr_cfg.get("base_url", "http://127.0.0.1:8095")).rstrip("/")
+        whisper_base = str(asr_cfg.get("base_url", "http://127.0.0.1:8083")).rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=2.0, trust_env=False) as client:
                 resp = await client.get(f"{whisper_base}/health")
@@ -212,7 +208,6 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
 
     @router.get("/api/persona")
     async def get_persona() -> dict[str, Any]:
-        from .prompt import BASE_SYSTEM_PROMPT
         paths = deps.settings.section("agent").get("persona_paths", [])
         files = []
         for rel in paths:
@@ -220,7 +215,7 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             name = p.stem
             content = p.read_text("utf-8") if p.exists() else ""
             files.append({"name": name, "path": rel, "content": content})
-        return {"base_prompt": BASE_SYSTEM_PROMPT, "files": files}
+        return {"base_prompt": "", "files": files}
 
     @router.put("/api/persona")
     async def put_persona(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:

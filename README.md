@@ -20,7 +20,7 @@ Adam Chip — художественно-исследовательская аг
 
 ```
 Jetson (inference node)          ESP32-S3 (peripheral node)
-  FastAPI orchestrator      ←→     192.168.0.172
+  FastAPI orchestrator      ←→     192.168.0.171
   llama.cpp LLM                    PCA9685 PWM (motors)
   VILA VLM (scene)                 INMP441 mic uplink
   Whisper ASR (ru-RU)              PCM5102A speaker
@@ -192,7 +192,7 @@ powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com
 powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1
 
 # OTA по Wi-Fi
-powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_ota.ps1 -Host 192.168.0.172
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_ota.ps1 -Host 192.168.0.171
 ```
 
 COM-порты: `COM7` = прошивка, `COM6` = логи приложения

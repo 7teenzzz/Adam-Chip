@@ -24,6 +24,8 @@ Environment=HF_HUB_OFFLINE=1
 Environment=TRANSFORMERS_OFFLINE=1
 ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python -m Speech.ASR_Whisper
 Restart=on-failure
+StartLimitIntervalSec=120
+StartLimitBurst=5
 RestartSec=3
 TimeoutStartSec=120
 

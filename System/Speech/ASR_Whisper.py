@@ -29,12 +29,21 @@ os.environ.setdefault("HF_HOME", str(_HF_HOME))
 os.environ.setdefault("HF_HUB_CACHE", str(_HF_HOME / "hub"))
 
 try:
+    from contextlib import asynccontextmanager
+    import asyncio
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import Response
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("FastAPI is required: python3 -m pip install fastapi uvicorn") from exc
 
-app = FastAPI(title="Adam Chip Whisper ASR", version="0.1.0")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    await asyncio.to_thread(_get_model)
+    yield
+
+
+app = FastAPI(title="Adam Chip Whisper ASR", version="0.1.0", lifespan=_lifespan)
 
 _MODEL: Any = None
 _MODEL_LOCK = threading.Lock()

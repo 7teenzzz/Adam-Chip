@@ -87,11 +87,24 @@ class MediaHealth:
         audio_details: list[str] = []
 
         if arecord:
-            code, out = _run([arecord, "-l"])
-            audio_input_ready = code == 0 and "card" in out.lower()
-            if input_device != "default":
-                audio_input_ready = audio_input_ready and self._alsa_device_available(out, input_device)
-            audio_details.append("arecord ok" if audio_input_ready else out[:300])
+            if input_device in ("pulse", "pipewire"):
+                # PulseAudio/PipeWire: check daemon is responding and has at least one source.
+                pactl = shutil.which("pactl")
+                if pactl:
+                    code, out = _run([pactl, "list", "sources", "short"])
+                    audio_input_ready = code == 0 and bool(out.strip())
+                    audio_details.append(f"pulse ok ({input_device})" if audio_input_ready else f"pulse: {out[:200]}")
+                else:
+                    # pactl not available; fall back to arecord -l listing
+                    code, out = _run([arecord, "-l"])
+                    audio_input_ready = code == 0 and "card" in out.lower()
+                    audio_details.append("arecord ok (no pactl)" if audio_input_ready else out[:300])
+            else:
+                code, out = _run([arecord, "-l"])
+                audio_input_ready = code == 0 and "card" in out.lower()
+                if input_device != "default":
+                    audio_input_ready = audio_input_ready and self._alsa_device_available(out, input_device)
+                audio_details.append("arecord ok" if audio_input_ready else out[:300])
         else:
             audio_details.append("arecord not installed")
 

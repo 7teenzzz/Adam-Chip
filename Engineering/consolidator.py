@@ -283,6 +283,10 @@ def main() -> int:
              settings.data_dir, tuning.memory.episodic.decay_days,
              tuning.memory.consolidator.model)
 
+    if not tuning.memory.consolidator.model and not args.decay_only:
+        log.warning("consolidator.model not set in Tuning.json — LLM consolidation disabled; run with --decay-only or set model")
+        if not args.decay_only:
+            return 1
     if not tuning.memory.consolidator.enabled and not args.decay_only:
         log.info("consolidator disabled in tuning, exiting")
         return 0

@@ -101,4 +101,4 @@ PYEOF
 echo
 echo "Следующий шаг — запустить llama-server и проверить:"
 echo "  sudo systemctl start adam-llm"
-echo "  curl -s http://127.0.0.1:8051/v1/models | python3 -m json.tool"
+echo "  curl -s http://127.0.0.1:8081/v1/models | python3 -m json.tool"

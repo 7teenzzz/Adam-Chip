@@ -10,7 +10,7 @@ from typing import Any
 ADAM_SERVICES: dict[str, str] = {
     "llm": "adam-llm.service",
     "tts": "adam-tts-silero.service",
-    "asr": "adam-asr-whisper.service",
+    "asr": "adam-asr-speaches.service",
 }
 
 

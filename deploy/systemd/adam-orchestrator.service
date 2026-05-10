@@ -12,13 +12,21 @@ WorkingDirectory=/home/i17jet/Agents/Adam-Chip
 EnvironmentFile=-/etc/adam-chip/adam.env
 Environment=PYTHONPATH=/home/i17jet/Agents/Adam-Chip/System
 Environment=ADAM_VENV=/home/i17jet/Agents/Adam-Chip/.venv
+# Lets the service push/pull audio through the operator's PulseAudio session.
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
 PermissionsStartOnly=true
 ExecStartPre=/home/i17jet/Agents/Adam-Chip/scripts/adam_power_maxn.sh
+# Start PulseAudio for this user session if not already running.
+ExecStartPre=-/usr/bin/pulseaudio --start --daemonize=yes
 ExecStartPre=/usr/bin/test -x /home/i17jet/Agents/Adam-Chip/.venv/bin/python
+ExecStartPre=/bin/sh -c 'until curl --noproxy "*" -fsS http://127.0.0.1:8081/health >/dev/null 2>&1; do sleep 5; done'
 ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python /home/i17jet/Agents/Adam-Chip/System/Orchestrator.py
 Restart=on-failure
+StartLimitIntervalSec=120
+StartLimitBurst=5
 RestartSec=3
-TimeoutStartSec=60
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target

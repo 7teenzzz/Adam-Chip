@@ -11,7 +11,8 @@ import threading
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from typing import Optional
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from .config import PROJECT_ROOT
 
@@ -30,6 +31,16 @@ class EpisodicWeights(BaseModel):
     tone: float = Field(0.15, ge=0, le=1)
     echoes_used: float = Field(0.10, ge=0, le=1)
     new_question: float = Field(0.10, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _weights_sum_to_one(self) -> "EpisodicWeights":
+        total = (
+            self.introduced_name + self.duration + self.themes
+            + self.tone + self.echoes_used + self.new_question
+        )
+        if abs(total - 1.0) > 0.01:
+            raise ValueError(f"EpisodicWeights must sum to 1.0 ± 0.01, got {total:.4f}")
+        return self
 
 
 class EpisodicTuning(BaseModel):
@@ -55,7 +66,7 @@ class RecentInjectionTuning(BaseModel):
 
 class ConsolidatorTuning(BaseModel):
     enabled: bool = True
-    model: str = "qwen2.5:7b"
+    model: Optional[str] = None
     window_start: str = "03:00"
     window_end: str = "05:00"
     max_episodes_per_run: int = Field(200, ge=1)
@@ -83,6 +94,7 @@ class EchoesTuning(BaseModel):
 class ChineseTuning(BaseModel):
     enabled: bool = True
     global_cooldown_turns: int = Field(30, ge=0)
+    per_echo_cooldown_days: int = Field(7, ge=0)
     match_threshold: float = Field(0.65, ge=0, le=1)
     weight_multiplier: float = Field(1.0, ge=0, le=5)
     audio_mode: Literal[
@@ -181,39 +193,45 @@ class TuningStore:
         except Exception as exc:  # pragma: no cover
             log.error("failed to load tuning: %s", exc, exc_info=True)
 
-    def _reload_locked(self) -> None:
+    def _reload_locked(self) -> Optional["Tuning"]:
+        """Reload from disk if mtime changed. Returns new Tuning if listeners should fire, else None."""
         try:
             stat = self.path.stat()
         except FileNotFoundError:
-            return
+            return None
         if stat.st_mtime == self._mtime and self._cache:
-            return
+            return None
         try:
             with self.path.open("r", encoding="utf-8") as handle:
                 raw = json.load(handle)
         except (OSError, json.JSONDecodeError) as exc:
             log.error("tuning: cannot parse %s: %s", self.path, exc)
-            return
-        # отбросим _meta перед валидацией
+            return None
         raw.pop("_meta", None)
         try:
             new_cache = Tuning.model_validate(raw)
         except ValidationError as exc:
             log.error("tuning: validation failed, keeping previous cache: %s", exc)
-            return
+            return None
         prev = self._cache
         self._cache = new_cache
         self._mtime = stat.st_mtime
-        if prev != new_cache:
-            self._fire_listeners(new_cache)
+        return new_cache if prev != new_cache else None
 
-    def current(self) -> Tuning:
+    def current(self) -> "Tuning":
         """Возвращает актуальный Tuning, перечитывая файл если он изменился."""
         with self._lock:
-            self._reload_locked()
-            return self._cache
+            changed = self._reload_locked()
+            snap = self._cache
+            listeners = list(self._listeners) if changed else []
+        for cb in listeners:
+            try:
+                cb(changed)
+            except Exception as exc:
+                log.error("tuning listener failed: %s", exc, exc_info=True)
+        return snap
 
-    def apply_patch(self, patch: dict[str, Any]) -> Tuning:
+    def apply_patch(self, patch: dict[str, Any]) -> "Tuning":
         """Применяет частичное обновление, валидирует, сохраняет на диск.
 
         Patch — dict с произвольной глубиной (deep merge поверх текущего).
@@ -227,18 +245,20 @@ class TuningStore:
             self._save_locked(new_cache)
             self._cache = new_cache
             self._mtime = self.path.stat().st_mtime
-            self._fire_listeners(new_cache)
-            return new_cache
+            listeners = list(self._listeners)
+        self._fire_listeners(new_cache, listeners)
+        return new_cache
 
-    def replace(self, full: dict[str, Any]) -> Tuning:
+    def replace(self, full: dict[str, Any]) -> "Tuning":
         """Полная замена настроек (без deep merge). Для UI-формы Restore defaults / Import."""
         with self._lock:
             new_cache = Tuning.model_validate(full)
             self._save_locked(new_cache)
             self._cache = new_cache
             self._mtime = self.path.stat().st_mtime
-            self._fire_listeners(new_cache)
-            return new_cache
+            listeners = list(self._listeners)
+        self._fire_listeners(new_cache, listeners)
+        return new_cache
 
     def restore_defaults(self) -> Tuning:
         return self.replace(Tuning().model_dump())
@@ -263,8 +283,8 @@ class TuningStore:
         with self._lock:
             self._listeners.append(callback)
 
-    def _fire_listeners(self, tuning: Tuning) -> None:
-        for cb in list(self._listeners):
+    def _fire_listeners(self, tuning: "Tuning", listeners: list) -> None:
+        for cb in listeners:
             try:
                 cb(tuning)
             except Exception as exc:  # pragma: no cover

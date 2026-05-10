@@ -2,7 +2,7 @@
 # Adam Chip — ASR Service (speaches: faster-whisper + CUDA via Docker).
 #
 # speaches — OpenAI-compatible speech API.
-# ASR: POST http://127.0.0.1:8000/v1/audio/transcriptions
+# ASR: POST http://127.0.0.1:8083/v1/audio/transcriptions
 #       -F file=@audio.wav -F model=Systran/faster-whisper-medium -F language=ru
 #
 # Использование:
@@ -13,7 +13,7 @@
 # ENV overrides:
 #   ADAM_ASR_IMAGE    dustynv/speaches:r36.4.0-cu128-24.04
 #   ADAM_ASR_MODEL    Systran/faster-whisper-medium
-#   ADAM_ASR_PORT     8000
+#   ADAM_ASR_PORT     8083
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTAINER_NAME="adam-asr-speaches"
 IMAGE="${ADAM_ASR_IMAGE:-dustynv/speaches:r36.4.0-cu128-24.04}"
 MODEL="${ADAM_ASR_MODEL:-Systran/faster-whisper-small}"
-PORT="${ADAM_ASR_PORT:-8000}"
+PORT="${ADAM_ASR_PORT:-8083}"
 HF_CACHE="${ROOT_DIR}/Subsystem/Models/hf"
 
 # --------- stop --------------------------------------------------------------
@@ -76,6 +76,7 @@ COMMON_ARGS=(
   --name "${CONTAINER_NAME}"
   --workdir /opt/speaches
   --rm
+  -e PORT="${PORT}"
   -e WHISPER__INFERENCE_DEVICE=cuda
   -e WHISPER__COMPUTE_TYPE=float16
   -e WHISPER__TTL=-1

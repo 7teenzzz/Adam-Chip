@@ -32,7 +32,7 @@ from adam.echoes_gate import EchoGate
 from adam.episodic import SessionAccumulator, should_record
 from adam.events import EventLog, utc_now
 from adam.camera import CameraReader, SceneDescriptionBuffer
-from adam.inference import RivaASRClient, WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
+from adam.inference import WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
 from adam.media import MediaHealth
 from adam.memory import EpisodicMemory, MemoryStore
 from adam.metrics import MetricsLog
@@ -102,7 +102,7 @@ session_state: dict[str, Any] = {
 # Ring-buffer полных промтов для UI диагностики.
 from collections import deque  # noqa: E402
 
-_PROMPT_TRACE_MAX = 50
+_PROMPT_TRACE_MAX: int = int(settings.section("agent").get("prompt_trace_max", 50))
 prompt_trace: deque[dict[str, Any]] = deque(maxlen=_PROMPT_TRACE_MAX)
 
 
@@ -201,13 +201,14 @@ async def _commit_session_locked(reason: str) -> None:
 
 
 class VoiceLoopController:
-    def __init__(self, audio_config: dict[str, Any], asr_client: RivaASRClient | WhisperASRClient) -> None:
+    def __init__(self, audio_config: dict[str, Any], asr_client: WhisperASRClient) -> None:
         self.audio_device = str(audio_config.get("input_device", "hw:0,0"))
         self.capture_device = self._capture_device_for(self.audio_device)
         self.sample_rate = int(audio_config.get("sample_rate", 16000))
         self.channels = int(audio_config.get("channels", 1))
         self.frame_ms = int(audio_config.get("frame_ms", 20))
         self.vad_threshold = int(audio_config.get("vad_threshold", 650))
+        self.normalize_factor = float(audio_config.get("normalize_factor", 8000))
         self.min_speech_ms = int(audio_config.get("min_speech_ms", 280))
         self.endpointing_ms = int(settings.section("services").get("asr", {}).get("endpointing_ms", 450))
         self.max_segment_ms = int(audio_config.get("max_segment_ms", 9000))
@@ -300,9 +301,11 @@ class VoiceLoopController:
         event_log.append("reply_window_open", {"timeout_sec": timeout_sec})
         try:
             await asyncio.sleep(timeout_sec)
-            event_log.append("reply_window_expired", {"action": "voice_loop_stopped"})
-            if self.running:
+            if self.running and runtime_state.get("mode") == "exhibition":
+                event_log.append("reply_window_expired", {"action": "voice_loop_stopped"})
                 await self.stop()
+            else:
+                event_log.append("reply_window_expired", {"action": "voice_loop_kept"})
         except asyncio.CancelledError:
             raise
         finally:
@@ -336,11 +339,13 @@ class VoiceLoopController:
                 _prev_muted = muted
 
                 # Emit audio level for UI equalizer every 5 frames (~100 ms).
-                raw_level = 0 if muted else audioop.rms(chunk, 2)
+                _rms = audioop.rms(chunk, 2)
+                raw_level = 0 if muted else _rms
+                voiced = _rms >= self.vad_threshold
                 level_tick += 1
                 if level_tick >= 5:
                     level_tick = 0
-                    norm = round(min(1.0, (raw_level / 8000.0) ** 0.5), 3)
+                    norm = round(min(1.0, (raw_level / self.normalize_factor) ** 0.5), 3)
                     event_log.append("audio_level", {"level": norm, "state": self.vad_state if not muted else "muted"})
 
                 if muted:
@@ -377,7 +382,6 @@ class VoiceLoopController:
                     continue
 
                 level = raw_level
-                voiced = level >= self.vad_threshold
                 if voiced:
                     if not speech_frames:
                         event_log.append("asr_partial", {"state": "speech_started", "level": level})
@@ -428,7 +432,7 @@ class VoiceLoopController:
         # Self-echo guard: if every content word appears in Adam's last spoken text, it's echo.
         last_tts = runtime_state.get("last_tts_text", "").lower()
         if last_tts:
-            content_words = [w for w in transcript.split() if len(w) > 2]
+            content_words = [w.lower() for w in transcript.split() if len(w) > 2]
             if content_words and all(w in last_tts for w in content_words):
                 event_log.append("barge_in_echo_filtered", {"transcript": transcript})
                 return
@@ -685,6 +689,7 @@ async def _audio_level_monitor() -> None:
     device = f"plughw:{raw_dev[3:]}" if raw_dev.startswith("hw:") else raw_dev
     sample_rate = int(audio_cfg.get("sample_rate", 16000))
     frame_bytes = sample_rate * 2 // 10  # 100 ms of 16-bit mono
+    normalize_factor = float(audio_cfg.get("normalize_factor", 8000))
 
     while True:
         try:
@@ -705,7 +710,7 @@ async def _audio_level_monitor() -> None:
                         await asyncio.sleep(1.0)  # back off before retry when arecord exits early
                         break  # arecord exited
                     raw_level = audioop.rms(chunk, 2)
-                    norm = round(min(1.0, (raw_level / 8000.0) ** 0.5), 3)
+                    norm = round(min(1.0, (raw_level / normalize_factor) ** 0.5), 3)
                     event_log.append("audio_level", {"level": norm, "state": "idle"})
             finally:
                 try:
@@ -738,7 +743,11 @@ async def lifespan(_: FastAPI):
         _schedule_success_sound("startup_exhibition_gate_ok")
     else:
         asyncio.create_task(_startup_sound_when_ready(), name="startup_sound")
-    await voice_loop.start()
+    for _retry in range(5):
+        _vl_result = await voice_loop.start()
+        if _vl_result.get("ok"):
+            break
+        await asyncio.sleep(2.0)
     asyncio.create_task(_warmup_wakeup(), name="warmup_wakeup")
     try:
         yield
@@ -1031,6 +1040,7 @@ async def _status_payload() -> dict[str, Any]:
         "scene_cache": scene_cache.as_dict(),
         "scene_worker": scene_worker.status(),
         "mcu": mcu_public,
+        "events": {"dropped": event_log.dropped_count},
     }
 
 

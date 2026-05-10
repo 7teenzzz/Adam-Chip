@@ -21,7 +21,7 @@
 | Устройство | Роль | Сеть |
 |-----------|------|------|
 | NVIDIA Jetson Orin NX Super 16GB | Inference node, orchestrator | Основной хост |
-| ESP32-S3 N16R8 WROOM CAM | Периферия: моторы, сенсоры, звук | 192.168.0.172 |
+| ESP32-S3 N16R8 WROOM CAM | Периферия: моторы, сенсоры, звук | 192.168.0.171 |
 
 **Jetson OS:** Ubuntu 22.04.5 LTS / JetPack  
 **ESP32 SDK:** PlatformIO, прошивка в `Subsystem/AdamsServer/`
@@ -41,15 +41,15 @@
 
 | Компонент | Runtime | Модель | Endpoint |
 |-----------|---------|--------|----------|
-| **LLM** | llama.cpp (OpenAI-compat API) | `gemma-4-E4B-it-UD-Q4_K_XL` | http://127.0.0.1:8051/v1 |
-| **VLM** | VILA 1.5-3b | `Efficient-Large-Model/VILA1.5-3b` | http://127.0.0.1:8050 |
-| **ASR** | Whisper HTTP | `tiny`, ru-RU | http://127.0.0.1:8095 |
-| **TTS** | Silero v5_5_ru | голос `eugene` | http://127.0.0.1:8090 |
+| **LLM** | llama.cpp (OpenAI-compat API) | `gemma-4-E4B-it-UD-Q4_K_XL` | http://127.0.0.1:8081/v1 |
+| **VLM** | VILA 1.5-3b | `Efficient-Large-Model/VILA1.5-3b` | http://127.0.0.1:8084 |
+| **ASR** | speaches (faster-whisper) | `base`, ru-RU | http://127.0.0.1:8083 |
+| **TTS** | Silero v5_5_ru | голос `eugene` | http://127.0.0.1:8082 |
 | **Orchestrator** | FastAPI + asyncio | — | http://127.0.0.1:8080 |
 
 **Whisper wake word:** `адам` (обязателен в exhibition mode)  
 **LLM параметры:** temperature=0.7, max_tokens=80, num_ctx=8192  
-**TTS output:** ALSA device `plughw:0,3`  
+**TTS output:** ALSA device `plughw:1,3`  
 **Audio input:** ALSA `hw:1,0`
 
 > NVIDIA Riva ASR — legacy адаптер (`Speech/ASR.py`), не активен по умолчанию (port 50051).
@@ -108,11 +108,11 @@ PYTHONPATH=System ADAM_MODE=maintenance ./.venv/bin/python System/Orchestrator.p
     "scene_interval_sec": 8
   },
   "services": {
-    "llm": { "model": "gemma-4-E4B-it-UD-Q4_K_XL", "base_url": "http://127.0.0.1:8051/v1", "max_tokens": 80 },
-    "asr": { "provider": "whisper", "base_url": "http://127.0.0.1:8095", "wake_words": "адам" },
-    "tts": { "speaker": "eugene", "output_device": "plughw:0,3" }
+    "llm": { "model": "gemma-4-E4B-it-UD-Q4_K_XL", "base_url": "http://127.0.0.1:8081/v1", "max_tokens": 80 },
+    "asr": { "provider": "speaches", "base_url": "http://127.0.0.1:8083", "wake_words": "адам" },
+    "tts": { "speaker": "eugene", "output_device": "plughw:1,3" }
   },
-  "mcu": { "base_url": "http://192.168.0.172" },
+  "mcu": { "base_url": "http://192.168.0.171" },
   "safety": { "half_duplex_mute": true, "motor_max_duration_ms": 2500 }
 }
 ```
@@ -123,7 +123,7 @@ PYTHONPATH=System ADAM_MODE=maintenance ./.venv/bin/python System/Orchestrator.p
 
 **Директория:** `Subsystem/AdamsServer/`  
 **Toolchain:** PlatformIO  
-**Статический IP:** `192.168.0.172`
+**Статический IP:** `192.168.0.171`
 
 Ключевые API endpoints:
 - `GET /api/status` — runtime status
@@ -139,7 +139,7 @@ Allowed scenes: `boot_idle`, `all_on`, `alternating`
 - `COM7` = USB TO SERIAL → прошивка
 - `COM6` = USB OTG/CDC → логи
 - `tools/flash_com7.ps1` — serial flash
-- `tools/flash_ota.ps1 -Host 192.168.0.172` — OTA Wi-Fi
+- `tools/flash_ota.ps1 -Host 192.168.0.171` — OTA Wi-Fi
 
 **НЕ коммитить:** `config/PrivateConfig.h` (Wi-Fi credentials)
 
@@ -202,19 +202,74 @@ adam-consolidator.timer     Daily schedule
 
 ## Env Variables
 
+### Orchestrator (System/adam/config.py)
+
 ```bash
-ADAM_MODE=maintenance|exhibition
-ADAM_CONFIG=System/Config.json
-ADAM_DATA_DIR=data/adam
-ESP_BASE_URL=http://192.168.0.172
+ADAM_MODE=maintenance|exhibition        # default: maintenance
+ADAM_CONFIG=System/Config.json          # path to Config.json
+ADAM_DATA_DIR=data/adam                 # data directory (memory, events, metrics)
+
+# MCU / ESP32
+ESP_BASE_URL=http://192.168.0.171
+ESP_SPEAKER_URL=http://192.168.0.171:83/speaker
+
+# LLM (llama.cpp OpenAI-compat)
+ADAM_LLM_PROVIDER=openai
+ADAM_LLM_BASE_URL=http://127.0.0.1:8081/v1
 ADAM_LLM_MODEL=gemma-4-E4B-it-UD-Q4_K_XL
-ADAM_LLM_BASE_URL=http://127.0.0.1:8051/v1
-ADAM_TTS_BASE_URL=http://127.0.0.1:8090
-ADAM_ASR_HOST=127.0.0.1
-ADAM_ASR_PORT=50051
-ADAM_VLM_BASE_URL=http://127.0.0.1:8050
+
+# TTS (Silero HTTP)
+ADAM_TTS_BASE_URL=http://127.0.0.1:8082
+
+# ASR (speaches / whisper HTTP)
+ADAM_ASR_HOST=127.0.0.1                 # used for legacy port-based override only
+ADAM_ASR_PORT=8083                      # speaches default port
+
+# VLM (VILA via nano_llm Docker)
+ADAM_VLM_BASE_URL=http://127.0.0.1:8084
+ADAM_VLM_MODEL=Efficient-Large-Model/VILA1.5-3b
+
+# Media
 ADAM_VIDEO_DEVICE=/dev/video0
-ADAM_AUDIO_INPUT_DEVICE=hw:1,0
+ADAM_AUDIO_INPUT_DEVICE=pulse           # PulseAudio mic; hw:1,0 as fallback
+ADAM_AUDIO_OUTPUT_DEVICE=default
+
+# Sounds
+ADAM_SUCCESS_SOUND=data/sounds/success.wav
+ADAM_SOUNDS_ENABLED=1
+```
+
+### ASR Whisper service (System/Speech/ASR_Whisper.py)
+
+```bash
+ADAM_ASR_WHISPER_MODEL=base             # faster-whisper model size
+ADAM_ASR_LANGUAGE=ru
+ADAM_ASR_DEVICE=auto                    # cuda|cpu|auto
+ADAM_ASR_COMPUTE_TYPE=auto             # float16|int8|auto
+ADAM_ASR_SAMPLE_RATE=16000
+ADAM_ASR_HOST=0.0.0.0
+ADAM_ASR_PORT=8095
+ADAM_MODELS_DIR=Subsystem/Models
+```
+
+### TTS Silero service (System/Speech/TTS.py)
+
+```bash
+ADAM_TTS_HOST=0.0.0.0
+ADAM_TTS_PORT=8082
+ADAM_TTS_OUTPUT_DEVICE=plughw:1,3      # ALSA: HDMI card 0
+ADAM_TTS_PLAYBACK=1                    # 0 = disable local playback
+ADAM_TTS_MODEL_PATH=                   # override model .pt path
+ADAM_MODELS_DIR=Subsystem/Models
+```
+
+### VLM service (System/Speech/VLM.py)
+
+```bash
+ADAM_VLM_HOST=0.0.0.0
+ADAM_VLM_PORT=8050
+ADAM_VLM_MODEL=Efficient-Large-Model/VILA1.5-3b
+ADAM_VLM_MAX_TOKENS=48
 ```
 
 ---
@@ -234,7 +289,7 @@ curl -fsS http://127.0.0.1:8080/api/agent/turn \
   -d '{"transcript":"Адам, ты меня слышишь?"}' | python3 -m json.tool
 
 # ESP32 статус
-curl -fsS http://192.168.0.172/api/status | python3 -m json.tool
+curl -fsS http://192.168.0.171/api/status | python3 -m json.tool
 
 # Сервисы
 ./scripts/adam_service_status.sh
@@ -265,7 +320,7 @@ curl -fsS http://192.168.0.172/api/status | python3 -m json.tool
 
 - LLM мигрирован с Ollama (`gemma3:4b`) на llama.cpp (`gemma-4-E4B-it-UD-Q4_K_XL`, порт 8051)
 - ASR мигрирован с NVIDIA Riva на Whisper (`Speech/ASR_Whisper.py`, порт 8095)
-- ESP32 IP изменён: `192.168.0.171` → `192.168.0.172`
+- ESP32 IP изменён: `192.168.0.171` → `192.168.0.171`
 - Добавлены модули: `echoes_gate.py`, `tuning.py`, `metrics.py`, `episodic.py`, `api_runtime.py`
 - Добавлена эпизодическая память с SQLite + ежедневной консолидацией
 - Оператор Web UI (`/`, `/dash`, `/debug`) реализован в `adam/ui.py`
