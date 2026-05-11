@@ -37,8 +37,8 @@
       "sample_rate": 16000,
       "channels": 1,
       "frame_ms": 20,
-      "vad_threshold": 400,
-      "min_speech_ms": 404,
+      "vad_threshold": 600,
+      "min_speech_ms": 200,
       "max_segment_ms": 3000,
       "max_command_segment_ms": 15000,
       "normalize_factor": 8000
@@ -99,6 +99,11 @@
       ],
       "output_device": "plughw:1,3"
     }
+  },
+  "wake_word": {
+    "engine": "openwakeword",
+    "verifier_path": "data/wake_word/adam_verifier.pkl",
+    "threshold": 0.85
   },
   "mcu": {
     "base_url": "http://192.168.0.171",

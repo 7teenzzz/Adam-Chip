@@ -109,6 +109,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "motor_cooldown_ms": 250,
         "half_duplex_mute": True,
     },
+    "wake_word": {
+        "engine": "none",
+        "verifier_path": "data/wake_word/adam_verifier.pkl",
+        "threshold": 0.85,
+    },
 }
 
 

@@ -43,6 +43,7 @@ from adam.sound import play_local_sound
 from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
 from adam.tuning import TuningStore, get_store as _get_tuning_store
 from adam.ui import agent_page, dash_page, debug_page
+from adam.wake_word import create_engine as _create_wake_engine
 
 
 settings = Settings.load()
@@ -245,6 +246,12 @@ class VoiceLoopController:
         self._reply_window_active = False
         self._reply_window_latched = False   # latched when speech starts inside the window
         self._reply_window_task: asyncio.Task | None = None
+        # Local wake word engine (openWakeWord, CPU) — None → fallback to Whisper-based detection
+        ww_cfg = settings.section("wake_word") or {}
+        self._wake_engine = _create_wake_engine(ww_cfg)
+        # 4 × 20ms frames = 80ms chunks for openWakeWord
+        self._ww_buf: list[bytes] = []
+        self._ww_frames_needed = 4
 
     def status(self) -> dict[str, Any]:
         return {
@@ -291,6 +298,9 @@ class VoiceLoopController:
         self._in_command_mode = False
         self.endpointing_ms   = self._wake_endpointing_ms
         self.max_segment_ms   = self._wake_max_segment_ms
+        self._ww_buf.clear()
+        if self._wake_engine is not None:
+            self._wake_engine.close()
         self._stop_process()
         self.vad_state = "idle"
         event_log.append("voice_loop_stopped", self.status())
@@ -422,7 +432,24 @@ class VoiceLoopController:
                     speech_frames.clear()
                     speech_ms = 0
                     silence_ms = 0
+                    self._ww_buf.clear()
                     self.vad_state = "silence"
+                    continue
+
+                # Phase 1 — LISTENING: local wake word engine scans 80ms frames on CPU.
+                # Always active when not already in command mode (including reply_window).
+                if not self._in_command_mode and self._wake_engine is not None:
+                    self._ww_buf.append(chunk)
+                    if len(self._ww_buf) >= self._ww_frames_needed:
+                        pcm_80ms = b"".join(self._ww_buf)
+                        self._ww_buf.clear()
+                        detected = self._wake_engine.process_chunk(pcm_80ms)
+                        if detected:
+                            if self._reply_window_task and not self._reply_window_task.done():
+                                self._reply_window_task.cancel()
+                            event_log.append("wake_word_detected", {"engine": "openwakeword"})
+                            self._enter_command_mode()
+                    self.vad_state = "listening"
                     continue
 
                 level = raw_level
@@ -570,7 +597,9 @@ class VoiceLoopController:
         cleaned = transcript
         if self._in_command_mode:
             self._exit_command_mode()
-        elif self.wake_word_required and not in_reply_window and self._wake_re is not None:
+        elif self.wake_word_required and self._wake_engine is None \
+                and not in_reply_window and self._wake_re is not None:
+            # Fallback: Whisper-based wake word detection (no local engine loaded)
             match = self._wake_re.search(transcript)
             if not match:
                 self.last_wake_skip = transcript
@@ -1558,7 +1587,7 @@ async def _stream_llm_and_speak(
     *,
     max_tokens: int | None = None,
     temperature: float | None = None,
-) -> tuple[str, float, float, dict[str, Any]]:
+) -> tuple[str, float, float, float, dict[str, Any]]:
     """Stream LLM tokens → sentence queue → TTS concurrently.
     Returns (reply, llm_ms, tts_ms, tts_result).
     """
