@@ -88,6 +88,8 @@ runtime_state: dict[str, Any] = {
     "success_sound_played": False,
     "interrupt_tts": False,     # set True by barge-in to stop active TTS playback
     "last_tts_text": "",        # last TTS reply text (lowercase) for self-echo detection
+    "last_tts_finished_at": 0.0,  # perf_counter() when last TTS playback ended
+    "recent_tts_history": [],   # rolling buffer of {text, finished_at} for echo filtering
 }
 
 
@@ -319,10 +321,15 @@ class VoiceLoopController:
         silence_ms = 0
         level_tick = 0
         _prev_muted = False
-        _unmute_at = 0.0
         _post_tts_cooldown = float(
             settings.section("services").get("asr", {}).get("post_tts_cooldown_sec", 0.5)
         )
+        # If TTS finished recently (e.g. voice loop restarted mid-cooldown), restore cooldown.
+        _last_finished = float(runtime_state.get("last_tts_finished_at", 0.0))
+        _elapsed = time.perf_counter() - _last_finished if _last_finished > 0 else float("inf")
+        _unmute_at = _last_finished if _elapsed < _post_tts_cooldown else 0.0
+        if _unmute_at:
+            _prev_muted = True
         try:
             self._process = self._start_arecord()
             stdout = self._process.stdout
@@ -497,6 +504,25 @@ class VoiceLoopController:
         runtime_state["last_asr_ms"] = asr_ms
         if not transcript:
             return
+
+        # Self-echo filter: skip transcript if it overlaps with recent TTS output.
+        _echo_window = 15.0
+        _now = time.perf_counter()
+        _content_words = [w.lower() for w in transcript.split() if len(w) > 2]
+        if _content_words:
+            for _entry in runtime_state.get("recent_tts_history", []):
+                if _now - _entry["finished_at"] > _echo_window:
+                    continue
+                _tts_text = _entry["text"]
+                _matches = sum(1 for w in _content_words if w in _tts_text)
+                if _matches / len(_content_words) >= 0.5:
+                    event_log.append("asr_echo_skip", {
+                        "transcript": transcript,
+                        "matched": _tts_text[:80],
+                        "overlap": round(_matches / len(_content_words), 2),
+                    })
+                    return
+
         self.last_transcript = transcript
         self.last_transcript_at = utc_now()
         self.last_asr_error = ""
@@ -1397,6 +1423,10 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     runtime_state["last_ttfv_ms"] = ttfv_ms
 
     runtime_state["last_tts_text"] = reply.lower()
+    _hist = runtime_state.setdefault("recent_tts_history", [])
+    _hist.append({"text": reply.lower(), "finished_at": time.perf_counter()})
+    if len(_hist) > 5:
+        _hist.pop(0)
     if voice_loop.running:
         asr_cfg = settings.section("services").get("asr", {})
         voice_loop.open_reply_window(float(asr_cfg.get("reply_window_sec", 4.0)))
@@ -1576,10 +1606,26 @@ async def _stream_llm_and_speak(
 
     runtime_state["speaking"] = True
     event_log.append("tts_started", {"text": "(streaming)"})
+    producer_task = asyncio.create_task(_producer(), name="llm_producer")
+    consumer_task = asyncio.create_task(_consumer(), name="tts_consumer")
     try:
-        await asyncio.gather(_producer(), _consumer())
+        # Wait for BOTH tasks — if producer fails, we still wait for consumer
+        # so that aplay finishes before speaking=False (prevents self-echo).
+        try:
+            await asyncio.wait({producer_task, consumer_task}, return_when=asyncio.ALL_COMPLETED)
+        except asyncio.CancelledError:
+            tts.interrupt_playback()
+            producer_task.cancel()
+            consumer_task.cancel()
+            await asyncio.gather(producer_task, consumer_task, return_exceptions=True)
+            raise
     finally:
         runtime_state["speaking"] = False
+        runtime_state["last_tts_finished_at"] = time.perf_counter()
+    # Re-raise exceptions from child tasks (producer error → caller handles gracefully).
+    for _task in (producer_task, consumer_task):
+        if not _task.cancelled() and (_exc := _task.exception()):
+            raise _exc
 
     reply = " ".join(parts)
     llm_ms = round((llm_done_at[0] - t_llm) * 1000, 1)
@@ -1604,6 +1650,7 @@ async def _speak(text: str) -> dict[str, Any]:
         raise
     finally:
         runtime_state["speaking"] = False
+        runtime_state["last_tts_finished_at"] = time.perf_counter()
 
 
 _sensor_cache: dict[str, Any] = {}

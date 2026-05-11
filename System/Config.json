@@ -3,7 +3,7 @@
     "name": "Адам Чип",
     "language": "ru-RU",
     "mode": "maintenance",
-    "data_dir": "data/adam",
+    "data_dir": "/home/i17jet/Agents/Adam-Chip/data/adam",
     "persona_paths": [
       "Agent Adam Chip/About/System.md",
       "Agent Adam Chip/About/Identity.md",
@@ -50,9 +50,9 @@
   },
   "services": {
     "llm": {
-      "provider": "openai",
+      "provider": "ollama",
       "base_url": "http://127.0.0.1:8081/v1",
-      "model": "gemma-4-E4B-it-UD-Q4_K_XL",
+      "model": "gemma3:4b",
       "timeout_sec": 60,
       "temperature": 0.7,
       "max_tokens": 40,
@@ -62,7 +62,7 @@
       "base_url": "http://127.0.0.1:8084",
       "model": "Efficient-Large-Model/VILA1.5-3b",
       "timeout_sec": 20,
-      "max_new_tokens": 24,
+      "max_new_tokens": 48,
       "prompt": "Briefly describe the scene in one sentence: people present, movement, notable objects."
     },
     "asr": {
@@ -76,7 +76,9 @@
       "barge_in_enabled": false,
       "post_tts_cooldown_sec": 2.0,
       "wake_words": "адам,дохлый",
-      "wake_word_required": true
+      "wake_word_required": true,
+      "host": "127.0.0.1",
+      "port": 8083
     },
     "tts": {
       "provider": "silero",

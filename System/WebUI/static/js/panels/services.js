@@ -125,20 +125,31 @@ function buildServiceCard(name, meta) {
 
   async function refresh() {
     try {
-      const data = await api.get("/api/services");
-      const svc  = (data.services || {})[name] || {};
-      const state  = svc.state || "unknown";
+      const [svcData, statusData] = await Promise.all([
+        api.get("/api/services"),
+        api.get("/api/agent/status"),
+      ]);
+      const svc    = (svcData.services || {})[name] || {};
       const active = !!svc.active;
-      const style  = STATE_STYLE[state] || STATE_STYLE.unknown;
 
-      statusDot.className = `dot ${style.dot}`;
-      statusText.textContent = style.text;
+      // HTTP health for dot color (same logic as main.js kindFromHealth)
+      const health = ((statusData.services || {})[name]) || {};
+      let dotKind = "muted";
+      if (health.ok === true)       dotKind = "ok";
+      else if (health.loading)      dotKind = "warn";
+      else if (health.ok === false) dotKind = "bad";
+
+      statusDot.className    = `dot ${dotKind}`;
+      statusText.textContent = health.ok === true ? "running"
+                             : health.loading     ? "loading"
+                             : active             ? "active (no probe)"
+                             : "inactive";
 
       btnStart.disabled   = active || busy;
       btnStop.disabled    = !active || busy;
       btnRestart.disabled = !active || busy;
     } catch {
-      statusDot.className = "dot bad";
+      statusDot.className    = "dot bad";
       statusText.textContent = "нет связи";
     }
   }
