@@ -212,10 +212,16 @@ class VoiceLoopController:
         self.vad_threshold = int(audio_config.get("vad_threshold", 650))
         self.normalize_factor = float(audio_config.get("normalize_factor", 8000))
         self.min_speech_ms = int(audio_config.get("min_speech_ms", 280))
-        self.endpointing_ms = int(settings.section("services").get("asr", {}).get("endpointing_ms", 450))
-        self.max_segment_ms = int(audio_config.get("max_segment_ms", 9000))
         self.asr_client = asr_client
         asr_cfg = settings.section("services").get("asr", {})
+        self._wake_endpointing_ms    = int(asr_cfg.get("endpointing_ms", 400))
+        self._command_endpointing_ms = int(asr_cfg.get("command_endpointing_ms", 2000))
+        self.endpointing_ms          = self._wake_endpointing_ms
+        self._wake_max_segment_ms    = int(audio_config.get("max_segment_ms", 3000))
+        self._command_max_segment_ms = int(audio_config.get("max_command_segment_ms", 15000))
+        self.max_segment_ms          = self._wake_max_segment_ms
+        self._in_command_mode        = False
+        self._command_timeout_task: asyncio.Task | None = None
         self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
         wake_words = asr_cfg.get("wake_words", []) or []
         # Config may store wake_words as a comma-separated string (e.g. "адам") or a list.
@@ -256,6 +262,7 @@ class VoiceLoopController:
             "wake_words": self.wake_words,
             "last_wake_skip": self.last_wake_skip,
             "reply_window_active": self._reply_window_active,
+            "command_mode": self._in_command_mode,
         }
 
     async def start(self) -> dict[str, Any]:
@@ -279,6 +286,11 @@ class VoiceLoopController:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self._command_timeout_task and not self._command_timeout_task.done():
+            self._command_timeout_task.cancel()
+        self._in_command_mode = False
+        self.endpointing_ms   = self._wake_endpointing_ms
+        self.max_segment_ms   = self._wake_max_segment_ms
         self._stop_process()
         self.vad_state = "idle"
         event_log.append("voice_loop_stopped", self.status())
@@ -296,6 +308,31 @@ class VoiceLoopController:
         self._reply_window_task = asyncio.create_task(
             self._reply_window_coro(timeout_sec), name="reply_window"
         )
+
+    def _enter_command_mode(self, timeout_sec: float = 10.0) -> None:
+        self._in_command_mode     = True
+        self.endpointing_ms       = self._command_endpointing_ms
+        self.max_segment_ms       = self._command_max_segment_ms
+        if self._command_timeout_task and not self._command_timeout_task.done():
+            self._command_timeout_task.cancel()
+        self._command_timeout_task = asyncio.create_task(
+            self._command_timeout_coro(timeout_sec), name="command_timeout"
+        )
+        event_log.append("asr_command_mode_open", {"endpointing_ms": self.endpointing_ms})
+
+    def _exit_command_mode(self) -> None:
+        self._in_command_mode = False
+        self.endpointing_ms   = self._wake_endpointing_ms
+        self.max_segment_ms   = self._wake_max_segment_ms
+        if self._command_timeout_task and not self._command_timeout_task.done():
+            self._command_timeout_task.cancel()
+        event_log.append("asr_wake_mode_open", {"endpointing_ms": self.endpointing_ms})
+
+    async def _command_timeout_coro(self, timeout_sec: float) -> None:
+        await asyncio.sleep(timeout_sec)
+        if self._in_command_mode:
+            event_log.append("asr_command_timeout", {"action": "back_to_wake_hunting"})
+            self._exit_command_mode()
 
     async def _reply_window_coro(self, timeout_sec: float) -> None:
         self._reply_window_active = True
@@ -531,7 +568,9 @@ class VoiceLoopController:
         self._reply_window_latched = False
 
         cleaned = transcript
-        if self.wake_word_required and not in_reply_window and self._wake_re is not None:
+        if self._in_command_mode:
+            self._exit_command_mode()
+        elif self.wake_word_required and not in_reply_window and self._wake_re is not None:
             match = self._wake_re.search(transcript)
             if not match:
                 self.last_wake_skip = transcript
@@ -540,7 +579,7 @@ class VoiceLoopController:
                     {"text": transcript, "reason": "no_wake_word", "asr_ms": asr_ms},
                 )
                 return
-            cleaned = transcript
+            self._enter_command_mode()
 
         event_log.append("asr_final", {"text": cleaned, "raw": transcript, "source": "voice_loop", "asr_ms": asr_ms})
         await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms)

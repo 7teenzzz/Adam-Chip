@@ -381,6 +381,8 @@ class SpeachesASRClient:
             resp.raise_for_status()
             raw = resp.json()
         except Exception:
+            # Reset httpx session so the next call gets a fresh connection pool.
+            self._session = None
             # Fallback to urllib if httpx not available or session broken.
             req = Request(self.base_url + "/v1/audio/transcriptions", data=body, method="POST")
             req.add_header("Content-Type", content_type)

@@ -98,7 +98,7 @@ fi
 # Build speech services list
 SPEECH_SERVICES=()
 ${START_TTS} && SPEECH_SERVICES+=(adam-tts-silero.service)
-${START_ASR} && SPEECH_SERVICES+=(adam-asr-whisper.service)
+${START_ASR} && SPEECH_SERVICES+=(adam-asr-speaches.service)
 
 mkdir -p "${LOG_DIR}" \
   "${MODELS_DIR}/silero" "${MODELS_DIR}/whisper" "${MODELS_DIR}/vlm" "${MODELS_DIR}/hf/hub"
