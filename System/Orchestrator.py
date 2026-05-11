@@ -219,6 +219,7 @@ class VoiceLoopController:
         self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
         self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
         self._reply_absolute_deadline_sec: float = float(asr_cfg.get("reply_absolute_deadline_sec", 12.0))
+        self._reply_noise_gate: int = int(asr_cfg.get("reply_noise_gate", 0))
         self._voice_state: str       = "standby"   # standby | listening | reply
         self._reply_start: float     = 0.0
         self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
@@ -272,6 +273,7 @@ class VoiceLoopController:
             return {"ok": True, **self.status()}
         self.running = True
         self.last_asr_error = ""
+        self._standby_entry_time = time.perf_counter()  # arm OWW guard for first 0.5s after start
         self._task = asyncio.create_task(self._run(), name="adam_voice_loop")
         await asyncio.sleep(0.2)
         if self._task.done():
@@ -364,7 +366,14 @@ class VoiceLoopController:
                         continue
 
                 # ── LISTENING + REPLY: VAD + endpointing ─────────────────────────
-                if voiced:
+                # In reply mode apply a higher noise gate so ambient noise doesn't
+                # accumulate speech_ms and block the 4-second standby transition.
+                if self._voice_state == "reply" and self._reply_noise_gate > 0:
+                    effective_voiced = _rms >= self._reply_noise_gate
+                else:
+                    effective_voiced = voiced
+
+                if effective_voiced:
                     if not speech_frames:
                         event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
                     speech_frames.append(chunk)
