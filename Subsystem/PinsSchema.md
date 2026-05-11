@@ -74,9 +74,9 @@ inmp441:
   pins:
     VDD: 3V3_MAIN
     GND: GND
-    SCK: GPIO42
-    WS: GPIO41
-    SD: GPIO47
+    SCK: GPIO48
+    WS: GPIO47
+    SD: GPIO21
     LR: GND
   decoupling:
     - type: ceramic
@@ -155,7 +155,7 @@ bte16_19:
   pins:
     VCC: 3V3_MAIN
     GND: GND
-    OUT: GPIO21
+    OUT: GPIO2
   decoupling:
     - type: ceramic
       value: 100nF
@@ -189,6 +189,27 @@ pca9685:
       value: 4.7k
       to: 3V3_MAIN
       optional: true
+
+# ============================================================
+# ETHERNET W5500
+# ============================================================
+
+w5500:
+  interface: SPI
+  pins:
+    VCC: 3V3_MAIN
+    GND: GND
+    SCK: GPIO14
+    MISO: GPIO46
+    MOSI: GPIO42
+    CS: GPIO41
+    INT: NC
+    RST: NC
+  notes:
+    - MI (Module Input) = ESP MISO (GPIO46)
+    - MO (Module Output) = ESP MOSI (GPIO42)
+    - INT not connected, polling mode
+    - RST pulled to 3V3 via 10K
 
 # ============================================================
 # MOSFET CHANNEL (GENERIC)

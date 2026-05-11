@@ -26,9 +26,9 @@
 
 /*********************** I2S МИКРОФОН INMP441 x1 ************************/
 
-#define I2S_MIC_BCLK   41   // SCK / BCLK
-#define I2S_MIC_WS     42   // LRCLK / WS
-#define I2S_MIC_SD     47   // DATA
+#define I2S_MIC_BCLK   48   // SCK / BCLK
+#define I2S_MIC_WS     47   // LRCLK / WS
+#define I2S_MIC_SD     21   // DATA
 // L/R → GND (левый канал)
 
 
@@ -55,12 +55,12 @@
 /*********************** W5500 LITE Ethernet ****************************/
 // Шелкография модуля W5500 НОТАЦИЯ ОБРАТНАЯ относительно ESP:
 //   MI (Module Input)  = физически ESP MISO (GPIO 46)
-//   MO (Module Output) = физически ESP MOSI (GPIO 21)
+//   MO (Module Output) = физически ESP MOSI (GPIO 42)
 
 #define ETH_SPI_SCK   14   // SCK
-#define ETH_SPI_MISO  46   // MI22222
-#define ETH_SPI_MOSI  21   // MO
-#define ETH_SPI_CS    45   // CS
+#define ETH_SPI_MISO  46   // MI
+#define ETH_SPI_MOSI  42   // MO
+#define ETH_SPI_CS    41   // CS
 
 #define ETH_INT       -1   // INT not connected, W5500 works in polling mode
 #define ETH_RST       -1   // RST -> 10K Omh -> 3V3
@@ -77,7 +77,7 @@
  * GPIO0        — BOOT
  * GPIO3        — strapping pin
  * GPIO19/20    — USB OTG
- * GPIO45 / 46  — strapping / boot
+ * GPIO46       — strapping / boot (ROM print)
  * GPIO48       — встроенный WS2812
  *
  ***********************************************************************/
