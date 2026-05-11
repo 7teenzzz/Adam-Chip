@@ -28,15 +28,15 @@
 
 #define I2S_MIC_BCLK   48   // SCK / BCLK
 #define I2S_MIC_WS     47   // LRCLK / WS
-#define I2S_MIC_SD     21   // DATA
+#define I2S_MIC_SD     21   // SD / DATA
 // L/R → GND (левый канал)
 
 
 /*********************** I2S DAC PCM5102 / PCM5102A *********************/
 
-#define I2S_DAC_BCLK   38   // BCLK
-#define I2S_DAC_LRCK   39   // LRCK / WS
-#define I2S_DAC_DATA   40   // DIN / DATA
+#define I2S_DAC_BCLK   38   // SCK / BCLK
+#define I2S_DAC_LRCK   39   // LR / LRCK / WS
+#define I2S_DAC_DATA   40   // SD / DATA
 // MCLK → GND
 
 
