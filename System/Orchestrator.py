@@ -594,7 +594,10 @@ class VoiceLoopController:
         in_reply_window = self._reply_window_latched
         self._reply_window_latched = False
 
-        cleaned = transcript
+        cleaned = self._wake_re.sub("", transcript).strip() if self._wake_re else transcript
+        if not cleaned:
+            event_log.append("asr_wake_only", {"raw": transcript, "reason": "only_wake_word"})
+            return
         if self._in_command_mode:
             self._exit_command_mode()
         elif self.wake_word_required and self._wake_engine is None \
@@ -843,6 +846,7 @@ async def lifespan(_: FastAPI):
             break
         await asyncio.sleep(2.0)
     asyncio.create_task(_warmup_wakeup(), name="warmup_wakeup")
+    asyncio.create_task(_warmup_asr(), name="warmup_asr")
     try:
         yield
     finally:
@@ -1931,6 +1935,21 @@ async def _warmup_wakeup() -> None:
             event_log.append("warmup_error", {"error": str(exc)})
         finally:
             runtime_state["thinking"] = False
+
+
+async def _warmup_asr() -> None:
+    """Fire one silent request to warm up the ASR backend (speaches / faster-whisper).
+
+    With provider=speaches the Docker container loads the model on first inference —
+    this call absorbs that 8-22s cold-start penalty before any real user turn arrives.
+    With provider=whisper the warmup in ASR_Whisper.py lifespan handles it instead.
+    """
+    silence = b"\x00" * 32000  # 1 s @ 16 kHz S16LE
+    try:
+        await asr.transcribe_pcm(silence)
+        event_log.append("warmup_asr", {"ok": True})
+    except Exception as exc:
+        event_log.append("warmup_asr", {"ok": False, "error": str(exc)})
 
 
 def _rebuild_clients(section_path: str) -> list[str]:

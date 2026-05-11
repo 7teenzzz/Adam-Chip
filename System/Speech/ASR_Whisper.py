@@ -40,6 +40,10 @@ except ImportError as exc:  # pragma: no cover
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     await asyncio.to_thread(_get_model)
+    # Warm up when provider=whisper: run a silent frame through the model so the first
+    # real request is fast. When provider=speaches, _warmup_asr() in Orchestrator handles it.
+    _silence = _pcm_to_wav(b"\x00" * _SAMPLE_RATE, _SAMPLE_RATE)
+    await asyncio.to_thread(_transcribe, _silence)
     yield
 
 
@@ -95,16 +99,17 @@ async def transcribe(request: Request) -> dict[str, Any]:
 def _transcribe(wav_bytes: bytes) -> str:
     model = _get_model()
     audio_file = io.BytesIO(wav_bytes)
-    segments, info = model.transcribe(
+    segments, _info = model.transcribe(
         audio_file,
         language=_LANGUAGE,
         beam_size=5,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 300},
     )
-    _ = info
     parts: list[str] = []
     for seg in segments:
+        if seg.no_speech_prob > 0.6:
+            continue  # reject noise / hallucinated segment
         text = seg.text.strip()
         if text:
             parts.append(text)
