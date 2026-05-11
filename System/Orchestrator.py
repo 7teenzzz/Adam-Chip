@@ -247,7 +247,7 @@ class VoiceLoopController:
         self._ww_buf: list[bytes] = []
         self._ww_frames_needed = 4
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
-        self._STANDBY_GUARD_SEC: float = 3.0    # covers ALSA init noise (~1-2 s) on every standby entry
+        self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -347,7 +347,7 @@ class VoiceLoopController:
                 if self._voice_state == "reply":
                     elapsed = time.perf_counter() - self._reply_start
                     absolute_deadline = self._reply_window_sec + self._reply_absolute_deadline_sec
-                    no_speech_expired = elapsed >= self._reply_window_sec and not speech_frames
+                    no_speech_expired = elapsed >= self._reply_window_sec and speech_ms < self.min_speech_ms
                     hard_cutoff = elapsed >= absolute_deadline
                     if no_speech_expired or hard_cutoff:
                         event_log.append("reply_window_expired", {
@@ -357,6 +357,7 @@ class VoiceLoopController:
                         })
                         self._voice_state = "standby"
                         self._standby_entry_time = time.perf_counter()
+                        speech_frames.clear()
                         speech_ms = 0
                         silence_ms = 0
                         self._ww_buf.clear()
