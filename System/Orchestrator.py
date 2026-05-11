@@ -245,6 +245,7 @@ class VoiceLoopController:
         # 4 × 20ms frames = 80ms chunks for openWakeWord
         self._ww_buf: list[bytes] = []
         self._ww_frames_needed = 4
+        self._standby_entry_time: float = 0.0  # perf_counter when last entered standby from reply
 
     def status(self) -> dict[str, Any]:
         return {
@@ -321,6 +322,11 @@ class VoiceLoopController:
                 # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
                 if self._voice_state == "standby":
                     if self._wake_engine is not None:
+                        # Guard window after reply→standby: skip OWW for 300ms so any
+                        # in-flight ALSA drain or room transients don't trigger a false wake.
+                        if time.perf_counter() - self._standby_entry_time < 0.3:
+                            self.vad_state = "listening"
+                            continue
                         self._ww_buf.append(chunk)
                         if len(self._ww_buf) >= self._ww_frames_needed:
                             pcm_80ms = b"".join(self._ww_buf)
@@ -337,11 +343,14 @@ class VoiceLoopController:
                 # ── REPLY: check window timeout ──────────────────────────────────
                 if self._voice_state == "reply":
                     elapsed = time.perf_counter() - self._reply_start
-                    if elapsed >= self._reply_window_sec:
+                    # Only expire to standby if speech hasn't started yet.
+                    # If the user began speaking, let endpointing decide — don't cut them off.
+                    if elapsed >= self._reply_window_sec and not speech_frames:
                         event_log.append("reply_window_expired", {
                             "action": "standby", "elapsed_sec": round(elapsed, 1)
                         })
                         self._voice_state = "standby"
+                        self._standby_entry_time = time.perf_counter()
                         speech_frames.clear()
                         speech_ms = 0
                         silence_ms = 0
