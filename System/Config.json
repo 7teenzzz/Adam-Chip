@@ -50,9 +50,9 @@
   },
   "services": {
     "llm": {
-      "provider": "ollama",
+      "provider": "openai",
       "base_url": "http://127.0.0.1:8081/v1",
-      "model": "gemma3:4b",
+      "model": "gemma-4-E4B-it-UD-Q4_K_XL",
       "timeout_sec": 60,
       "temperature": 0.7,
       "max_tokens": 40,

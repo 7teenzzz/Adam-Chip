@@ -604,7 +604,7 @@ class SceneWorker:
                 self._buf.push(summary)
                 updated = scene_cache.update(
                     summary,
-                    {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms},
+                    {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms, "last_error": ""},
                 )
                 self.last_error = ""
                 self._consecutive_errors = 0

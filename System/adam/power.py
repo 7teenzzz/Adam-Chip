@@ -57,7 +57,7 @@ class PowerGate:
         clocks_text = ""
         clocks_is_perm_error = False
         if self.require_clocks:
-            code, clocks_text = _run(["jetson_clocks", "--show"])
+            code, clocks_text = _run(["sudo", "-n", "jetson_clocks", "--show"])
             if code == 0:
                 lowered = clocks_text.lower()
                 clocks_ok = "error:" not in lowered and "inactive" not in lowered
