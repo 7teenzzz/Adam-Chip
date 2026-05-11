@@ -218,6 +218,7 @@ class VoiceLoopController:
         self._command_endpointing_ms = int(asr_cfg.get("command_endpointing_ms", 2500))
         self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
         self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
+        self._reply_absolute_deadline_sec: float = float(asr_cfg.get("reply_absolute_deadline_sec", 12.0))
         self._voice_state: str       = "standby"   # standby | listening | reply
         self._reply_start: float     = 0.0
         self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
@@ -245,7 +246,8 @@ class VoiceLoopController:
         # 4 × 20ms frames = 80ms chunks for openWakeWord
         self._ww_buf: list[bytes] = []
         self._ww_frames_needed = 4
-        self._standby_entry_time: float = 0.0  # perf_counter when last entered standby from reply
+        self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
+        self._STANDBY_GUARD_SEC: float = 3.0    # covers ALSA init noise (~1-2 s) on every standby entry
 
     def status(self) -> dict[str, Any]:
         return {
@@ -287,6 +289,7 @@ class VoiceLoopController:
             except asyncio.CancelledError:
                 pass
         self._voice_state = "standby"
+        self._standby_entry_time = 0.0   # disarm guard so a fresh start never blocks OWW
         self._ww_buf.clear()
         if self._wake_engine is not None:
             self._wake_engine.close()
@@ -322,10 +325,10 @@ class VoiceLoopController:
                 # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
                 if self._voice_state == "standby":
                     if self._wake_engine is not None:
-                        # Guard window after reply→standby: skip OWW for 300ms so any
-                        # in-flight ALSA drain or room transients don't trigger a false wake.
-                        if time.perf_counter() - self._standby_entry_time < 0.3:
-                            self.vad_state = "listening"
+                        # Guard window after reply→standby: skip OWW for _STANDBY_GUARD_SEC
+                        # so any in-flight ALSA drain or room transients don't trigger a false wake.
+                        if time.perf_counter() - self._standby_entry_time < self._STANDBY_GUARD_SEC:
+                            self.vad_state = "standby_guard"
                             continue
                         self._ww_buf.append(chunk)
                         if len(self._ww_buf) >= self._ww_frames_needed:
@@ -337,21 +340,23 @@ class VoiceLoopController:
                                 speech_frames.clear()
                                 speech_ms = 0
                                 silence_ms = 0
-                    self.vad_state = "listening"
+                    self.vad_state = "standby"
                     continue
 
                 # ── REPLY: check window timeout ──────────────────────────────────
                 if self._voice_state == "reply":
                     elapsed = time.perf_counter() - self._reply_start
-                    # Only expire to standby if speech hasn't started yet.
-                    # If the user began speaking, let endpointing decide — don't cut them off.
-                    if elapsed >= self._reply_window_sec and not speech_frames:
+                    absolute_deadline = self._reply_window_sec + self._reply_absolute_deadline_sec
+                    no_speech_expired = elapsed >= self._reply_window_sec and not speech_frames
+                    hard_cutoff = elapsed >= absolute_deadline
+                    if no_speech_expired or hard_cutoff:
                         event_log.append("reply_window_expired", {
-                            "action": "standby", "elapsed_sec": round(elapsed, 1)
+                            "action": "standby",
+                            "elapsed_sec": round(elapsed, 1),
+                            "reason": "absolute_deadline" if hard_cutoff else "no_speech",
                         })
                         self._voice_state = "standby"
                         self._standby_entry_time = time.perf_counter()
-                        speech_frames.clear()
                         speech_ms = 0
                         silence_ms = 0
                         self._ww_buf.clear()
@@ -692,6 +697,24 @@ async def _audio_level_monitor() -> None:
             await asyncio.sleep(2.0)
 
 
+async def _warmup_then_start_voice_loop() -> None:
+    """Boot sequence: play warmup monologue first, then activate the voice loop.
+
+    Keeps the mic physically off (arecord subprocess never started) during the
+    warmup monologue so OWW cannot fire on TTS audio or ALSA init noise.
+    """
+    event_log.append("voice_loop_boot_muted", {"reason": "warmup_in_progress"})
+    await _warmup_wakeup()
+    # Brief buffer after TTS finishes so ALSA drain noise decays before OWW starts.
+    await asyncio.sleep(0.5)
+    for _retry in range(5):
+        result = await voice_loop.start()
+        if result.get("ok"):
+            event_log.append("voice_loop_boot_ready", {"retry": _retry})
+            break
+        await asyncio.sleep(2.0)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     power = power_gate.check()
@@ -710,12 +733,7 @@ async def lifespan(_: FastAPI):
         _schedule_success_sound("startup_exhibition_gate_ok")
     else:
         asyncio.create_task(_startup_sound_when_ready(), name="startup_sound")
-    for _retry in range(5):
-        _vl_result = await voice_loop.start()
-        if _vl_result.get("ok"):
-            break
-        await asyncio.sleep(2.0)
-    asyncio.create_task(_warmup_wakeup(), name="warmup_wakeup")
+    asyncio.create_task(_warmup_then_start_voice_loop(), name="warmup_sequence")
     asyncio.create_task(_warmup_asr(), name="warmup_asr")
     try:
         yield
