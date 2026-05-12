@@ -104,8 +104,10 @@
   },
   "wake_word": {
     "engine": "openwakeword",
-    "verifier_path": "data/wake_word/adam_verifier.pkl",
-    "threshold": 0.85
+    "model_path": "data/wake_word/adam.onnx",
+    "threshold": 0.5,
+    "debounce_hits": 5,
+    "vad_threshold": 0.5
   },
   "mcu": {
     "base_url": "http://192.168.0.171",

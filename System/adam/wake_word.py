@@ -14,28 +14,31 @@ class WakeWordEngine:
 
 
 class OpenWakeWordEngine(WakeWordEngine):
-    """Detects "адам" using a trained sklearn verifier on top of openWakeWord embeddings.
+    """Uses adam.onnx directly with built-in Silero VAD.
 
-    The verifier is a LogisticRegression pipeline trained on Silero TTS synthetic data.
-    The openWakeWord base model acts as a fixed audio feature extractor (onnxruntime, CPU).
+    Debounced: requires N consecutive positive detections to avoid false triggers.
+    openWakeWord's vad_threshold filters non-speech before the wake word model runs.
     """
 
-    # Require this many consecutive positive detections to avoid false triggers.
-    # 3 × 80ms = 240ms — covers full "адам" utterance, filters one-frame noise.
-    _DEBOUNCE_HITS = 3
-
-    def __init__(self, verifier_path: str, threshold: float = 0.7) -> None:
-        import pickle
+    def __init__(
+        self,
+        model_path: str,
+        threshold: float,
+        debounce_hits: int,
+        vad_threshold: float = 0.5,
+    ) -> None:
         import numpy as np
         import openwakeword
 
         self._np = np
-        self._oww = openwakeword.Model(inference_framework="onnx")
+        self._oww = openwakeword.Model(
+            wakeword_models=[model_path],
+            vad_threshold=vad_threshold,
+        )
         self._model_name = list(self._oww.models.keys())[0]
         self._n_frames = self._oww.model_inputs[self._model_name]
-        with open(verifier_path, "rb") as fh:
-            self._verifier = pickle.load(fh)
         self._threshold = threshold
+        self._debounce_hits = debounce_hits
         self._consecutive_hits = 0
 
         # Flush the model's initial ring-buffer with silence so it reflects a
@@ -47,21 +50,19 @@ class OpenWakeWordEngine(WakeWordEngine):
     def process_chunk(self, pcm_80ms: bytes) -> bool:
         np = self._np
         audio = np.frombuffer(pcm_80ms, dtype=np.int16)
-        self._oww.predict(audio)
-        feats = self._oww.preprocessor.get_features(self._n_frames)
-        if feats.shape[0] == 0:
-            self._consecutive_hits = 0
-            return False
-        x = feats.flatten().reshape(1, -1)
-        score = float(self._verifier.predict_proba(x)[0, 1])
+        prediction = self._oww.predict(audio)
+        score = prediction.get(self._model_name, 0)
         if score >= self._threshold:
             self._consecutive_hits += 1
         else:
             self._consecutive_hits = 0
-        if self._consecutive_hits >= self._DEBOUNCE_HITS:
+        if self._consecutive_hits >= self._debounce_hits:
             self._consecutive_hits = 0  # reset so re-trigger requires a full new debounce sequence
             return True
         return False
+
+    def close(self) -> None:
+        pass
 
 
 class PorcupineEngine(WakeWordEngine):
@@ -86,17 +87,22 @@ class PorcupineEngine(WakeWordEngine):
 
 
 def create_engine(config: dict[str, Any]) -> WakeWordEngine | None:
-    """Build a WakeWordEngine from a config dict, or return None for fallback mode."""
+    """Build from config. engine="openwakeword" → OpenWakeWordEngine with built-in VAD."""
     engine = str(config.get("engine", "none")).lower()
     if engine == "openwakeword":
         from pathlib import Path
         from adam.config import PROJECT_ROOT
-        raw = str(config.get("verifier_path", "data/wake_word/adam_verifier.pkl"))
+
+        raw = str(config.get("model_path", "data/wake_word/adam.onnx"))
         p = Path(raw)
-        verifier_path = str(p if p.is_absolute() else PROJECT_ROOT / p)
+        model_path = str(p if p.is_absolute() else PROJECT_ROOT / p)
+        if not Path(model_path).exists():
+            return None  # model not yet trained — fall back to None
         return OpenWakeWordEngine(
-            verifier_path=verifier_path,
-            threshold=float(config.get("threshold", 0.7)),
+            model_path=model_path,
+            threshold=float(config.get("threshold", 0.5)),
+            debounce_hits=int(config.get("debounce_hits", 5)),
+            vad_threshold=float(config.get("vad_threshold", 0.5)),
         )
     if engine == "porcupine":
         return PorcupineEngine(
@@ -104,4 +110,4 @@ def create_engine(config: dict[str, Any]) -> WakeWordEngine | None:
             access_key=str(config.get("access_key", "")),
             sensitivity=float(config.get("sensitivity", 0.7)),
         )
-    return None  # engine="none" → Whisper-based wake detection fallback
+    return None  # engine="none" → no wake word detection
