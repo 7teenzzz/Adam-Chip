@@ -12,11 +12,18 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${ROOT_DIR}/data/adam"
 PID_FILE="${LOG_DIR}/orchestrator.pid"
 
-SYSTEMD_SERVICES=(adam-llm.service adam-tts-silero.service adam-asr-speaches.service)
+SYSTEMD_SERVICES=(adam-orchestrator.service adam-llm.service adam-tts-silero.service adam-asr-speaches.service)
 LIVE_VLM_CONTAINER="adam-live-vlm"
 
 echo "▶ Adam Chip — stop"
 echo
+
+# --------- 0. Disarm systemd orchestrator first (prevents Restart=on-failure) -
+if systemctl is-active --quiet adam-orchestrator.service 2>/dev/null; then
+  echo "⏵ Останавливаю adam-orchestrator.service (systemd)…"
+  sudo systemctl stop adam-orchestrator.service || true
+  echo "  ✓ adam-orchestrator.service остановлен"
+fi
 
 # --------- 1. Orchestrator ---------------------------------------------------
 killed=false
