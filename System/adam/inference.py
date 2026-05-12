@@ -355,7 +355,7 @@ class SpeachesASRClient:
 
     def _health_sync(self) -> ServiceHealth:
         try:
-            req = Request(self.base_url + "/v1/models", method="GET")
+            req = Request(self.base_url + "/health", method="GET")
             with urlopen(req, timeout=3) as resp:
                 return ServiceHealth(resp.status < 500, f"HTTP {resp.status}")
         except HTTPError as exc:

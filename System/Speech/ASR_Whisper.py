@@ -39,11 +39,14 @@ except ImportError as exc:  # pragma: no cover
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    await asyncio.to_thread(_get_model)
-    # Warm up when provider=whisper: run a silent frame through the model so the first
-    # real request is fast. When provider=speaches, _warmup_asr() in Orchestrator handles it.
-    _silence = _pcm_to_wav(b"\x00" * _SAMPLE_RATE, _SAMPLE_RATE)
-    await asyncio.to_thread(_transcribe, _silence)
+    import logging as _logging
+    try:
+        await asyncio.to_thread(_get_model)
+        # Warm up: run a silent frame through the model so the first real request is fast.
+        _silence = _pcm_to_wav(b"\x00" * _SAMPLE_RATE, _SAMPLE_RATE)
+        await asyncio.to_thread(_transcribe, _silence)
+    except Exception as _exc:
+        _logging.getLogger("uvicorn.error").warning("ASR warmup failed (non-fatal): %s", _exc)
     yield
 
 
@@ -146,11 +149,11 @@ def _resolve_device() -> str:
         return _DEVICE
     try:
         import ctranslate2
-        # CTranslate2 (used by faster-whisper) may not have CUDA support compiled
-        # Check if the device is actually available, not just if torch.cuda exists
-        if hasattr(ctranslate2.Device, "CUDA"):
+        # get_cuda_device_count() is the authoritative check: returns 0 when ctranslate2
+        # was built without CUDA support, even though Device.cuda exists as an enum member.
+        if ctranslate2.get_cuda_device_count() > 0:
             return "cuda"
-    except ImportError:
+    except (ImportError, Exception):
         pass
     return "cpu"
 

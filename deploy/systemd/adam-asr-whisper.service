@@ -14,8 +14,8 @@ Environment=PYTHONPATH=/home/i17jet/Agents/Adam-Chip/System
 Environment=ADAM_VENV=/home/i17jet/Agents/Adam-Chip/.venv
 Environment=ADAM_ASR_WHISPER_MODEL=tiny
 Environment=ADAM_ASR_LANGUAGE=ru
-Environment=ADAM_ASR_DEVICE=cpu
-Environment=ADAM_ASR_COMPUTE_TYPE=int8
+Environment=ADAM_ASR_DEVICE=auto
+Environment=ADAM_ASR_COMPUTE_TYPE=auto
 Environment=ADAM_MODELS_DIR=/home/i17jet/Agents/Adam-Chip/Subsystem/Models
 Environment=HF_HOME=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/hf
 Environment=HF_HUB_CACHE=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/hf/hub
