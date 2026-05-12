@@ -47,25 +47,6 @@ services:
       - ./data:/data
       - ./models:/root/.cache
 
-  adam-asr-whisper:
-    build:
-      context: .
-      dockerfile: System/Dockerfile
-    container_name: adam-asr-whisper
-    profiles:
-      - speech-local
-    network_mode: host
-    restart: unless-stopped
-    environment:
-      ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8083}
-      ADAM_ASR_WHISPER_MODEL: ${ADAM_ASR_WHISPER_MODEL:-medium}
-      ADAM_ASR_LANGUAGE: ${ADAM_ASR_LANGUAGE:-ru}
-      ADAM_ASR_DEVICE: ${ADAM_ASR_DEVICE:-auto}
-    command: ["python", "-m", "Speech.ASR_Whisper"]
-    volumes:
-      - ./data:/data
-      - ./models:/root/.cache
-
   adam-llm:
     # Optional Docker alternative to the native systemd adam-llm.service.
     # Use profile llm-docker to activate: docker compose --profile llm-docker up adam-llm
@@ -86,6 +67,53 @@ services:
       LLAMA_ARG_PARALLEL: "1"
     volumes:
       - ./Subsystem/Models/gguf:/models:ro
+
+  adam-asr-whisperx:
+    build:
+      context: .
+      dockerfile: System/Dockerfile
+    container_name: adam-asr-whisperx
+    profiles:
+      - speech-local
+    network_mode: host
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      PYTHONPATH: System
+      ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8095}
+      ADAM_ASR_WHISPERX_MODEL: ${ADAM_ASR_WHISPERX_MODEL:-large-v3}
+      ADAM_ASR_LANGUAGE: ${ADAM_ASR_LANGUAGE:-ru}
+      ADAM_ASR_DEVICE: cuda
+      ADAM_ASR_COMPUTE_TYPE: float16
+      ADAM_ASR_SAMPLE_RATE: "16000"
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      HF_HOME: /hf_cache
+      HF_HUB_CACHE: /hf_cache/hub
+    command: ["python", "-m", "Speech.ASR_WhisperX"]
+    volumes:
+      - ./data:/data
+      - ./data/hf_cache:/hf_cache
+      - /etc/localtime:/etc/localtime:ro
+
+  # Deprecated: use adam-asr-whisperx instead
+  adam-asr-whisper:
+    build:
+      context: .
+      dockerfile: System/Dockerfile
+    container_name: adam-asr-whisper
+    profiles:
+      - speech-local-legacy
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8083}
+      ADAM_ASR_WHISPER_MODEL: ${ADAM_ASR_WHISPER_MODEL:-medium}
+      ADAM_ASR_LANGUAGE: ${ADAM_ASR_LANGUAGE:-ru}
+      ADAM_ASR_DEVICE: ${ADAM_ASR_DEVICE:-auto}
+    command: ["python", "-m", "Speech.ASR_Whisper"]
+    volumes:
+      - ./data:/data
+      - ./models:/root/.cache
 
   adam-asr-speaches:
     # faster-whisper + CUDA ASR via speaches (OpenAI-compatible API on :8000).
