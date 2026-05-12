@@ -265,9 +265,8 @@ class VoiceLoopController:
         ng_cfg = settings.section("noise_gate") or {}
         noise_sample_path: str | None = None
         if ng_cfg.get("mode", "stationary") == "sample":
-            from adam.config import PROJECT_ROOT as _ROOT
             _p = ng_cfg.get("sample_path", "data/adam/noise_sample.wav")
-            noise_sample_path = str(_ROOT / _p)
+            noise_sample_path = str(PROJECT_ROOT / _p)
         self._noise_gate = NoiseGate(noise_sample_path=noise_sample_path)
 
     def status(self) -> dict[str, Any]:
@@ -295,7 +294,7 @@ class VoiceLoopController:
         self.last_asr_error = ""
         self._standby_entry_time = time.perf_counter()  # arm OWW guard for first 0.5s after start
         if self._wake_engine is not None:
-            self._wake_engine.reset()
+            await asyncio.to_thread(self._wake_engine.reset)
         self._task = asyncio.create_task(self._run(), name="adam_voice_loop")
         await asyncio.sleep(0.2)
         if self._task.done():
@@ -386,7 +385,7 @@ class VoiceLoopController:
                         self._voice_state = "standby"
                         self._standby_entry_time = time.perf_counter()
                         if self._wake_engine is not None:
-                            self._wake_engine.reset()
+                            await asyncio.to_thread(self._wake_engine.reset)
                         speech_frames.clear()
                         speech_ms = 0
                         silence_ms = 0
@@ -504,7 +503,7 @@ class VoiceLoopController:
         self.vad_state = "transcribing"
         t_asr = time.perf_counter()
         try:
-            pcm = self._noise_gate.process(pcm)
+            pcm = await asyncio.to_thread(self._noise_gate.process, pcm)
             transcript = (await self.asr_client.transcribe_pcm(pcm)).strip()
         except Exception as exc:
             self.last_asr_error = str(exc)

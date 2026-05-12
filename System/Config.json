@@ -38,10 +38,10 @@
       "channels": 1,
       "frame_ms": 20,
       "vad_threshold": 800,
-    "use_webrtc_vad": true,
-    "webrtc_vad_aggressiveness": 2,
       "min_speech_ms": 200,
       "max_segment_ms": 3000,
+      "use_webrtc_vad": true,
+      "webrtc_vad_aggressiveness": 2,
       "max_command_segment_ms": 15000,
       "normalize_factor": 8000
     },
@@ -53,9 +53,9 @@
   },
   "services": {
     "llm": {
-      "provider": "openai",
+      "provider": "ollama",
       "base_url": "http://127.0.0.1:8081/v1",
-      "model": "gemma-4-E4B-it-UD-Q4_K_XL",
+      "model": "gemma3:4b",
       "timeout_sec": 60,
       "temperature": 0.7,
       "max_tokens": 40,
@@ -74,12 +74,12 @@
       "model": "/hf_cache/hub/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
       "language": "ru",
       "endpointing_ms": 400,
+      "sample_rate": 16000,
+      "timeout_sec": 30,
       "command_endpointing_ms": 1500,
       "reply_window_sec": 4.0,
       "reply_absolute_deadline_sec": 12.0,
       "reply_noise_gate": 1000,
-      "sample_rate": 16000,
-      "timeout_sec": 30,
       "barge_in_enabled": false,
       "wake_words": "адам,дохлый",
       "wake_word_required": true,
@@ -103,16 +103,6 @@
       ],
       "output_device": "plughw:1,3"
     }
-  },
-  "wake_word": {
-    "engine": "openwakeword",
-    "verifier_path": "data/wake_word/adam_verifier.pkl",
-    "threshold": 0.85,
-    "standby_guard_sec": 0.75
-  },
-  "noise_gate": {
-    "mode": "stationary",
-    "sample_path": "data/adam/noise_sample.wav"
   },
   "mcu": {
     "base_url": "http://192.168.0.171",
@@ -142,5 +132,15 @@
     "motor_max_duration_ms": 2500,
     "motor_cooldown_ms": 250,
     "half_duplex_mute": true
+  },
+  "wake_word": {
+    "engine": "openwakeword",
+    "verifier_path": "data/wake_word/adam_verifier.pkl",
+    "threshold": 0.85,
+    "standby_guard_sec": 0.75
+  },
+  "noise_gate": {
+    "mode": "stationary",
+    "sample_path": "data/adam/noise_sample.wav"
   }
 }
