@@ -86,12 +86,14 @@ services:
       ADAM_ASR_DEVICE: cuda
       ADAM_ASR_COMPUTE_TYPE: float16
       ADAM_ASR_SAMPLE_RATE: "16000"
+      ADAM_MODELS_DIR: /models
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       HF_HOME: /hf_cache
       HF_HUB_CACHE: /hf_cache/hub
     command: ["python", "-m", "Speech.ASR_WhisperX"]
     volumes:
       - ./data:/data
+      - ./Subsystem/Models:/models:ro
       - ./data/hf_cache:/hf_cache
       - /etc/localtime:/etc/localtime:ro
 

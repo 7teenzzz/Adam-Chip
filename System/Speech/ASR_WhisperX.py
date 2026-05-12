@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,8 @@ _SAMPLE_RATE = int(os.environ.get("ADAM_ASR_SAMPLE_RATE", "16000"))
 _MODELS_DIR = Path(os.environ.get("ADAM_MODELS_DIR", "Subsystem/Models"))
 
 _MODEL: Any = None
+_ACTUAL_MODEL_SIZE: str = _MODEL_SIZE  # updated after load to reflect OOM fallback
+_MODEL_LOCK = threading.Lock()         # prevents concurrent load_model() calls → OOM on Jetson
 
 
 def _resolve_device() -> str:
@@ -76,27 +79,33 @@ def _dependency_errors() -> list[str]:
 
 
 def _get_model() -> Any:
-    global _MODEL
+    global _MODEL, _ACTUAL_MODEL_SIZE
+    # Fast path — avoid lock on every transcribe call
     if _MODEL is not None:
         return _MODEL
+    with _MODEL_LOCK:
+        # Re-check inside lock — another thread may have loaded while we waited
+        if _MODEL is not None:
+            return _MODEL
 
-    import whisperx
+        import whisperx
 
-    device = _resolve_device()
-    compute_type = _resolve_compute_type(device)
-    model_size = _resolve_model_size()
+        device = _resolve_device()
+        compute_type = _resolve_compute_type(device)
+        model_size = _resolve_model_size()
+        _ACTUAL_MODEL_SIZE = model_size
 
-    _MODEL = whisperx.load_model(
-        model_size,
-        device=device,
-        compute_type=compute_type,
-        download_root=str(_MODELS_DIR),
-        asr_options={
-            "language": _LANGUAGE,
-            "vad_method": "silero",
-            # Do NOT use "pyannote" — requires HuggingFace token and gated model access
-        },
-    )
+        # language is a top-level param of load_model(), NOT inside asr_options.
+        # asr_options feeds into TranscriptionOptions (beam search params only).
+        # Silero VAD is used automatically in whisperx >= 3.x via the internal vad pipeline;
+        # pyannote is NOT needed and no HuggingFace token is required for transcription.
+        _MODEL = whisperx.load_model(
+            model_size,
+            device=device,
+            compute_type=compute_type,
+            language=_LANGUAGE,
+            download_root=str(_MODELS_DIR),
+        )
     return _MODEL
 
 
@@ -107,6 +116,7 @@ def _transcribe_audio(audio: np.ndarray) -> str:
     parts = []
     for seg in result.get("segments", []):
         # avg_logprob: lower = worse quality. -0.5 is a good threshold for Russian.
+        # NOTE: whisperx uses avg_logprob (NOT no_speech_prob which is faster-whisper only)
         if seg.get("avg_logprob", -1.0) < -0.5:
             continue
         text = seg.get("text", "").strip()
@@ -157,7 +167,8 @@ async def health(response: Response) -> dict:
         "ok": ok,
         "provider": "whisperx",
         "model_loaded": _MODEL is not None,
-        "model": _MODEL_SIZE,
+        "model": _ACTUAL_MODEL_SIZE,  # reflects OOM fallback (may differ from _MODEL_SIZE env)
+        "model_requested": _MODEL_SIZE,
         "language": _LANGUAGE,
         "device": _resolve_device(),
         "compute_type": _resolve_compute_type(_resolve_device()),

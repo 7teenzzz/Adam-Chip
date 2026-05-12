@@ -18,6 +18,7 @@ Environment=HF_HOME=/home/i17jet/Agents/Adam-Chip/data/hf_cache
 ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python -m Speech.ASR_WhisperX
 Restart=always
 RestartSec=5
+TimeoutStartSec=600
 TimeoutStopSec=10
 StandardOutput=journal
 StandardError=journal

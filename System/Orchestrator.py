@@ -241,9 +241,23 @@ class VoiceLoopController:
         self.last_asr_error = ""
         self.muted_by_tts = False
         self.last_wake_skip = ""
-        # Local wake word engine (openWakeWord, CPU) — None → fallback to Whisper-based detection
+        # Local wake word engine (openWakeWord, CPU) — None → no wake word detection
         ww_cfg = settings.section("wake_word") or {}
         self._wake_engine = _create_wake_engine(ww_cfg)
+        if self._wake_engine is None and ww_cfg.get("engine", "none") != "none":
+            # Model file missing or engine init failed — log a visible warning so operator
+            # knows the system is deaf in exhibition mode (wake_word_required=true).
+            import logging as _logging
+            _logging.getLogger("adam.voice").warning(
+                "wake_word engine '%s' returned None — model file missing or init failed. "
+                "System will not respond to voice in exhibition mode.",
+                ww_cfg.get("engine", "?"),
+            )
+            event_log.append("wake_engine_missing", {
+                "engine": ww_cfg.get("engine"),
+                "model_path": ww_cfg.get("model_path"),
+                "wake_word_required": self.wake_word_required,
+            })
         # 4 × 20ms frames = 80ms chunks for openWakeWord
         self._ww_buf: list[bytes] = []
         self._ww_frames_needed = 4
