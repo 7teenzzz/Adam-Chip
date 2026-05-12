@@ -249,6 +249,8 @@ class VoiceLoopController:
         self._ww_frames_needed = 4
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
         self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
+        self._wake_detected_at: float = 0.0
+        self._wake_silence_timeout_sec: float = 3.0
 
     def status(self) -> dict[str, Any]:
         return {
@@ -339,6 +341,7 @@ class VoiceLoopController:
                             if self._wake_engine.process_chunk(pcm_80ms):
                                 event_log.append("wake_word_detected", {"engine": "openwakeword"})
                                 self._voice_state = "listening"
+                                self._wake_detected_at = time.perf_counter()
                                 speech_frames.clear()
                                 speech_ms = 0
                                 silence_ms = 0
@@ -362,6 +365,21 @@ class VoiceLoopController:
                         speech_frames.clear()
                         speech_ms = 0
                         silence_ms = 0
+                        self._ww_buf.clear()
+                        continue
+
+                # ── LISTENING: 3s silence timeout after wake word ────────────────
+                # If the user triggered the wake word but said nothing within the
+                # timeout window, return to standby rather than waiting indefinitely.
+                if self._voice_state == "listening" and speech_ms == 0:
+                    elapsed = time.perf_counter() - self._wake_detected_at
+                    if elapsed >= self._wake_silence_timeout_sec:
+                        event_log.append("wake_silence_timeout", {
+                            "action": "standby",
+                            "elapsed_sec": round(elapsed, 1),
+                        })
+                        self._voice_state = "standby"
+                        self._standby_entry_time = time.perf_counter()
                         self._ww_buf.clear()
                         continue
 
