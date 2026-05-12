@@ -323,6 +323,29 @@ class WhisperASRClient:
         return out.getvalue()
 
 
+class WhisperXASRClient(WhisperASRClient):
+    """HTTP client for ASR_WhisperX.py microservice (whisperx + CUDA).
+
+    API contract is identical to WhisperASRClient: POST /transcribe with WAV body,
+    returns {"transcript": "..."}. This subclass exists to distinguish the provider
+    in health checks and logs.
+    """
+
+    def _health_sync(self) -> ServiceHealth:
+        try:
+            req = Request(self.base_url + "/health", method="GET")
+            with urlopen(req, timeout=3) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                ok = bool(body.get("ok", False))
+                model_loaded = bool(body.get("model_loaded", False))
+                detail = f"whisperx {'loaded' if model_loaded else 'loading'}"
+                return ServiceHealth(ok, detail, loading=not model_loaded)
+        except HTTPError as exc:
+            return ServiceHealth(False, f"HTTP {exc.code}", loading=exc.code == 503)
+        except (URLError, OSError) as exc:
+            return ServiceHealth(False, str(exc))
+
+
 class SpeachesASRClient:
     """HTTP client for speaches OpenAI-compatible ASR (faster-whisper + CUDA via Docker).
 
@@ -425,10 +448,12 @@ class SpeachesASRClient:
         return out.getvalue()
 
 
-def create_asr_client(config: dict[str, Any]) -> WhisperASRClient | SpeachesASRClient:
+def create_asr_client(config: dict[str, Any]) -> WhisperASRClient | WhisperXASRClient | SpeachesASRClient:
     provider = str(config.get("provider", "whisper")).strip().lower()
     if provider == "speaches":
         return SpeachesASRClient(config)
+    if provider == "whisperx":
+        return WhisperXASRClient(config)
     return WhisperASRClient(config)
 
 

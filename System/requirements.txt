@@ -1,6 +1,18 @@
 fastapi>=0.110
 uvicorn>=0.27
 
+# Wake word detection — openWakeWord with built-in Silero VAD
+openwakeword>=0.6.0
+onnxruntime>=1.16.0
+numpy>=1.24.0
+
+# ASR — WhisperX (CUDA-optimized speech recognition)
+whisperx>=3.1.0
+faster-whisper>=1.0.0
+ctranslate2>=4.0.0
+# NOTE: pyannote.audio is NOT needed when using vad_method="silero"
+# Only add it if you switch to vad_method="pyannote" (requires HF token)
+
 # Optional runtime packages for local TTS. Install on Jetson after CUDA/PyTorch
 # is confirmed for the active JetPack image.
 # silero>=0.5.0

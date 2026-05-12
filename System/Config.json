@@ -67,22 +67,18 @@
       "prompt": "Briefly describe the scene in one sentence: people present, movement, notable objects."
     },
     "asr": {
-      "provider": "speaches",
-      "base_url": "http://127.0.0.1:8083",
-      "model": "/hf_cache/hub/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
+      "provider": "whisperx",
+      "base_url": "http://127.0.0.1:8095",
+      "model": "large-v3",
       "language": "ru",
-      "endpointing_ms": 400,
       "command_endpointing_ms": 1500,
       "reply_window_sec": 4.0,
       "reply_absolute_deadline_sec": 12.0,
       "reply_noise_gate": 1000,
       "sample_rate": 16000,
       "timeout_sec": 30,
-      "barge_in_enabled": false,
-      "wake_words": "адам,дохлый",
-      "wake_word_required": true,
-      "host": "127.0.0.1",
-      "port": 8083
+      "wake_words": "адам",
+      "wake_word_required": true
     },
     "tts": {
       "provider": "silero",
