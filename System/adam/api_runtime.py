@@ -61,6 +61,7 @@ class RuntimeDeps:
     rebuild_clients: Callable[[str], list[str]]
     capture_snapshot: Callable[[], bytes]
     run_dialogue_turn: Callable[..., Awaitable[dict[str, Any]]]
+    get_voice_loop: Callable[[], Any] | None = None
 
 
 def build_router(deps: RuntimeDeps) -> APIRouter:
@@ -304,6 +305,67 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         if auto_turn and transcript:
             result["turn"] = await deps.run_dialogue_turn(transcript, "ui_upload", asr_ms=asr_ms)
         return result
+
+    @router.get("/api/agent/noise/status")
+    async def noise_status() -> dict[str, Any]:
+        if deps.get_voice_loop is None:
+            raise HTTPException(status_code=503, detail="voice_loop unavailable")
+        vl = deps.get_voice_loop()
+        ng = vl._noise_gate
+        ng_cfg = deps.settings.section("noise_gate") or {}
+        sample_path = PROJECT_ROOT / ng_cfg.get("sample_path", "data/adam/noise_sample.wav")
+        return {
+            "mode": ng_cfg.get("mode", "stationary"),
+            "has_sample": ng.has_sample,
+            "sample_path": str(sample_path),
+            "sample_exists": sample_path.exists(),
+        }
+
+    @router.post("/api/agent/noise/record")
+    async def noise_record(duration: int = Query(4, ge=1, le=30)) -> dict[str, Any]:
+        if deps.get_voice_loop is None:
+            raise HTTPException(status_code=503, detail="voice_loop unavailable")
+        vl = deps.get_voice_loop()
+        ng_cfg = deps.settings.section("noise_gate") or {}
+        sample_rel = ng_cfg.get("sample_path", "data/adam/noise_sample.wav")
+        sample_path = PROJECT_ROOT / sample_rel
+        sample_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            "arecord", "-q",
+            "-D", vl.capture_device,
+            "-f", "S16_LE",
+            "-r", str(vl.sample_rate),
+            "-c", "1",
+            "-d", str(duration),
+            str(sample_path),
+        ]
+        try:
+            await asyncio.to_thread(subprocess.run, cmd, check=True, timeout=duration + 5)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"arecord failed: {exc}") from exc
+
+        vl._noise_gate.load(str(sample_path))
+        deps.event_log.append("noise_sample_recorded", {"path": str(sample_path), "duration_sec": duration})
+        return {"ok": True, "path": str(sample_path), "duration_sec": duration}
+
+    @router.post("/api/agent/noise/mode")
+    async def noise_set_mode(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        mode = str(payload.get("mode", "stationary"))
+        if mode not in ("sample", "stationary"):
+            raise HTTPException(status_code=400, detail="mode must be 'sample' or 'stationary'")
+        if deps.get_voice_loop is None:
+            raise HTTPException(status_code=503, detail="voice_loop unavailable")
+        vl = deps.get_voice_loop()
+        deps.settings.apply_patch("noise_gate", {"mode": mode})
+        deps.settings.save()
+        ng_cfg = deps.settings.section("noise_gate") or {}
+        if mode == "sample":
+            sample_path = PROJECT_ROOT / ng_cfg.get("sample_path", "data/adam/noise_sample.wav")
+            vl._noise_gate.load(str(sample_path))
+        else:
+            vl._noise_gate.clear_sample()
+        return {"ok": True, "mode": mode}
 
     @router.get("/api/agent/stream")
     async def agent_stream(request: Request) -> StreamingResponse:

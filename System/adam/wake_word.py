@@ -6,8 +6,11 @@ from typing import Any
 
 
 class WakeWordEngine:
-    def process_chunk(self, pcm_80ms: bytes) -> bool:
+    def process_chunk(self, pcm_80ms: bytes) -> tuple[bool, float]:
         raise NotImplementedError
+
+    def reset(self) -> None:
+        pass
 
     def close(self) -> None:
         pass
@@ -44,14 +47,20 @@ class OpenWakeWordEngine(WakeWordEngine):
         for _ in range(20):
             self._oww.predict(silence)
 
-    def process_chunk(self, pcm_80ms: bytes) -> bool:
+    def reset(self) -> None:
+        silence = self._np.zeros(1280, dtype=self._np.int16)
+        for _ in range(20):
+            self._oww.predict(silence)
+        self._consecutive_hits = 0
+
+    def process_chunk(self, pcm_80ms: bytes) -> tuple[bool, float]:
         np = self._np
         audio = np.frombuffer(pcm_80ms, dtype=np.int16)
         self._oww.predict(audio)
         feats = self._oww.preprocessor.get_features(self._n_frames)
         if feats.shape[0] == 0:
             self._consecutive_hits = 0
-            return False
+            return False, 0.0
         x = feats.flatten().reshape(1, -1)
         score = float(self._verifier.predict_proba(x)[0, 1])
         if score >= self._threshold:
@@ -60,8 +69,8 @@ class OpenWakeWordEngine(WakeWordEngine):
             self._consecutive_hits = 0
         if self._consecutive_hits >= self._DEBOUNCE_HITS:
             self._consecutive_hits = 0  # reset so re-trigger requires a full new debounce sequence
-            return True
-        return False
+            return True, score
+        return False, score
 
 
 class PorcupineEngine(WakeWordEngine):
@@ -76,10 +85,11 @@ class PorcupineEngine(WakeWordEngine):
             sensitivities=[sensitivity],
         )
 
-    def process_chunk(self, pcm_80ms: bytes) -> bool:
+    def process_chunk(self, pcm_80ms: bytes) -> tuple[bool, float]:
         n = self._porcupine.frame_length
         samples = struct.unpack_from(f"{n}h", pcm_80ms[: n * 2])
-        return self._porcupine.process(samples) >= 0
+        detected = self._porcupine.process(samples) >= 0
+        return detected, 1.0 if detected else 0.0
 
     def close(self) -> None:
         self._porcupine.delete()

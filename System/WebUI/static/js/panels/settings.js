@@ -526,6 +526,112 @@ function renderFieldRow(field, value, buildInput) {
   ]);
 }
 
+// ── Noise gate card ───────────────────────────────────────────────────────────
+
+async function buildNoiseGateCard() {
+  let status;
+  try {
+    status = await api.get("/api/agent/noise/status");
+  } catch (_) {
+    return null;
+  }
+
+  const statusBadge = el("span", {
+    class: "badge",
+    style: "font-size:10px; padding:1px 6px",
+  });
+
+  function updateBadge(st) {
+    statusBadge.className = "badge " + (st.has_sample && st.sample_exists ? "ok" : "");
+    statusBadge.textContent = st.has_sample && st.sample_exists
+      ? "образец загружен"
+      : "образец отсутствует";
+  }
+  updateBadge(status);
+
+  const modeSelect = el("select", { class: "select" }, [
+    el("option", { value: "stationary", selected: status.mode === "stationary" ? "selected" : null }, "Статичный (без образца)"),
+    el("option", { value: "sample",     selected: status.mode === "sample"     ? "selected" : null }, "По образцу"),
+  ]);
+  const modeSaveStatus = el("span", { class: "badge", style: "font-size:10px; padding:1px 6px" });
+  modeSelect.addEventListener("change", async () => {
+    modeSaveStatus.className = "badge warn";
+    modeSaveStatus.textContent = "сохранение…";
+    try {
+      await api.raw("/api/agent/noise/mode", { method: "POST", body: { mode: modeSelect.value } });
+      const st = await api.get("/api/agent/noise/status");
+      updateBadge(st);
+      modeSaveStatus.className = "badge ok";
+      modeSaveStatus.textContent = "ok";
+      setTimeout(() => { modeSaveStatus.textContent = ""; modeSaveStatus.className = "badge"; }, 2500);
+    } catch (e) {
+      modeSaveStatus.className = "badge bad";
+      modeSaveStatus.textContent = "ошибка";
+      toast(`noise/mode: ${e.message}`, "bad", 5000);
+    }
+  });
+
+  let recording = false;
+  const recBtn = el("button", { class: "btn" }, "Записать фоновый шум (4 с)");
+  const recStatus = el("span", { class: "badge", style: "font-size:10px; padding:1px 6px" });
+  recBtn.addEventListener("click", async () => {
+    if (recording) return;
+    recording = true;
+    recBtn.disabled = true;
+    recStatus.className = "badge warn";
+    recStatus.textContent = "запись 4 с…";
+    try {
+      await api.raw("/api/agent/noise/record?duration=4", { method: "POST" });
+      const st = await api.get("/api/agent/noise/status");
+      updateBadge(st);
+      recStatus.className = "badge ok";
+      recStatus.textContent = "записан ✓";
+      setTimeout(() => { recStatus.textContent = ""; recStatus.className = "badge"; }, 3000);
+    } catch (e) {
+      recStatus.className = "badge bad";
+      recStatus.textContent = "ошибка";
+      toast(`noise/record: ${e.message}`, "bad", 5000);
+    } finally {
+      recording = false;
+      recBtn.disabled = false;
+    }
+  });
+
+  const grid = el("div", { class: "field-grid" }, [
+    el("label", { style: "display:flex; flex-direction:column; gap:0" }, [
+      el("div", { style: "display:flex; flex-direction:column; gap:2px; margin-bottom:4px" }, [
+        el("div", { style: "display:flex; align-items:center; gap:6px; flex-wrap:wrap" }, [
+          el("span", { style: "color:var(--text); font-size:12px; font-weight:500" }, "Режим шумоподавления"),
+          statusBadge,
+          modeSaveStatus,
+        ]),
+        el("span", { style: "color:var(--muted); font-size:10px; line-height:1.3" },
+          "stationary — оценивает шум из сигнала · sample — использует записанный образец"),
+      ]),
+      modeSelect,
+    ]),
+    el("label", { style: "display:flex; flex-direction:column; gap:0" }, [
+      el("div", { style: "display:flex; flex-direction:column; gap:2px; margin-bottom:4px" }, [
+        el("div", { style: "display:flex; align-items:center; gap:6px; flex-wrap:wrap" }, [
+          el("span", { style: "color:var(--text); font-size:12px; font-weight:500" }, "Запись образца шума"),
+          recStatus,
+        ]),
+        el("span", { style: "color:var(--muted); font-size:10px; line-height:1.3" },
+          "перед записью выключите речь · 4 секунды фонового шума выставки"),
+      ]),
+      recBtn,
+    ]),
+  ]);
+
+  return el("section", { class: "card" }, [
+    el("div", { class: "card-header" }, [
+      el("span", { class: "card-title" }, "ASR · подавление шума"),
+      el("span", { class: "caps mono dim" }, "noise_gate"),
+    ]),
+    el("div", { class: "card-body" }, [grid]),
+  ]);
+}
+
 // ── Main mount ────────────────────────────────────────────────────────────────
 
 export function mount(target) {
@@ -629,6 +735,10 @@ export function mount(target) {
       if (hasTextarea) card.classList.add("card-full");
       cardGrid.appendChild(card);
     });
+
+    // ── Noise gate card (custom — needs action button) ────────────────────────
+    const noiseCard = await buildNoiseGateCard();
+    if (noiseCard) cardGrid.appendChild(noiseCard);
 
     container.appendChild(cardGrid);
     container.appendChild(el("div", { class: "muted", style: "font-size:12px; padding:8px 0" }, [

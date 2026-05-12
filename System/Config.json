@@ -37,7 +37,9 @@
       "sample_rate": 16000,
       "channels": 1,
       "frame_ms": 20,
-      "vad_threshold": 600,
+      "vad_threshold": 800,
+    "use_webrtc_vad": true,
+    "webrtc_vad_aggressiveness": 2,
       "min_speech_ms": 200,
       "max_segment_ms": 3000,
       "max_command_segment_ms": 15000,
@@ -105,7 +107,12 @@
   "wake_word": {
     "engine": "openwakeword",
     "verifier_path": "data/wake_word/adam_verifier.pkl",
-    "threshold": 0.85
+    "threshold": 0.85,
+    "standby_guard_sec": 0.75
+  },
+  "noise_gate": {
+    "mode": "stationary",
+    "sample_path": "data/adam/noise_sample.wav"
   },
   "mcu": {
     "base_url": "http://192.168.0.171",

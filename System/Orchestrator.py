@@ -44,6 +44,7 @@ from adam.system import docker_health, gate_summary, all_services_status, servic
 from adam.tuning import TuningStore, get_store as _get_tuning_store
 from adam.ui import agent_page, dash_page, debug_page
 from adam.wake_word import create_engine as _create_wake_engine
+from adam.noise_gate import NoiseGate
 
 
 settings = Settings.load()
@@ -248,7 +249,26 @@ class VoiceLoopController:
         self._ww_buf: list[bytes] = []
         self._ww_frames_needed = 4
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
-        self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
+        self._STANDBY_GUARD_SEC: float = float(ww_cfg.get("standby_guard_sec", 0.75))
+
+        # WebRTC VAD — distinguishes voiced speech harmonics from broadband noise
+        self._use_webrtc_vad: bool = bool(audio_config.get("use_webrtc_vad", True))
+        self._wrtc: Any = None
+        if self._use_webrtc_vad:
+            try:
+                import webrtcvad as _webrtcvad
+                self._wrtc = _webrtcvad.Vad(int(audio_config.get("webrtc_vad_aggressiveness", 2)))
+            except ImportError:
+                self._use_webrtc_vad = False
+
+        # Stationary noise suppression before ASR
+        ng_cfg = settings.section("noise_gate") or {}
+        noise_sample_path: str | None = None
+        if ng_cfg.get("mode", "stationary") == "sample":
+            from adam.config import PROJECT_ROOT as _ROOT
+            _p = ng_cfg.get("sample_path", "data/adam/noise_sample.wav")
+            noise_sample_path = str(_ROOT / _p)
+        self._noise_gate = NoiseGate(noise_sample_path=noise_sample_path)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -274,6 +294,8 @@ class VoiceLoopController:
         self.running = True
         self.last_asr_error = ""
         self._standby_entry_time = time.perf_counter()  # arm OWW guard for first 0.5s after start
+        if self._wake_engine is not None:
+            self._wake_engine.reset()
         self._task = asyncio.create_task(self._run(), name="adam_voice_loop")
         await asyncio.sleep(0.2)
         if self._task.done():
@@ -317,7 +339,10 @@ class VoiceLoopController:
                     raise RuntimeError(f"arecord ended: {self._read_process_stderr()}")
 
                 _rms = audioop.rms(chunk, 2)
-                voiced = _rms >= self.vad_threshold
+                if self._wrtc is not None:
+                    voiced = self._wrtc.is_speech(chunk, self.sample_rate)
+                else:
+                    voiced = _rms >= self.vad_threshold
                 level_tick += 1
                 if level_tick >= 5:
                     level_tick = 0
@@ -336,8 +361,9 @@ class VoiceLoopController:
                         if len(self._ww_buf) >= self._ww_frames_needed:
                             pcm_80ms = b"".join(self._ww_buf)
                             self._ww_buf.clear()
-                            if self._wake_engine.process_chunk(pcm_80ms):
-                                event_log.append("wake_word_detected", {"engine": "openwakeword"})
+                            detected, ww_score = self._wake_engine.process_chunk(pcm_80ms)
+                            if detected:
+                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(ww_score, 3)})
                                 self._voice_state = "listening"
                                 speech_frames.clear()
                                 speech_ms = 0
@@ -359,6 +385,8 @@ class VoiceLoopController:
                         })
                         self._voice_state = "standby"
                         self._standby_entry_time = time.perf_counter()
+                        if self._wake_engine is not None:
+                            self._wake_engine.reset()
                         speech_frames.clear()
                         speech_ms = 0
                         silence_ms = 0
@@ -476,6 +504,7 @@ class VoiceLoopController:
         self.vad_state = "transcribing"
         t_asr = time.perf_counter()
         try:
+            pcm = self._noise_gate.process(pcm)
             transcript = (await self.asr_client.transcribe_pcm(pcm)).strip()
         except Exception as exc:
             self.last_asr_error = str(exc)
@@ -1891,6 +1920,7 @@ _runtime_deps = RuntimeDeps(
     rebuild_clients=_rebuild_clients,
     capture_snapshot=camera_reader.get_latest,
     run_dialogue_turn=_run_dialogue_turn,
+    get_voice_loop=lambda: voice_loop,
 )
 app.include_router(build_router(_runtime_deps))
 
