@@ -81,6 +81,8 @@ COMMON_ARGS=(
   -e WHISPER__COMPUTE_TYPE=float16
   -e WHISPER__TTL=-1
   -e WHISPER__VAD_FILTER=false
+  -e HF_HUB_OFFLINE=1
+  -e TRANSFORMERS_OFFLINE=1
   -e HF_HOME=/hf_cache
   -e HF_HUB_CACHE=/hf_cache/hub
   -v "${HF_CACHE}:/hf_cache"

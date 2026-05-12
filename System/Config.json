@@ -69,7 +69,7 @@
     "asr": {
       "provider": "speaches",
       "base_url": "http://127.0.0.1:8083",
-      "model": "Systran/faster-whisper-base",
+      "model": "/hf_cache/hub/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
       "language": "ru",
       "endpointing_ms": 400,
       "command_endpointing_ms": 1500,
