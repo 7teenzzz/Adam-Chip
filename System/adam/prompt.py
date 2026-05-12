@@ -46,12 +46,12 @@ class PromptBuilder:
             scenes = [s for s in (recent_scenes or []) if s]
             if len(scenes) > 1:
                 numbered = "\n".join(f"  [{i + 1}] {s}" for i, s in enumerate(scenes))
-                ctx_parts.append(f"Camera observations (oldest → newest):\n{numbered}")
+                ctx_parts.append(f"Что я вижу (от раннего к позднему):\n{numbered}")
             else:
                 latest = scenes[0] if scenes else scene_cache
-                ctx_parts.append(f"Camera:\n{latest or 'No scene data yet.'}")
+                ctx_parts.append(f"Что я вижу:\n{latest or 'Визуальный канал не отвечает.'}")
         if include_sensors:
-            ctx_parts.append(f"Сенсоры:\n{sensor_text}")
+            ctx_parts.append(sensor_text)
         if echo_hint:
             ctx_parts.append(echo_hint.strip())
 
@@ -84,8 +84,9 @@ class PromptBuilder:
     @staticmethod
     def _format_sensors(sensors: dict[str, Any]) -> str:
         if not sensors:
-            return "Нет свежих данных."
-        return ", ".join(f"{key}={value}" for key, value in sorted(sensors.items()))
+            return "Мои сенсорные органы не отвечают — отключены или сломаны."
+        parts = ", ".join(f"{key}={value}" for key, value in sorted(sensors.items()))
+        return f"Что я ощущаю: {parts}"
 
     @staticmethod
     def _format_recent(items: list[str]) -> str:
