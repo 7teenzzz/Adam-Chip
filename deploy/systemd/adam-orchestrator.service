@@ -27,6 +27,9 @@ StartLimitIntervalSec=120
 StartLimitBurst=5
 RestartSec=3
 TimeoutStartSec=300
+TimeoutStopSec=15
+KillMode=mixed
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=multi-user.target
