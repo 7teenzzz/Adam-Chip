@@ -2,12 +2,24 @@
 # Adam Chip — start the agent stack.
 #
 # Usage:
-#   ./scripts/adam_start.sh                  # запустить всё
-#   ./scripts/adam_start.sh --llm --tts      # только LLM + TTS
-#   ./scripts/adam_start.sh --empty          # только UI/оркестратор, без моделей
+#   ./scripts/adam_start.sh                          # запустить всё
+#   ./scripts/adam_start.sh --llm --tts              # только LLM + TTS (+ оркестратор)
+#   ./scripts/adam_start.sh --asr --no-orch          # перезапустить только ASR
+#   ./scripts/adam_start.sh --empty                  # только UI/оркестратор, без моделей
+#   ./scripts/adam_start.sh --mode exhibition        # запустить в exhibition-режиме
 #
-# Флаги (можно комбинировать): --llm --tts --asr --vlm     
-#   --empty   только оркестратор (UI, настройки) — ни одна модель не стартует
+# Флаги (можно комбинировать):
+#   --llm        Запустить LLM (adam-llm.service, llama-server)
+#   --tts        Запустить TTS (adam-tts-silero.service, Silero)
+#   --asr        Запустить ASR (adam-asr-whisperx.service, WhisperX Docker)
+#   --vlm        Запустить Live VLM (adam-live-vlm Docker, VILA 1.5-3b)
+#   --empty      Только оркестратор (UI, настройки) — ни одна модель не стартует
+#   --no-orch    Не (пере)запускать оркестратор — только AI-сервисы
+#                Полезно когда оркестратор уже работает и надо перестартовать TTS/ASR
+#   --mode <m>   Задать ADAM_MODE (maintenance|exhibition). По умолчанию: maintenance
+#
+# Wake Word (OWW) — встроен в оркестратор, отдельного флага не требует.
+# OWW запускается автоматически вместе с оркестратором.
 #
 # Если флаги не переданы — запускается вся система (режим "всё").
 # Idempotent. Safe to re-run. Uses sudo only when systemd action is required.
@@ -35,20 +47,35 @@ START_TTS=false
 START_ASR=false
 START_VLM=false
 EMPTY_MODE=false
+START_ORCH=true
 
-for arg in "$@"; do
-  case "${arg}" in
-    --llm)   START_LLM=true;  EXPLICIT_NODES=true ;;
-    --tts)   START_TTS=true;  EXPLICIT_NODES=true ;;
-    --asr)   START_ASR=true;  EXPLICIT_NODES=true ;;
-    --vlm)   START_VLM=true;  EXPLICIT_NODES=true ;;
-    --empty) EMPTY_MODE=true ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --llm)    START_LLM=true;  EXPLICIT_NODES=true ;;
+    --tts)    START_TTS=true;  EXPLICIT_NODES=true ;;
+    --asr)    START_ASR=true;  EXPLICIT_NODES=true ;;
+    --vlm)    START_VLM=true;  EXPLICIT_NODES=true ;;
+    --empty)  EMPTY_MODE=true ;;
+    --no-orch) START_ORCH=false ;;
+    --mode)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Ошибка: --mode требует значение (maintenance|exhibition)" >&2
+        exit 1
+      fi
+      if [[ "$1" != "maintenance" && "$1" != "exhibition" ]]; then
+        echo "Ошибка: --mode допускает только maintenance|exhibition, получено: $1" >&2
+        exit 1
+      fi
+      MODE="$1"
+      ;;
     *)
-      echo "Неизвестный аргумент: ${arg}" >&2
-      echo "Использование: $0 [--llm] [--tts] [--asr] [--vlm] [--empty]" >&2
+      echo "Неизвестный аргумент: $1" >&2
+      echo "Использование: $0 [--llm] [--tts] [--asr] [--vlm] [--empty] [--no-orch] [--mode maintenance|exhibition]" >&2
       exit 1
       ;;
   esac
+  shift
 done
 
 # No explicit nodes + no --empty → start everything
@@ -125,6 +152,7 @@ elif ${EXPLICIT_NODES}; then
 else
   echo "  nodes:   all"
 fi
+${START_ORCH} || echo "  orch:    --no-orch (оркестратор не (пере)запускается)"
 printf "  hw:      USB-cam=%s  ESP-cam=%s  mic=%s\n" \
   "$([[ ${USB_CAM} == 1 ]] && echo ✓ || echo ✗)" \
   "$([[ ${ESP_CAM} == 1 ]] && echo ✓ || echo ✗)" \
@@ -221,44 +249,55 @@ if ! ${EMPTY_MODE}; then
 fi
 
 # --------- 3. Orchestrator ---------------------------------------------------
-existing_pids="$(pgrep -f 'System/Orchestrator\.py' || true)"
-if [[ -n "${existing_pids}" ]]; then
+if ${START_ORCH}; then
+  existing_pids="$(pgrep -f 'System/Orchestrator\.py' || true)"
+  if [[ -n "${existing_pids}" ]]; then
+    echo
+    echo "⏵ Останавливаю предыдущий orchestrator: ${existing_pids}"
+    kill ${existing_pids} 2>/dev/null || true
+    sleep 1
+    remaining="$(pgrep -f 'System/Orchestrator\.py' || true)"
+    if [[ -n "${remaining}" ]]; then
+      kill -9 ${remaining} 2>/dev/null || true
+    fi
+  fi
+
   echo
-  echo "⏵ Останавливаю предыдущий orchestrator: ${existing_pids}"
-  kill ${existing_pids} 2>/dev/null || true
-  sleep 1
-  remaining="$(pgrep -f 'System/Orchestrator\.py' || true)"
-  if [[ -n "${remaining}" ]]; then
-    kill -9 ${remaining} 2>/dev/null || true
+  echo "⏵ Запуск orchestrator…"
+  cd "${ROOT_DIR}"
+  PYTHONPATH="${ROOT_DIR}/System" \
+    ADAM_MODE="${MODE}" \
+    ADAM_ORCHESTRATOR_PORT="${PORT}" \
+    ADAM_MODELS_DIR="${MODELS_DIR}" \
+    ADAM_EXPECTED_SERVICES="${EXPECTED_SERVICES}" \
+    HF_HOME="${MODELS_DIR}/hf" \
+    HF_HUB_CACHE="${MODELS_DIR}/hf/hub" \
+    nohup "${VENV_PYTHON}" "${ROOT_DIR}/System/Orchestrator.py" >>"${LOG_FILE}" 2>&1 &
+  ORCH_PID=$!
+  echo "${ORCH_PID}" > "${PID_FILE}"
+  disown "${ORCH_PID}" 2>/dev/null || true
+
+  for i in $(seq 1 40); do
+    if curl --noproxy '*' -fsS "http://127.0.0.1:${PORT}/api/agent/status" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.3
+  done
+
+  if ! kill -0 "${ORCH_PID}" 2>/dev/null; then
+    echo "✗ Orchestrator упал. Последние строки лога:" >&2
+    tail -n 30 "${LOG_FILE}" >&2 || true
+    exit 1
   fi
-fi
-
-echo
-echo "⏵ Запуск orchestrator…"
-cd "${ROOT_DIR}"
-PYTHONPATH="${ROOT_DIR}/System" \
-  ADAM_MODE="${MODE}" \
-  ADAM_ORCHESTRATOR_PORT="${PORT}" \
-  ADAM_MODELS_DIR="${MODELS_DIR}" \
-  ADAM_EXPECTED_SERVICES="${EXPECTED_SERVICES}" \
-  HF_HOME="${MODELS_DIR}/hf" \
-  HF_HUB_CACHE="${MODELS_DIR}/hf/hub" \
-  nohup "${VENV_PYTHON}" "${ROOT_DIR}/System/Orchestrator.py" >>"${LOG_FILE}" 2>&1 &
-ORCH_PID=$!
-echo "${ORCH_PID}" > "${PID_FILE}"
-disown "${ORCH_PID}" 2>/dev/null || true
-
-for i in $(seq 1 40); do
-  if curl --noproxy '*' -fsS "http://127.0.0.1:${PORT}/api/agent/status" >/dev/null 2>&1; then
-    break
+else
+  ORCH_PID="$(pgrep -f 'System/Orchestrator\.py' | head -1 || true)"
+  if [[ -n "${ORCH_PID}" ]]; then
+    echo
+    echo "  · Оркестратор уже запущен (PID ${ORCH_PID}), --no-orch: пропускаю перезапуск"
+  else
+    echo
+    echo "  ! Оркестратор не запущен. Запусти без --no-orch или через adam_start.sh --empty"
   fi
-  sleep 0.3
-done
-
-if ! kill -0 "${ORCH_PID}" 2>/dev/null; then
-  echo "✗ Orchestrator упал. Последние строки лога:" >&2
-  tail -n 30 "${LOG_FILE}" >&2 || true
-  exit 1
 fi
 
 # --------- 4. Live VLM (optional) --------------------------------------------
@@ -293,6 +332,8 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${LIVE_VLM_CONTAINER}
   vlm_url="http://${IP}:8084/"
 fi
 
+ORCH_PID="${ORCH_PID:-$(pgrep -f 'System/Orchestrator\.py' | head -1 || echo '?')}"
+
 cat <<EOF
 
 ▶ Готово.
@@ -302,7 +343,7 @@ cat <<EOF
   LAN UI:    http://${IP}:${PORT}/${vlm_url:+
   Live VLM:  ${vlm_url}}
 
-Проверить:    curl -s http://127.0.0.1:${PORT}/api/agent/status | python3 -m json.tool
+Проверить:    curl --noproxy '*' -s http://127.0.0.1:${PORT}/api/agent/status | python3 -m json.tool
 Логи:         tail -f ${LOG_FILE}
 LLM логи:     journalctl -u adam-llm -f
 VLM логи:     docker logs -f ${LIVE_VLM_CONTAINER}
