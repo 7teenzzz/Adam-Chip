@@ -271,7 +271,7 @@ class WhisperASRClient:
     """HTTP client for a Whisper-compatible ASR microservice (POST /transcribe → {"transcript": "..."})."""
 
     def __init__(self, config: dict[str, Any]) -> None:
-        self.base_url = str(config.get("base_url", "http://127.0.0.1:8083")).rstrip("/")
+        self.base_url = str(config.get("base_url", "http://127.0.0.1:8095")).rstrip("/")
         self.sample_rate = int(config.get("sample_rate", 16000))
         self.timeout = float(config.get("timeout_sec", 30))
         self._session: Any = None

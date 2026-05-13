@@ -556,7 +556,12 @@ class VoiceLoopController:
         event_log.append("asr_final", {
             "text": cleaned, "raw": transcript, "source": "voice_loop", "asr_ms": asr_ms
         })
-        await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms)
+        try:
+            await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms)
+        except Exception as exc:
+            self.last_asr_error = str(exc)
+            event_log.append("voice_loop_error", {"stage": "dialogue_turn", "error": str(exc)})
+            return False
         return True
 
 
