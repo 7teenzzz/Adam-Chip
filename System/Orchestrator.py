@@ -1929,6 +1929,12 @@ def _rebuild_clients(section_path: str) -> list[str]:
     if section_path.startswith("services.tts") or section_path == "services":
         tts = TTSClient(services.get("tts", {}))
         restarted.append("tts")
+    if section_path.startswith("wake_word"):
+        ww_cfg = settings.section("wake_word") or {}
+        voice_loop._wake_engine = _create_wake_engine(ww_cfg)
+        voice_loop._wake_silence_timeout_sec = float(ww_cfg.get("wake_silence_timeout_sec", 3.0))
+        voice_loop._ww_buf.clear()
+        restarted.append("voice_loop")
     if section_path.startswith("mcu"):
         mcu = MCUClient(settings.section("mcu"))
         action_layer = ActionLayer(settings.section("mcu"), settings.section("safety"))

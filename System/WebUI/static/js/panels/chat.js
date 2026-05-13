@@ -143,11 +143,48 @@ export function mount(target) {
   }
   eqRafId = requestAnimationFrame(drawEqualizer);
 
-  // ---- ASR live display ----
+  // ---- Hearing (OWW + ASR) live display ----
+  const HEARING_COLORS = {
+    loading:   "var(--warn)",   // yellow  — OWW/ASR not ready
+    standby:   "var(--accent)", // green   — waiting for wake word
+    listening: "#a855f7",       // purple  — recording / accumulating speech
+    tts:       "#60a5fa",       // blue    — Adam is speaking
+  };
+  let hearingState = "loading";
+  const hearingDot = el("span", {
+    style: `display:inline-block; width:8px; height:8px; border-radius:50%;
+            background:${HEARING_COLORS.loading}; flex-shrink:0; transition:background 0.35s`,
+  });
   const asrBox = el("div", {
     style: "min-height:28px; padding:6px 8px; border-radius:4px; background:var(--bg-2); font-size:12px; color:var(--muted); font-family:var(--font-mono); white-space:pre-wrap; word-break:break-word; line-height:1.4",
-  }, "—");
+  }, "OWW / ASR инициализация…");
   let asrClearTimer = null;
+
+  function standbyText() {
+    const vl = state.get("status")?.voice_loop;
+    if (!vl?.running) return "OWW / ASR инициализация…";
+    const words = vl.wake_words?.length ? vl.wake_words : null;
+    return words ? `ожидание «${words.join(" / ")}»` : "ожидание…";
+  }
+
+  function updateHearing(newState, text) {
+    hearingState = newState;
+    hearingDot.style.background = HEARING_COLORS[newState] || "var(--muted)";
+    if (text !== undefined) {
+      asrBox.textContent = text;
+      asrBox.style.color = newState === "loading" ? "var(--muted)" : "var(--text)";
+    }
+  }
+
+  // Sync dot from current status snapshot on load
+  function syncHearingFromStatus() {
+    const vl = state.get("status")?.voice_loop;
+    if (!vl?.running) { updateHearing("loading", standbyText()); return; }
+    updateHearing("standby", standbyText());
+    asrBox.style.color = "var(--muted)";
+  }
+  syncHearingFromStatus();
+  state.subscribe("status", syncHearingFromStatus);
 
   let jetTimer = null, jetInflight = false;
 
@@ -237,7 +274,10 @@ export function mount(target) {
         sceneCaption,
         el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Микрофон"),
         eqCanvas,
-        el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "ASR"),
+        el("div", { style: "display:flex; align-items:center; gap:6px; margin-top:4px" }, [
+          hearingDot,
+          el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Слух"),
+        ]),
         asrBox,
       ]),
     ]),
@@ -343,35 +383,39 @@ export function mount(target) {
       // TTS was interrupted — discard any incomplete streaming bubble.
       pendingAdamBubble = null;
     } else if (ev.type === "voice_loop_started") {
-      syncVoiceLoopBtn(true);
+      updateHearing("standby", standbyText());
+      asrBox.style.color = "var(--muted)";
     } else if (ev.type === "voice_loop_stopped") {
-      syncVoiceLoopBtn(false);
+      updateHearing("loading", "OWW / ASR инициализация…");
+    } else if (ev.type === "wake_word_detected") {
+      if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
+      updateHearing("listening", "🎤 слушаю…");
     } else if (ev.type === "asr_partial") {
       if (ev.payload?.state === "speech_started") {
-        asrBox.textContent = "🎤 слушаю…";
-        asrBox.style.color = "var(--muted)";
         if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
+        updateHearing("listening", "🎤 слушаю…");
       }
-    } else if (ev.type === "asr_wake_skip") {
-      const raw = ev.payload?.text || "";
-      if (raw) {
-        asrBox.textContent = `(без «Адам»): ${raw}`;
-        asrBox.style.color = "var(--muted)";
-        if (asrClearTimer) clearTimeout(asrClearTimer);
-        asrClearTimer = setTimeout(() => { asrBox.textContent = "—"; asrBox.style.color = "var(--muted)"; asrClearTimer = null; }, 8000);
-      }
+    } else if (ev.type === "tts_started") {
+      if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
+      updateHearing("tts", "🔊 говорит…");
+    } else if (ev.type === "tts_finished") {
+      updateHearing("standby", standbyText());
+      asrBox.style.color = "var(--muted)";
+    } else if (ev.type === "asr_wake_only") {
+      updateHearing("standby", `«${ev.payload?.raw || "—"}» — только wake word`);
+      asrBox.style.color = "var(--muted)";
+      if (asrClearTimer) clearTimeout(asrClearTimer);
+      asrClearTimer = setTimeout(() => { updateHearing("standby", standbyText()); asrBox.style.color = "var(--muted)"; asrClearTimer = null; }, 5000);
     } else if (ev.type === "asr_final") {
       const text = ev.payload?.text || "";
-      asrBox.textContent = text || "—";
+      updateHearing("listening", text || standbyText());
       asrBox.style.color = text ? "var(--text)" : "var(--muted)";
       if (asrClearTimer) clearTimeout(asrClearTimer);
-      if (text) {
-        asrClearTimer = setTimeout(() => {
-          asrBox.textContent = "—";
-          asrBox.style.color = "var(--muted)";
-          asrClearTimer = null;
-        }, 10000);
-      }
+      asrClearTimer = setTimeout(() => {
+        if (hearingState !== "tts") updateHearing("standby", standbyText());
+        asrBox.style.color = "var(--muted)";
+        asrClearTimer = null;
+      }, 10000);
     }
   });
 
@@ -380,11 +424,7 @@ export function mount(target) {
     unsubscribe();
     unsubScene();
     stopJetTimer();
-    stopVad();
     if (eqRafId) { cancelAnimationFrame(eqRafId); eqRafId = null; }
     if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
-    if (micRecorder?.state === "recording") { try { micRecorder.stop(); } catch (_) {} }
-    if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
-    if (micAudioCtx) { try { micAudioCtx.close(); } catch (_) {} micAudioCtx = null; }
   };
 }
