@@ -71,6 +71,15 @@ services:
       - ./Subsystem/Models:/models:ro
       - ./data/hf_cache:/hf_cache
       - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: >
+        python3 -c "import urllib.request,json;
+        d=json.load(urllib.request.urlopen('http://127.0.0.1:8095/health'));
+        exit(0 if d.get('device')=='cuda' else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   adam-llm:
     # Optional Docker alternative to the native systemd adam-llm.service.

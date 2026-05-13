@@ -79,8 +79,20 @@ def _dependency_errors() -> list[str]:
     return errors
 
 
+def _verify_cuda_available() -> None:
+    """Raise RuntimeError if CUDA is not available — called before model load."""
+    import torch
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            f"CUDA requested but torch.cuda.is_available() == False "
+            f"(torch CUDA version: {torch.version.cuda})"
+        )
+
+
 def _load_model_with_fallback(whisperx: Any, model_size: str, device: str, compute_type: str) -> tuple[Any, str]:
     """Load whisperx model, falling back to CPU if ctranslate2 lacks CUDA support."""
+    if device == "cuda":
+        _verify_cuda_available()
     try:
         model = whisperx.load_model(
             model_size,
@@ -95,7 +107,7 @@ def _load_model_with_fallback(whisperx: Any, model_size: str, device: str, compu
         if device == "cuda" and ("CUDA" in exc_str or "cuda" in exc_str.lower() or "CTranslate2" in exc_str):
             # ctranslate2 installed without CUDA support (common on Jetson with pip wheels)
             import logging as _logging
-            _logging.getLogger("adam.asr").warning(
+            _logging.getLogger("adam.asr").error(
                 "ctranslate2 CUDA unavailable (%s) — falling back to CPU float32", exc_str[:120]
             )
             model = whisperx.load_model(

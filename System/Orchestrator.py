@@ -441,15 +441,33 @@ class VoiceLoopController:
                         self._ww_buf.clear()
                         continue
 
-                # ── LISTENING + REPLY: VAD + endpointing ─────────────────────────
-                # In reply mode apply a higher noise gate so ambient noise doesn't
-                # accumulate speech_ms and block the 4-second standby transition.
+                # ── LISTENING + REPLY: accumulation + endpointing ────────────────
+                # LISTENING: ALL frames are accumulated unconditionally — voiced
+                # controls only speech_ms/silence_ms counters and vad_state display.
+                # This ensures no leading syllables are clipped if they start below
+                # the RMS threshold.
+                # REPLY: higher noise gate prevents ambient noise from accumulating
+                # speech_ms and blocking the 4-second standby transition.
                 if self._voice_state == "reply" and self._reply_noise_gate > 0:
                     effective_voiced = _rms >= self._reply_noise_gate
                 else:
                     effective_voiced = voiced
 
-                if effective_voiced:
+                if self._voice_state == "listening":
+                    # Always accumulate in listening — VAD only drives counters.
+                    if effective_voiced:
+                        if not speech_frames:
+                            event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
+                        speech_ms += self.frame_ms
+                        silence_ms = 0
+                        self.vad_state = "speech"
+                    elif speech_frames:
+                        silence_ms += self.frame_ms
+                        self.vad_state = "endpointing"
+                    else:
+                        self.vad_state = "silence"
+                    speech_frames.append(chunk)
+                elif effective_voiced:
                     if not speech_frames:
                         event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
                     speech_frames.append(chunk)
