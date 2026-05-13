@@ -39,6 +39,7 @@
       "frame_ms": 20,
       "vad_threshold": 600,
       "min_speech_ms": 200,
+      "max_segment_ms": 9000,
       "max_command_segment_ms": 15000,
       "normalize_factor": 8000
     },
@@ -97,14 +98,6 @@
       "output_device": "plughw:1,3"
     }
   },
-  "wake_word": {
-    "engine": "openwakeword",
-    "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.35,
-    "debounce_hits": 3,
-    "vad_threshold": 0.4,
-    "wake_silence_timeout_sec": 3.0
-  },
   "mcu": {
     "base_url": "http://192.168.0.171",
     "speaker_url": "http://192.168.0.171:83/speaker",
@@ -133,5 +126,13 @@
     "motor_max_duration_ms": 2500,
     "motor_cooldown_ms": 250,
     "half_duplex_mute": true
+  },
+  "wake_word": {
+    "engine": "openwakeword",
+    "model_path": "data/wake_word/adam.onnx",
+    "threshold": 0.35,
+    "debounce_hits": 3,
+    "vad_threshold": 0.1,
+    "wake_silence_timeout_sec": 3.0
   }
 }
