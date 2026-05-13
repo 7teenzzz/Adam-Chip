@@ -12,7 +12,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${ROOT_DIR}/data/adam"
 PID_FILE="${LOG_DIR}/orchestrator.pid"
 
-SYSTEMD_SERVICES=(adam-orchestrator.service adam-llm.service adam-tts-silero.service adam-asr-whisperx.service)
+SYSTEMD_SERVICES=(adam-orchestrator.service adam-llm.service adam-tts-silero.service)
 LIVE_VLM_CONTAINER="adam-live-vlm"
 
 echo "▶ Adam Chip — stop"
@@ -75,7 +75,19 @@ if command -v docker >/dev/null 2>&1; then
   fi
 fi
 
-# --------- 3. Systemd services (LLM + TTS + ASR) ----------------------------
+# --------- 2b. ASR (WhisperX — Docker) --------------------------------------
+if command -v docker >/dev/null 2>&1; then
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "adam-asr-whisperx"; then
+    echo
+    echo "⏵ Останавливаю ASR (WhisperX Docker)…"
+    (cd "${ROOT_DIR}" && docker compose stop adam-asr-whisperx >/dev/null 2>&1) || true
+    echo "  ✓ adam-asr-whisperx остановлен"
+  else
+    echo "  · adam-asr-whisperx не был запущен"
+  fi
+fi
+
+# --------- 3. Systemd services (LLM + TTS) -----------------------------------
 need_systemd=false
 for s in "${SYSTEMD_SERVICES[@]}"; do
   if systemctl is-active --quiet "${s}" 2>/dev/null; then
