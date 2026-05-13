@@ -60,15 +60,29 @@ open('/constraints.txt','w').write( \
 # ctranslate2 has aarch64 wheels on PyPI; faster-whisper is pure Python
 RUN pip install --no-cache-dir ctranslate2 faster-whisper -c /constraints.txt
 
-# transformers (tokenizers/safetensors have aarch64 wheels)
-RUN pip install --no-cache-dir transformers -c /constraints.txt
+# transformers — pin to <4.46 because 4.46+ adds MoE custom_op registration
+# (transformers/integrations/moe.py) that uses torch.library APIs incompatible with torch 2.4.0.
+RUN pip install --no-cache-dir "transformers<4.46" -c /constraints.txt
 
-# pyannote.audio (Silero VAD pipeline used by whisperX)
-# --no-deps prevents pip from pulling a newer torch from PyPI over the Jetson wheel
+# pyannote.audio and its full dependency tree (pyannote.audio 4.x).
+# Installed with --no-deps first to prevent pip from pulling torch>=2.8.0 from PyPI
+# (the Jetson torch 2.4.0 wheel is already present and pinned in /constraints.txt).
+# All runtime deps then installed explicitly, grouped by chain:
+#   core pytorch_lightning/lightning ← renamed package in pyannote.audio 4.x
+#   einops              ← pyannote.audio.core.inference import-time hard dep
+#   opentelemetry-*     ← pyannote.audio.telemetry hard dep
+#   pyannoteai-sdk      ← pyannote.audio telemetry optional but imported at top-level
+#   asteroid-filterbanks, torch-audiomentations, torchmetrics ← VAD pipeline
 RUN pip install --no-cache-dir --no-deps pyannote.audio && \
     pip install --no-cache-dir \
-      asteroid-filterbanks \
+      "einops>=0.8.1" \
+      "lightning>=2.4" \
       pytorch-lightning \
+      "opentelemetry-api>=1.34.0" \
+      "opentelemetry-sdk>=1.34.0" \
+      "opentelemetry-exporter-otlp>=1.34.0" \
+      pyannoteai-sdk \
+      asteroid-filterbanks \
       pytorch-metric-learning \
       torch-audiomentations \
       torchmetrics \
@@ -80,6 +94,12 @@ RUN pip install --no-cache-dir --no-deps pyannote.audio && \
 
 # Audio processing and quality scoring used by whisperX transcription path
 RUN pip install --no-cache-dir scipy jiwer scikit-learn soundfile librosa -c /constraints.txt
+
+# whisperX direct requirements that are not yet installed:
+#   omegaconf — checkpoint loading (pyannote uses omegaconf-serialized checkpoints)
+#   nltk      — text normalisation in whisperX
+#   pandas    — segment alignment output
+RUN pip install --no-cache-dir omegaconf nltk pandas -c /constraints.txt
 
 # whisperX — all deps satisfied above; --no-deps avoids torch reinstall
 RUN pip install --no-cache-dir whisperx --no-deps
