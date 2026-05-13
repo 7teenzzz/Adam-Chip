@@ -28,6 +28,7 @@ _MODELS_DIR = Path(os.environ.get("ADAM_MODELS_DIR", "Subsystem/Models"))
 
 _MODEL: Any = None
 _ACTUAL_MODEL_SIZE: str = _MODEL_SIZE  # updated after load to reflect OOM fallback
+_ACTUAL_DEVICE: str = _DEVICE          # updated after load to reflect CUDA→CPU fallback
 _MODEL_LOCK = threading.Lock()         # prevents concurrent load_model() calls → OOM on Jetson
 
 
@@ -78,8 +79,38 @@ def _dependency_errors() -> list[str]:
     return errors
 
 
+def _load_model_with_fallback(whisperx: Any, model_size: str, device: str, compute_type: str) -> tuple[Any, str]:
+    """Load whisperx model, falling back to CPU if ctranslate2 lacks CUDA support."""
+    try:
+        model = whisperx.load_model(
+            model_size,
+            device=device,
+            compute_type=compute_type,
+            language=_LANGUAGE,
+            download_root=str(_MODELS_DIR),
+        )
+        return model, device
+    except Exception as exc:
+        exc_str = str(exc)
+        if device == "cuda" and ("CUDA" in exc_str or "cuda" in exc_str.lower() or "CTranslate2" in exc_str):
+            # ctranslate2 installed without CUDA support (common on Jetson with pip wheels)
+            import logging as _logging
+            _logging.getLogger("adam.asr").warning(
+                "ctranslate2 CUDA unavailable (%s) — falling back to CPU float32", exc_str[:120]
+            )
+            model = whisperx.load_model(
+                model_size,
+                device="cpu",
+                compute_type="float32",
+                language=_LANGUAGE,
+                download_root=str(_MODELS_DIR),
+            )
+            return model, "cpu"
+        raise
+
+
 def _get_model() -> Any:
-    global _MODEL, _ACTUAL_MODEL_SIZE
+    global _MODEL, _ACTUAL_MODEL_SIZE, _ACTUAL_DEVICE
     # Fast path — avoid lock on every transcribe call
     if _MODEL is not None:
         return _MODEL
@@ -99,13 +130,7 @@ def _get_model() -> Any:
         # asr_options feeds into TranscriptionOptions (beam search params only).
         # Silero VAD is used automatically in whisperx >= 3.x via the internal vad pipeline;
         # pyannote is NOT needed and no HuggingFace token is required for transcription.
-        _MODEL = whisperx.load_model(
-            model_size,
-            device=device,
-            compute_type=compute_type,
-            language=_LANGUAGE,
-            download_root=str(_MODELS_DIR),
-        )
+        _MODEL, _ACTUAL_DEVICE = _load_model_with_fallback(whisperx, model_size, device, compute_type)
     return _MODEL
 
 
@@ -170,8 +195,9 @@ async def health(response: Response) -> dict:
         "model": _ACTUAL_MODEL_SIZE,  # reflects OOM fallback (may differ from _MODEL_SIZE env)
         "model_requested": _MODEL_SIZE,
         "language": _LANGUAGE,
-        "device": _resolve_device(),
-        "compute_type": _resolve_compute_type(_resolve_device()),
+        "device": _ACTUAL_DEVICE,          # reflects CUDA→CPU fallback
+        "device_requested": _resolve_device(),
+        "compute_type": _resolve_compute_type(_ACTUAL_DEVICE),
         "dependency_errors": dependency_errors,
     }
 

@@ -103,7 +103,8 @@
     "model_path": "data/wake_word/adam.onnx",
     "threshold": 0.5,
     "debounce_hits": 5,
-    "vad_threshold": 0.5
+    "vad_threshold": 0.5,
+    "wake_silence_timeout_sec": 3.0
   },
   "mcu": {
     "base_url": "http://192.168.0.171",

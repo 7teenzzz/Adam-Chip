@@ -264,7 +264,12 @@ class VoiceLoopController:
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
         self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
         self._wake_detected_at: float = 0.0
-        self._wake_silence_timeout_sec: float = 3.0
+        self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 3.0))
+
+    @property
+    def device_in_use(self) -> bool:
+        """True while the audio device is held — either running or in the process of stopping."""
+        return self.running or (self._task is not None and not self._task.done())
 
     def status(self) -> dict[str, Any]:
         return {
@@ -434,23 +439,30 @@ class VoiceLoopController:
                         self.vad_state = "transcribing"
                         self.muted_by_tts = True
 
-                        await self._transcribe_and_dispatch(pcm)
+                        spoke = await self._transcribe_and_dispatch(pcm)
 
-                        # TTS done → restart mic, enter reply window
+                        # TTS done → restart mic; enter reply window only if agent spoke
                         self.muted_by_tts = False
                         self._process = self._start_arecord()
                         stdout = self._process.stdout
                         if stdout is None:
                             raise RuntimeError("arecord restart failed")
-                        self._voice_state = "reply"
-                        self._reply_start = time.perf_counter()
                         speech_frames.clear()
                         speech_ms = 0
                         silence_ms = 0
                         self._ww_buf.clear()
-                        event_log.append("asr_reply_window_open", {
-                            "timeout_sec": self._reply_window_sec
-                        })
+                        if spoke:
+                            self._voice_state = "reply"
+                            self._reply_start = time.perf_counter()
+                            event_log.append("asr_reply_window_open", {
+                                "timeout_sec": self._reply_window_sec
+                            })
+                        else:
+                            self._voice_state = "standby"
+                            self._standby_entry_time = time.perf_counter()
+                            event_log.append("asr_no_reply_standby", {
+                                "reason": "no_spoken_response"
+                            })
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -504,7 +516,7 @@ class VoiceLoopController:
             return str(exc)
         return stderr.decode("utf-8", errors="replace").strip() or "no stderr"
 
-    async def _transcribe_and_dispatch(self, pcm: bytes) -> None:
+    async def _transcribe_and_dispatch(self, pcm: bytes) -> bool:
         self.vad_state = "transcribing"
         t_asr = time.perf_counter()
         try:
@@ -512,11 +524,11 @@ class VoiceLoopController:
         except Exception as exc:
             self.last_asr_error = str(exc)
             event_log.append("voice_loop_error", {"stage": "asr", "error": str(exc)})
-            return
+            return False
         asr_ms = round((time.perf_counter() - t_asr) * 1000, 1)
         runtime_state["last_asr_ms"] = asr_ms
         if not transcript:
-            return
+            return False
 
         self.last_transcript = transcript
         self.last_transcript_at = utc_now()
@@ -526,12 +538,13 @@ class VoiceLoopController:
         cleaned = self._wake_re.sub("", transcript).strip() if self._wake_re else transcript
         if not cleaned:
             event_log.append("asr_wake_only", {"raw": transcript, "reason": "only_wake_word"})
-            return
+            return False
 
         event_log.append("asr_final", {
             "text": cleaned, "raw": transcript, "source": "voice_loop", "asr_ms": asr_ms
         })
         await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms)
+        return True
 
 
 class SceneWorker:
@@ -707,7 +720,7 @@ async def _audio_level_monitor() -> None:
 
     while True:
         try:
-            if voice_loop.running:
+            if voice_loop.device_in_use:
                 await asyncio.sleep(0.3)
                 continue
 
@@ -718,7 +731,7 @@ async def _audio_level_monitor() -> None:
                 stderr=subprocess.DEVNULL,
             )
             try:
-                while not voice_loop.running:
+                while not voice_loop.device_in_use:
                     chunk = await asyncio.to_thread(proc.stdout.read, frame_bytes)  # type: ignore[union-attr]
                     if not chunk:
                         await asyncio.sleep(1.0)  # back off before retry when arecord exits early

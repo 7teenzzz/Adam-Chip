@@ -33,6 +33,7 @@ class OpenWakeWordEngine(WakeWordEngine):
         self._np = np
         self._oww = openwakeword.Model(
             wakeword_models=[model_path],
+            inference_framework="onnx",  # adam.onnx requires onnxruntime, not tflite
             vad_threshold=vad_threshold,
         )
         self._model_name = list(self._oww.models.keys())[0]
