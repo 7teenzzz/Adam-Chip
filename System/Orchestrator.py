@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import audioop
 import json
+import numpy as np
 import os
 import re
 import shutil
@@ -44,6 +45,7 @@ from adam.system import docker_health, gate_summary, all_services_status, servic
 from adam.tuning import TuningStore, get_store as _get_tuning_store
 from adam.ui import agent_page, dash_page, debug_page
 from adam.wake_word import create_engine as _create_wake_engine
+from openwakeword.vad import VAD as _SileroVAD
 
 
 settings = Settings.load()
@@ -211,6 +213,9 @@ class VoiceLoopController:
         self.channels = int(audio_config.get("channels", 1))
         self.frame_ms = int(audio_config.get("frame_ms", 20))
         self.vad_threshold = int(audio_config.get("vad_threshold", 650))
+        self._silero_vad = _SileroVAD()
+        self._silero_vad_threshold = float(audio_config.get("silero_vad_threshold", 0.5))
+        self._vad_frame_size = int(self.sample_rate * self.frame_ms / 1000)  # 320 samples at 16kHz/20ms
         self.normalize_factor = float(audio_config.get("normalize_factor", 8000))
         self.min_speech_ms = int(audio_config.get("min_speech_ms", 280))
         self.asr_client = asr_client
@@ -368,7 +373,11 @@ class VoiceLoopController:
                     continue
 
                 _rms = audioop.rms(chunk, 2)
-                voiced = _rms >= self.vad_threshold
+                _audio_f32 = np.frombuffer(chunk, np.int16).astype(np.float32) / 32768.0
+                voiced = bool(
+                    self._silero_vad.predict(_audio_f32, frame_size=self._vad_frame_size)
+                    >= self._silero_vad_threshold
+                )
                 level_tick += 1
                 if level_tick >= 5:
                     level_tick = 0
@@ -399,6 +408,7 @@ class VoiceLoopController:
                             if triggered:
                                 event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None})
                                 self._set_voice_state("listening", "wake_word")
+                                self._silero_vad.reset_states()
                                 self._wake_detected_at = time.perf_counter()
                                 speech_frames.clear()
                                 speech_ms = 0
