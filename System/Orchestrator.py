@@ -289,6 +289,13 @@ class VoiceLoopController:
             "voice_state": self._voice_state,
         }
 
+    def _set_voice_state(self, state: str, reason: str = "") -> None:
+        if state != self._voice_state:
+            event_log.append("voice_state_change", {
+                "from": self._voice_state, "to": state, "reason": reason,
+            })
+        self._voice_state = state
+
     async def start(self) -> dict[str, Any]:
         if self._task and not self._task.done():
             return {"ok": True, **self.status()}
@@ -300,6 +307,15 @@ class VoiceLoopController:
         if self._task.done():
             self.running = False
             return {"ok": False, **self.status()}
+        if self._wake_engine is not None:
+            event_log.append("oww_ready", {
+                "model_name": getattr(self._wake_engine, "_model_name", None),
+                "threshold": getattr(self._wake_engine, "_threshold", None),
+                "debounce_hits": getattr(self._wake_engine, "_debounce_hits", None),
+                "vad_threshold": getattr(
+                    getattr(self._wake_engine, "_oww", None), "vad_threshold", None
+                ),
+            })
         event_log.append("voice_loop_started", self.status())
         return {"ok": True, **self.status()}
 
@@ -374,12 +390,15 @@ class VoiceLoopController:
                             triggered = self._wake_engine.process_chunk(pcm_80ms)
                             score = getattr(self._wake_engine, "last_score", None)
                             _oww_score_tick += 1
-                            if score is not None and score >= 0.1 and _oww_score_tick >= 12:
+                            if score is not None and score >= 0.05 and _oww_score_tick >= 4:
                                 _oww_score_tick = 0
-                                event_log.append("oww_score", {"score": round(score, 3), "hits": self._wake_engine._consecutive_hits if hasattr(self._wake_engine, '_consecutive_hits') else None})
+                                event_log.append("oww_score", {
+                                    "score": round(score, 3),
+                                    "hits": getattr(self._wake_engine, "_consecutive_hits", None),
+                                })
                             if triggered:
                                 event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None})
-                                self._voice_state = "listening"
+                                self._set_voice_state("listening", "wake_word")
                                 self._wake_detected_at = time.perf_counter()
                                 speech_frames.clear()
                                 speech_ms = 0
@@ -399,7 +418,7 @@ class VoiceLoopController:
                             "elapsed_sec": round(elapsed, 1),
                             "reason": "absolute_deadline" if hard_cutoff else "no_speech",
                         })
-                        self._voice_state = "standby"
+                        self._set_voice_state("standby", "reply_expired")
                         self._standby_entry_time = time.perf_counter()
                         speech_frames.clear()
                         speech_ms = 0
@@ -417,7 +436,7 @@ class VoiceLoopController:
                             "action": "standby",
                             "elapsed_sec": round(elapsed, 1),
                         })
-                        self._voice_state = "standby"
+                        self._set_voice_state("standby", "wake_silence_timeout")
                         self._standby_entry_time = time.perf_counter()
                         self._ww_buf.clear()
                         continue
@@ -456,6 +475,7 @@ class VoiceLoopController:
                     if enough_speech:
                         # Stop mic — processing + TTS runs with mic off
                         self._stop_process()
+                        event_log.append("mic_muted", {"reason": "asr_transcribing"})
                         self.vad_state = "transcribing"
                         self.muted_by_tts = True
 
@@ -464,6 +484,7 @@ class VoiceLoopController:
                         # TTS done → restart mic; enter reply window only if agent spoke
                         self.muted_by_tts = False
                         self._process = self._start_arecord()
+                        event_log.append("mic_unmuted", {"reason": "transcription_complete"})
                         stdout = self._process.stdout
                         if stdout is None:
                             raise RuntimeError("arecord restart failed")
@@ -472,13 +493,13 @@ class VoiceLoopController:
                         silence_ms = 0
                         self._ww_buf.clear()
                         if spoke:
-                            self._voice_state = "reply"
+                            self._set_voice_state("reply", "agent_spoke")
                             self._reply_start = time.perf_counter()
                             event_log.append("asr_reply_window_open", {
                                 "timeout_sec": self._reply_window_sec
                             })
                         else:
-                            self._voice_state = "standby"
+                            self._set_voice_state("standby", "no_reply")
                             self._standby_entry_time = time.perf_counter()
                             event_log.append("asr_no_reply_standby", {
                                 "reason": "no_spoken_response"
@@ -538,6 +559,11 @@ class VoiceLoopController:
 
     async def _transcribe_and_dispatch(self, pcm: bytes) -> bool:
         self.vad_state = "transcribing"
+        pcm_ms = round(len(pcm) / max(1, self.sample_rate * 2) * 1000)
+        event_log.append("asr_request", {
+            "pcm_ms": pcm_ms,
+            "provider": self.asr_client.__class__.__name__,
+        })
         t_asr = time.perf_counter()
         try:
             transcript = (await self.asr_client.transcribe_pcm(pcm)).strip()
@@ -547,6 +573,11 @@ class VoiceLoopController:
             return False
         asr_ms = round((time.perf_counter() - t_asr) * 1000, 1)
         runtime_state["last_asr_ms"] = asr_ms
+        event_log.append("asr_result", {
+            "asr_ms": asr_ms,
+            "empty": not transcript,
+            "raw": transcript[:120] if transcript else "",
+        })
         if not transcript:
             return False
 
@@ -1898,6 +1929,11 @@ async def _warmup_wakeup() -> None:
 
 async def _warmup_asr() -> None:
     """Fire one silent request to absorb WhisperX cold-start before any real user turn."""
+    try:
+        health = await asr.health()
+        event_log.append("asr_health_startup", health.as_dict())
+    except Exception as exc:
+        event_log.append("asr_health_startup", {"ok": False, "error": str(exc)})
     silence = b"\x00" * 32000  # 1 s @ 16 kHz S16LE
     try:
         await asr.transcribe_pcm(silence)

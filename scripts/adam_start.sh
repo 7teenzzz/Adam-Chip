@@ -122,10 +122,9 @@ if ! ${EXPLICIT_NODES} && ! ${EMPTY_MODE}; then
   fi
 fi
 
-# Build speech services list
+# Build speech services list — TTS via systemd; ASR via Docker (see section 2b below)
 SPEECH_SERVICES=()
 ${START_TTS} && SPEECH_SERVICES+=(adam-tts-silero.service)
-${START_ASR} && SPEECH_SERVICES+=(adam-asr-whisperx.service)
 
 mkdir -p "${LOG_DIR}" \
   "${MODELS_DIR}/silero" "${MODELS_DIR}/whisper" "${MODELS_DIR}/vlm" "${MODELS_DIR}/hf/hub"
@@ -220,6 +219,28 @@ if [[ ${#SPEECH_SERVICES[@]} -gt 0 ]]; then
         && echo "  ✓ ${s}" \
         || echo "  ✗ ${s} (см. journalctl -u ${s} -n 30)"
     done
+  fi
+fi
+
+# --------- 2b. ASR (WhisperX — Docker, host network) -------------------------
+if ${START_ASR}; then
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "  ! docker не найден — ASR не запущен"
+  elif docker ps --format '{{.Names}}' | grep -qx "adam-asr-whisperx"; then
+    echo "  ✓ adam-asr-whisperx уже работает (Docker, :8095)"
+  else
+    echo "⏵ Запуск ASR (WhisperX Docker):"
+    if (cd "${ROOT_DIR}" && docker compose up -d adam-asr-whisperx >/dev/null 2>&1); then
+      sleep 3
+      if docker ps --format '{{.Names}}' | grep -qx "adam-asr-whisperx"; then
+        echo "  ✓ adam-asr-whisperx (Docker, :8095)"
+      else
+        echo "  ✗ adam-asr-whisperx не стартовал — проверь: docker logs adam-asr-whisperx"
+      fi
+    else
+      echo "  ✗ docker compose up adam-asr-whisperx failed"
+      echo "    Пересборка: cd ${ROOT_DIR} && docker compose build adam-asr-whisperx"
+    fi
   fi
 fi
 
