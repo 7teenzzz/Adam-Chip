@@ -327,6 +327,7 @@ class VoiceLoopController:
         speech_ms = 0
         silence_ms = 0
         level_tick = 0
+        _oww_score_tick = 0   # log oww score every ~1s for diagnostics
         try:
             self._process = self._start_arecord()
             stdout = self._process.stdout
@@ -370,8 +371,14 @@ class VoiceLoopController:
                         if len(self._ww_buf) >= self._ww_frames_needed:
                             pcm_80ms = b"".join(self._ww_buf)
                             self._ww_buf.clear()
-                            if self._wake_engine.process_chunk(pcm_80ms):
-                                event_log.append("wake_word_detected", {"engine": "openwakeword"})
+                            triggered = self._wake_engine.process_chunk(pcm_80ms)
+                            score = getattr(self._wake_engine, "last_score", None)
+                            _oww_score_tick += 1
+                            if score is not None and score >= 0.1 and _oww_score_tick >= 12:
+                                _oww_score_tick = 0
+                                event_log.append("oww_score", {"score": round(score, 3), "hits": self._wake_engine._consecutive_hits if hasattr(self._wake_engine, '_consecutive_hits') else None})
+                            if triggered:
+                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None})
                                 self._voice_state = "listening"
                                 self._wake_detected_at = time.perf_counter()
                                 speech_frames.clear()

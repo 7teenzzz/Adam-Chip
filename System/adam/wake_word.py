@@ -41,6 +41,7 @@ class OpenWakeWordEngine(WakeWordEngine):
         self._threshold = threshold
         self._debounce_hits = debounce_hits
         self._consecutive_hits = 0
+        self.last_score: float = 0.0
 
         # Flush the model's initial ring-buffer with silence so it reflects a
         # real "no audio" baseline before any real audio arrives.
@@ -53,6 +54,7 @@ class OpenWakeWordEngine(WakeWordEngine):
         audio = np.frombuffer(pcm_80ms, dtype=np.int16)
         prediction = self._oww.predict(audio)
         score = prediction.get(self._model_name, 0)
+        self.last_score = float(score)
         if score >= self._threshold:
             self._consecutive_hits += 1
         else:
