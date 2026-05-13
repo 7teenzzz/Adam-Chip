@@ -456,12 +456,8 @@ class VoiceLoopController:
                 # controls only speech_ms/silence_ms counters and vad_state display.
                 # This ensures no leading syllables are clipped if they start below
                 # the RMS threshold.
-                # REPLY: higher noise gate prevents ambient noise from accumulating
-                # speech_ms and blocking the 4-second standby transition.
-                if self._voice_state == "reply" and self._reply_noise_gate > 0:
-                    effective_voiced = _rms >= self._reply_noise_gate
-                else:
-                    effective_voiced = voiced
+                # Silero VAD drives both LISTENING and REPLY states.
+                effective_voiced = voiced
 
                 if self._voice_state == "listening":
                     # Always accumulate in listening — VAD only drives counters.
