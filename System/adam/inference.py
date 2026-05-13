@@ -268,7 +268,7 @@ class TTSClient:
 
 
 class WhisperASRClient:
-    """HTTP client for the ASR_Whisper.py microservice (faster-whisper)."""
+    """HTTP client for a Whisper-compatible ASR microservice (POST /transcribe → {"transcript": "..."})."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.base_url = str(config.get("base_url", "http://127.0.0.1:8083")).rstrip("/")

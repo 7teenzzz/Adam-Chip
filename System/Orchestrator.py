@@ -335,7 +335,20 @@ class VoiceLoopController:
             while self.running:
                 chunk = await asyncio.to_thread(stdout.read, frame_bytes)
                 if not chunk:
-                    raise RuntimeError(f"arecord ended: {self._read_process_stderr()}")
+                    # arecord exited unexpectedly — restart rather than kill the loop.
+                    err = self._read_process_stderr()
+                    event_log.append("arecord_restart", {"reason": "empty_read", "stderr": err})
+                    self._stop_process()
+                    await asyncio.sleep(0.5)
+                    self._process = self._start_arecord()
+                    stdout = self._process.stdout
+                    if stdout is None:
+                        raise RuntimeError("arecord restart failed")
+                    speech_frames.clear()
+                    speech_ms = 0
+                    silence_ms = 0
+                    self._ww_buf.clear()
+                    continue
 
                 _rms = audioop.rms(chunk, 2)
                 voiced = _rms >= self.vad_threshold
@@ -1872,12 +1885,7 @@ async def _warmup_wakeup() -> None:
 
 
 async def _warmup_asr() -> None:
-    """Fire one silent request to warm up the ASR backend (speaches / faster-whisper).
-
-    With provider=speaches the Docker container loads the model on first inference —
-    this call absorbs that 8-22s cold-start penalty before any real user turn arrives.
-    With provider=whisper the warmup in ASR_Whisper.py lifespan handles it instead.
-    """
+    """Fire one silent request to absorb WhisperX cold-start before any real user turn."""
     silence = b"\x00" * 32000  # 1 s @ 16 kHz S16LE
     try:
         await asr.transcribe_pcm(silence)

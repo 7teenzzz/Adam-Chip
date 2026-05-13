@@ -39,7 +39,6 @@
       "frame_ms": 20,
       "vad_threshold": 600,
       "min_speech_ms": 200,
-      "max_segment_ms": 3000,
       "max_command_segment_ms": 15000,
       "normalize_factor": 8000
     },

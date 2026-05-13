@@ -43,7 +43,7 @@
 |-----------|---------|--------|----------|
 | **LLM** | llama.cpp (OpenAI-compat API) | `gemma-4-E4B-it-UD-Q4_K_XL` | http://127.0.0.1:8081/v1 |
 | **VLM** | VILA 1.5-3b | `Efficient-Large-Model/VILA1.5-3b` | http://127.0.0.1:8084 |
-| **ASR** | speaches (faster-whisper) | `base`, ru-RU | http://127.0.0.1:8083 |
+| **ASR** | WhisperX (CUDA, Docker) | `medium`, ru-RU | http://127.0.0.1:8095 |
 | **TTS** | Silero v5_5_ru | голос `eugene` | http://127.0.0.1:8082 |
 | **Orchestrator** | FastAPI + asyncio | — | http://127.0.0.1:8080 |
 
@@ -88,8 +88,8 @@ PYTHONPATH=System ADAM_MODE=maintenance ./.venv/bin/python System/Orchestrator.p
 
 ### Speech Services (System/Speech/)
 
-- `ASR_Whisper.py` — Whisper HTTP сервис (основной)
-- `ASR.py` — NVIDIA Riva adapter (legacy)
+- `ASR_WhisperX.py` — WhisperX ASR HTTP сервис (CUDA, основной, запускается в Docker)
+- `ASR.py` — NVIDIA Riva adapter (legacy, не активен)
 - `TTS.py` — Silero v5_5_ru HTTP сервис
 
 ---
@@ -109,7 +109,7 @@ PYTHONPATH=System ADAM_MODE=maintenance ./.venv/bin/python System/Orchestrator.p
   },
   "services": {
     "llm": { "model": "gemma-4-E4B-it-UD-Q4_K_XL", "base_url": "http://127.0.0.1:8081/v1", "max_tokens": 80 },
-    "asr": { "provider": "speaches", "base_url": "http://127.0.0.1:8083", "wake_words": "адам" },
+    "asr": { "provider": "whisperx", "base_url": "http://127.0.0.1:8095", "model": "medium", "wake_words": "адам" },
     "tts": { "speaker": "eugene", "output_device": "plughw:1,3" }
   },
   "mcu": { "base_url": "http://192.168.0.171" },
@@ -176,7 +176,7 @@ Allowed scenes: `boot_idle`, `all_on`, `alternating`
 ```
 adam-llm.service            llama.cpp inference (NVIDIA CUDA)
 adam-tts-silero.service     Silero TTS HTTP
-adam-asr-whisper.service    Whisper ASR HTTP
+adam-asr-whisperx.service   WhisperX ASR (Docker, CUDA)
 adam-orchestrator.service   FastAPI orchestrator (type=notify)
 adam-exhibition.target      Exhibition target (wants orch + tts)
 adam-consolidator.service   Memory consolidation
@@ -221,9 +221,8 @@ ADAM_LLM_MODEL=gemma-4-E4B-it-UD-Q4_K_XL
 # TTS (Silero HTTP)
 ADAM_TTS_BASE_URL=http://127.0.0.1:8082
 
-# ASR (speaches / whisper HTTP)
-ADAM_ASR_HOST=127.0.0.1                 # used for legacy port-based override only
-ADAM_ASR_PORT=8083                      # speaches default port
+# ASR (WhisperX Docker container — HTTP)
+ADAM_ASR_PORT=8095                      # whisperx service port (default)
 
 # VLM (VILA via nano_llm Docker)
 ADAM_VLM_BASE_URL=http://127.0.0.1:8084
@@ -239,17 +238,18 @@ ADAM_SUCCESS_SOUND=data/sounds/success.wav
 ADAM_SOUNDS_ENABLED=1
 ```
 
-### ASR Whisper service (System/Speech/ASR_Whisper.py)
+### ASR WhisperX service (deploy/docker/Dockerfile.asr-whisperx)
 
 ```bash
-ADAM_ASR_WHISPER_MODEL=base             # faster-whisper model size
+ADAM_ASR_WHISPERX_MODEL=medium          # whisperx model size
 ADAM_ASR_LANGUAGE=ru
-ADAM_ASR_DEVICE=auto                    # cuda|cpu|auto
-ADAM_ASR_COMPUTE_TYPE=auto             # float16|int8|auto
+ADAM_ASR_DEVICE=cuda                    # CUDA on Jetson
+ADAM_ASR_COMPUTE_TYPE=float16
 ADAM_ASR_SAMPLE_RATE=16000
 ADAM_ASR_HOST=0.0.0.0
 ADAM_ASR_PORT=8095
 ADAM_MODELS_DIR=Subsystem/Models
+HF_HOME=/hf_cache
 ```
 
 ### TTS Silero service (System/Speech/TTS.py)
@@ -319,7 +319,7 @@ curl -fsS http://192.168.0.171/api/status | python3 -m json.tool
 ## Последние значимые изменения
 
 - LLM мигрирован с Ollama (`gemma3:4b`) на llama.cpp (`gemma-4-E4B-it-UD-Q4_K_XL`, порт 8051)
-- ASR мигрирован с NVIDIA Riva на Whisper (`Speech/ASR_Whisper.py`, порт 8095)
+- ASR переведён с faster-whisper/speaches на WhisperX CUDA Docker (`Speech/ASR_WhisperX.py`, порт 8095, модель medium)
 - ESP32 IP изменён: `192.168.0.171` → `192.168.0.171`
 - Добавлены модули: `echoes_gate.py`, `tuning.py`, `metrics.py`, `episodic.py`, `api_runtime.py`
 - Добавлена эпизодическая память с SQLite + ежедневной консолидацией
