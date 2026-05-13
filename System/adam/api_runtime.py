@@ -133,7 +133,7 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         provider = str(asr_cfg.get("provider", "riva"))
         whisper_current = str(asr_cfg.get("model", "medium")) if provider == "whisper" else "medium"
         whisper_status: dict[str, Any] = {"provider_active": provider == "whisper"}
-        whisper_base = str(asr_cfg.get("base_url", "http://127.0.0.1:8083")).rstrip("/")
+        whisper_base = str(asr_cfg.get("base_url", "http://127.0.0.1:8095")).rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=2.0, trust_env=False) as client:
                 resp = await client.get(f"{whisper_base}/health")

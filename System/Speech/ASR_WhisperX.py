@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 from fastapi import FastAPI, Request, Response
 
-_MODEL_SIZE = os.environ.get("ADAM_ASR_WHISPERX_MODEL", "large-v3")
+_MODEL_SIZE = os.environ.get("ADAM_ASR_WHISPERX_MODEL", "medium")
 _LANGUAGE = os.environ.get("ADAM_ASR_LANGUAGE", "ru")
 _DEVICE = os.environ.get("ADAM_ASR_DEVICE", "cuda")
 _COMPUTE_TYPE = os.environ.get("ADAM_ASR_COMPUTE_TYPE", "float16")
@@ -150,24 +150,47 @@ def _transcribe_audio(audio: np.ndarray) -> str:
     return " ".join(parts).strip()
 
 
+def _wav_bytes_to_numpy(wav_bytes: bytes) -> np.ndarray:
+    """Decode WAV bytes to float32 numpy array at 16kHz without requiring ffmpeg.
+
+    whisperx.load_audio() requires ffmpeg even for WAV files. Since the orchestrator
+    always sends 16kHz S16_LE mono WAV from arecord, we bypass ffmpeg entirely.
+    Resamples with scipy if the rate differs from 16kHz.
+    """
+    import io
+    import wave
+
+    with wave.open(io.BytesIO(wav_bytes)) as wf:
+        n_channels = wf.getnchannels()
+        sample_width = wf.getsampwidth()
+        frame_rate = wf.getframerate()
+        frames = wf.readframes(wf.getnframes())
+
+    if sample_width == 2:
+        audio_int = np.frombuffer(frames, dtype=np.int16)
+        audio = audio_int.astype(np.float32) / 32768.0
+    elif sample_width == 4:
+        audio_int = np.frombuffer(frames, dtype=np.int32)
+        audio = audio_int.astype(np.float32) / 2147483648.0
+    else:
+        raise ValueError(f"unsupported sample_width={sample_width}")
+
+    if n_channels > 1:
+        audio = audio.reshape(-1, n_channels).mean(axis=1)
+
+    if frame_rate != _SAMPLE_RATE:
+        from scipy.signal import resample_poly
+        import math
+        g = math.gcd(frame_rate, _SAMPLE_RATE)
+        audio = resample_poly(audio, _SAMPLE_RATE // g, frame_rate // g).astype(np.float32)
+
+    return audio
+
+
 def _transcribe(wav_bytes: bytes) -> str:
-    """Transcribe WAV bytes. Writes to temp file because whisperx.load_audio() requires a path."""
-    import tempfile
-    import whisperx
-
-    # whisperx.load_audio() requires a file path, NOT a file-like object.
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp.write(wav_bytes)
-        tmp_path = tmp.name
-
-    try:
-        audio = whisperx.load_audio(tmp_path)  # returns numpy float32 array at 16kHz
-        return _transcribe_audio(audio)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    """Transcribe WAV bytes. Uses pure-Python WAV decoder to avoid ffmpeg dependency."""
+    audio = _wav_bytes_to_numpy(wav_bytes)
+    return _transcribe_audio(audio)
 
 
 @asynccontextmanager

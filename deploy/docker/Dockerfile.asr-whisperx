@@ -1,0 +1,72 @@
+#---
+# Adam Chip — WhisperX ASR Docker image for Jetson Orin.
+#
+# Base: dustynv/l4t-pytorch:r36.4.0
+#   torch 2.4.0 + CUDA (Jetson-compatible), torchaudio 2.4.0, numpy 1.26.4
+#
+# Adds: ffmpeg, ctranslate2, faster-whisper, pyannote.audio, whisperX, fastapi/uvicorn.
+#
+# Build (one-time, requires internet, ~15-30 min):
+#   docker compose build adam-asr-whisperx
+#   # or directly:
+#   docker build -f deploy/docker/Dockerfile.asr-whisperx --tag adam-asr-whisperx:local .
+#
+# Run:
+#   docker compose up -d adam-asr-whisperx
+#   curl http://127.0.0.1:8095/health
+#---
+FROM dustynv/l4t-pytorch:r36.4.0
+
+# System dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+WORKDIR /opt
+
+# Pin torch and numpy to their current Jetson-compatible versions so that
+# subsequent pip installs cannot accidentally upgrade them.
+RUN python3 -c "\
+import torch, numpy; \
+open('/constraints.txt','w').write( \
+  f'torch=={torch.__version__}\nnumpy=={numpy.__version__}\n' \
+)"
+
+# ctranslate2 has aarch64 wheels on PyPI; faster-whisper is pure Python.
+RUN pip install ctranslate2 faster-whisper -c /constraints.txt
+
+# transformers (pure Python; tokenizers/safetensors have aarch64 wheels).
+RUN pip install transformers -c /constraints.txt
+
+# pyannote.audio + asteroid-filterbanks (whisperX VAD pipeline).
+# --no-deps on pyannote prevents pip from pulling a new torch version from PyPI.
+RUN pip install --no-deps pyannote.audio && \
+    pip install \
+      asteroid-filterbanks \
+      pytorch-lightning \
+      pytorch-metric-learning \
+      torch-audiomentations \
+      torchmetrics \
+      "pyannote.core>=5.0" \
+      "pyannote.database>=5.0" \
+      "pyannote.metrics>=3.2" \
+      "pyannote.pipeline>=3.0" \
+      -c /constraints.txt
+
+# Additional runtime deps used by whisperX transcription path.
+RUN pip install scipy jiwer scikit-learn soundfile librosa -c /constraints.txt
+
+# whisperX without deps — all satisfied above.
+RUN pip install whisperx --no-deps
+
+# FastAPI + uvicorn for System/Speech/ASR_WhisperX.py HTTP server.
+RUN pip install "fastapi>=0.100" "uvicorn[standard]" -c /constraints.txt
+
+# Required on Jetson for OpenMP (used by pyannote / asteroid-filterbanks).
+ENV LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1
+
+WORKDIR /app
+# System/ is mounted at /app/System at runtime; python3 -m Speech.ASR_WhisperX
+# resolves to /app/System/Speech/ASR_WhisperX.py
+ENV PYTHONPATH=/app/System

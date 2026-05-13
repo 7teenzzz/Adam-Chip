@@ -126,12 +126,12 @@ const SCHEMA = [
 
   // ── ASR config ───────────────────────────────────────────────────────────────
   {
-    source: "config", section: "services.asr", title: "ASR · speaches",
+    source: "config", section: "services.asr", title: "ASR · WhisperX",
     fields: [
       { key: "base_url",         label: "Адрес службы ASR", type: "text",
-        hint: "http://127.0.0.1:8083" },
-      { key: "model",            label: "Модель Whisper",   type: "text",
-        hint: "Systran/faster-whisper-base · Systran/faster-whisper-medium" },
+        hint: "http://127.0.0.1:8095" },
+      { key: "model",            label: "Модель WhisperX",  type: "text",
+        hint: "medium · large-v3" },
       { key: "language",         label: "Язык распознавания", type: "select",
         choices: ["ru", "en", "auto"] },
       { key: "wake_words",       label: "Wake words",       type: "text",

@@ -12,7 +12,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${ROOT_DIR}/data/adam"
 PID_FILE="${LOG_DIR}/orchestrator.pid"
 
-SYSTEMD_SERVICES=(adam-orchestrator.service adam-llm.service adam-tts-silero.service adam-asr-speaches.service)
+SYSTEMD_SERVICES=(adam-orchestrator.service adam-llm.service adam-tts-silero.service adam-asr-whisperx.service)
 LIVE_VLM_CONTAINER="adam-live-vlm"
 
 echo "▶ Adam Chip — stop"

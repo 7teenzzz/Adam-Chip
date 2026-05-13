@@ -29,18 +29,18 @@ ADAM_LLM_PORT=8081
 ADAM_LLM_GPU_LAYERS=99
 ADAM_LLM_CTX=8192
 ADAM_TTS_BASE_URL=http://127.0.0.1:8082
-ADAM_ASR_HOST=127.0.0.1
-ADAM_ASR_PORT=8083
-ADAM_ASR_WHISPER_BASE_URL=http://127.0.0.1:8083
-ADAM_ASR_WHISPER_MODEL=medium
-ADAM_ASR_LANGUAGE=ru
-ADAM_ASR_DEVICE=auto
-ADAM_VLM_BASE_URL=http://127.0.0.1:8084
-ADAM_VLM_MODEL=Efficient-Large-Model/VILA1.5-3b
 ADAM_TTS_PORT=8082
 ADAM_TTS_OUTPUT_DEVICE=plughw:1,3
+ADAM_ASR_HOST=127.0.0.1
+ADAM_ASR_PORT=8095
+ADAM_ASR_WHISPERX_BASE_URL=http://127.0.0.1:8095
+ADAM_ASR_WHISPERX_MODEL=medium
+ADAM_ASR_LANGUAGE=ru
+ADAM_ASR_DEVICE=cuda
+ADAM_VLM_BASE_URL=http://127.0.0.1:8084
+ADAM_VLM_MODEL=Efficient-Large-Model/VILA1.5-3b
 ADAM_VIDEO_DEVICE=/dev/video0
-ADAM_AUDIO_INPUT_DEVICE=hw:1,0
+ADAM_AUDIO_INPUT_DEVICE=pulse
 ADAM_AUDIO_OUTPUT_DEVICE=default
 EOF
 fi
@@ -71,11 +71,11 @@ ensure_env_line "ADAM_TTS_BASE_URL" "http://127.0.0.1:8082"
 ensure_env_line "ADAM_TTS_PORT" "8082"
 ensure_env_line "ADAM_TTS_OUTPUT_DEVICE" "plughw:1,3"
 ensure_env_line "ADAM_ASR_HOST" "127.0.0.1"
-ensure_env_line "ADAM_ASR_PORT" "8083"
-ensure_env_line "ADAM_ASR_WHISPER_BASE_URL" "http://127.0.0.1:8083"
-ensure_env_line "ADAM_ASR_WHISPER_MODEL" "medium"
+ensure_env_line "ADAM_ASR_PORT" "8095"
+ensure_env_line "ADAM_ASR_WHISPERX_BASE_URL" "http://127.0.0.1:8095"
+ensure_env_line "ADAM_ASR_WHISPERX_MODEL" "medium"
 ensure_env_line "ADAM_ASR_LANGUAGE" "ru"
-ensure_env_line "ADAM_ASR_DEVICE" "auto"
+ensure_env_line "ADAM_ASR_DEVICE" "cuda"
 ensure_env_line "ADAM_VLM_BASE_URL" "http://127.0.0.1:8084"
 ensure_env_line "ADAM_VLM_MODEL" "Efficient-Large-Model/VILA1.5-3b"
 ensure_env_line "ADAM_AUDIO_INPUT_DEVICE" "pulse"
@@ -83,14 +83,13 @@ ensure_env_line "ADAM_AUDIO_OUTPUT_DEVICE" "default"
 
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-orchestrator.service" /etc/systemd/system/adam-orchestrator.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-tts-silero.service" /etc/systemd/system/adam-tts-silero.service
-install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-asr-speaches.service" /etc/systemd/system/adam-asr-speaches.service
-install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-asr-whisper.service" /etc/systemd/system/adam-asr-whisper.service
+install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-asr-whisperx.service" /etc/systemd/system/adam-asr-whisperx.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-llm.service" /etc/systemd/system/adam-llm.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-vlm.service" /etc/systemd/system/adam-vlm.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-exhibition.target" /etc/systemd/system/adam-exhibition.target
 
 systemctl daemon-reload
-systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-speaches.service adam-asr-whisper.service adam-llm.service adam-exhibition.target
+systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service adam-exhibition.target
 
 echo "Installed Adam Chip systemd units."
 echo "Edit ${ENV_FILE} for device/service overrides."
@@ -117,7 +116,7 @@ Next commands:
 
   # Start services:
   sudo systemctl start adam-llm.service
-  sudo systemctl start adam-asr-speaches.service
+  sudo systemctl start adam-asr-whisperx.service
   sudo systemctl start adam-tts-silero.service
   sudo systemctl start adam-orchestrator.service
   ${ROOT_DIR}/scripts/adam_service_status.sh
@@ -130,6 +129,7 @@ Logs:
   ${ROOT_DIR}/scripts/adam_service_logs.sh adam-llm.service
   ${ROOT_DIR}/scripts/adam_service_logs.sh adam-orchestrator.service
   ${ROOT_DIR}/scripts/adam_service_logs.sh adam-tts-silero.service
+  ${ROOT_DIR}/scripts/adam_service_logs.sh adam-asr-whisperx.service
 
 Switch model without restart:
   sudo systemctl edit adam-llm

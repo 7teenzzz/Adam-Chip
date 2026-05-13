@@ -47,7 +47,7 @@ echo
 SYSD_SERVICES=()
 ${DO_LLM} && SYSD_SERVICES+=(adam-llm.service)
 ${DO_TTS} && SYSD_SERVICES+=(adam-tts-silero.service)
-${DO_ASR} && SYSD_SERVICES+=(adam-asr-whisper.service)
+${DO_ASR} && SYSD_SERVICES+=(adam-asr-whisperx.service)
 
 if [[ ${#SYSD_SERVICES[@]} -gt 0 ]]; then
   # Kill stray llama-server before LLM restart to avoid port 8081 conflict.

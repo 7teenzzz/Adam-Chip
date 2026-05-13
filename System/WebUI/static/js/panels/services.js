@@ -20,7 +20,7 @@ function el(tag, attrs, children = []) {
 const SERVICE_META = {
   llm: { label: "LLM (llama-server)",   unit: "adam-llm.service",           desc: "Inference на GPU, порт :8081" },
   tts: { label: "TTS (Silero)",          unit: "adam-tts-silero.service",   desc: "Синтез речи, порт :8082" },
-  asr: { label: "ASR (speaches)",        unit: "adam-asr-speaches.service", desc: "Распознавание речи, порт :8083" },
+  asr: { label: "ASR (WhisperX)",         unit: "adam-asr-whisperx.service", desc: "Распознавание речи, порт :8095" },
 };
 
 // ── VLM Docker card (не systemd, управляется через Docker API) ──────────

@@ -10,7 +10,7 @@ WorkingDirectory=/home/i17jet/Agents/Adam-Chip
 Environment=PYTHONPATH=System
 Environment=PATH=/home/i17jet/Agents/Adam-Chip/.venv/bin
 Environment=ADAM_ASR_PORT=8095
-Environment=ADAM_ASR_WHISPERX_MODEL=large-v3
+Environment=ADAM_ASR_WHISPERX_MODEL=medium
 Environment=ADAM_ASR_LANGUAGE=ru
 Environment=ADAM_ASR_DEVICE=cuda
 Environment=ADAM_ASR_COMPUTE_TYPE=float16

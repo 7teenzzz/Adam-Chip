@@ -69,7 +69,7 @@
     "asr": {
       "provider": "whisperx",
       "base_url": "http://127.0.0.1:8095",
-      "model": "large-v3",
+      "model": "medium",
       "language": "ru",
       "command_endpointing_ms": 1500,
       "reply_window_sec": 4.0,

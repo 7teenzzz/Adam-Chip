@@ -72,13 +72,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "max_new_tokens": 32,
         },
         "asr": {
-            "provider": "speaches",
-            "base_url": "http://127.0.0.1:8083",
-            "model": "Systran/faster-whisper-base",
+            "provider": "whisperx",
+            "base_url": "http://127.0.0.1:8095",
+            "model": "medium",
             "language": "ru",
-            "endpointing_ms": 450,
+            "command_endpointing_ms": 1500,
+            "reply_window_sec": 4.0,
+            "reply_absolute_deadline_sec": 12.0,
+            "reply_noise_gate": 1000,
             "sample_rate": 16000,
             "timeout_sec": 30,
+            "wake_words": "адам",
+            "wake_word_required": False,
         },
         "tts": {
             "provider": "silero",
@@ -110,9 +115,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "half_duplex_mute": True,
     },
     "wake_word": {
-        "engine": "none",
-        "verifier_path": "data/wake_word/adam_verifier.pkl",
-        "threshold": 0.85,
+        "engine": "openwakeword",
+        "model_path": "data/wake_word/adam.onnx",
+        "threshold": 0.5,
+        "debounce_hits": 5,
+        "vad_threshold": 0.5,
+        "wake_silence_timeout_sec": 3.0,
     },
 }
 
