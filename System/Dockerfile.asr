@@ -43,8 +43,10 @@ ENV PIP_INDEX_URL=https://pypi.org/simple \
     PIP_NO_CACHE_DIR=off
 
 # libsndfile1 required by soundfile/librosa (audio array I/O used by whisperX VAD)
+# cmake / build-essential / protobuf: needed to compile ctranslate2 from source with CUDA
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libsndfile1 && \
+    apt-get install -y --no-install-recommends \
+        libsndfile1 cmake build-essential git libprotobuf-dev protobuf-compiler && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
 
@@ -57,8 +59,23 @@ open('/constraints.txt','w').write( \
   f'torch=={torch.__version__}\nnumpy=={numpy.__version__}\n' \
 )"
 
-# ctranslate2 has aarch64 wheels on PyPI; faster-whisper is pure Python
-RUN pip install --no-cache-dir ctranslate2 faster-whisper -c /constraints.txt
+# ctranslate2: aarch64 PyPI wheel has NO CUDA support — must build from source.
+# sm_87 = Jetson Orin NX (Ampere). CUDNN OFF to avoid extra dep; MKL OFF (arm).
+# faster-whisper is pure Python; installed separately to avoid pulling CPU ctranslate2.
+RUN git clone --depth 1 --branch v4.7.1 --recursive \
+        https://github.com/OpenNMT/CTranslate2.git /tmp/ct2 && \
+    cmake -S /tmp/ct2 -B /tmp/ct2/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DWITH_CUDA=ON \
+        -DCUDA_ARCH_LIST="8.7" \
+        -DWITH_CUDNN=OFF \
+        -DWITH_MKL=OFF \
+        -DOPENMP_RUNTIME=COMP && \
+    cmake --build /tmp/ct2/build --target install -j$(nproc) && \
+    pip install --no-cache-dir /tmp/ct2/python -c /constraints.txt && \
+    rm -rf /tmp/ct2
+
+RUN pip install --no-cache-dir faster-whisper -c /constraints.txt
 
 # transformers — pin to <4.46 because 4.46+ adds MoE custom_op registration
 # (transformers/integrations/moe.py) that uses torch.library APIs incompatible with torch 2.4.0.
