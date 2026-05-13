@@ -1,0 +1,97 @@
+#---
+# Adam Chip — WhisperX ASR Docker image for Jetson Orin.
+#
+# Base: dustynv/l4t-pytorch:r36.4.0
+#   PyTorch 2.4.0 (Jetson aarch64), CUDA 12.6, cuDNN, numpy 1.26.4, torchaudio — pre-installed.
+#   Note: dustynv/l4t-pytorch:r36.4.0-cu128-24.04 does not exist on Docker Hub.
+#         The cu128 variant is only available for faster-whisper, not l4t-pytorch.
+#         l4t-pytorch:r36.4.0 (CUDA 12.6) is the correct base for whisperX on Jetson Orin.
+#
+# Does NOT require ffmpeg: ASR_WhisperX.py decodes 16kHz WAV natively via
+# the stdlib `wave` module, bypassing whisperx.load_audio() entirely.
+#
+# Build (one-time, requires internet, ~15-30 min):
+#   docker compose build adam-asr-whisperx
+#   # or directly:
+#   docker build -f System/Dockerfile.asr --tag adam-asr-whisperx:local .
+#
+# Run:
+#   docker compose up -d adam-asr-whisperx
+#   curl http://127.0.0.1:8095/health
+#---
+FROM dustynv/l4t-pytorch:r36.4.0
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    ADAM_ASR_PORT=8095 \
+    ADAM_ASR_WHISPERX_MODEL=medium \
+    ADAM_ASR_LANGUAGE=ru \
+    ADAM_ASR_DEVICE=cuda \
+    ADAM_ASR_COMPUTE_TYPE=float16 \
+    ADAM_ASR_SAMPLE_RATE=16000 \
+    ADAM_MODELS_DIR=/models \
+    HF_HOME=/hf_cache \
+    HF_HUB_CACHE=/hf_cache/hub \
+    LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1
+
+# jetson.webredirect.org is the Jetson Containers local PyPI mirror — unavailable in
+# standalone builds. Override PIP_INDEX_URL to standard PyPI before installing packages.
+ENV PIP_INDEX_URL=https://pypi.org/simple \
+    PIP_EXTRA_INDEX_URL=https://pypi.ngc.nvidia.com \
+    PIP_TRUSTED_HOST=pypi.ngc.nvidia.com \
+    PIP_NO_CACHE_DIR=off
+
+# libsndfile1 required by soundfile/librosa (audio array I/O used by whisperX VAD)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libsndfile1 && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+WORKDIR /opt
+
+# Capture pre-installed torch/numpy versions to prevent accidental upgrades by pip
+RUN python3 -c "\
+import torch, numpy; \
+open('/constraints.txt','w').write( \
+  f'torch=={torch.__version__}\nnumpy=={numpy.__version__}\n' \
+)"
+
+# ctranslate2 has aarch64 wheels on PyPI; faster-whisper is pure Python
+RUN pip install --no-cache-dir ctranslate2 faster-whisper -c /constraints.txt
+
+# transformers (tokenizers/safetensors have aarch64 wheels)
+RUN pip install --no-cache-dir transformers -c /constraints.txt
+
+# pyannote.audio (Silero VAD pipeline used by whisperX)
+# --no-deps prevents pip from pulling a newer torch from PyPI over the Jetson wheel
+RUN pip install --no-cache-dir --no-deps pyannote.audio && \
+    pip install --no-cache-dir \
+      asteroid-filterbanks \
+      pytorch-lightning \
+      pytorch-metric-learning \
+      torch-audiomentations \
+      torchmetrics \
+      "pyannote.core>=5.0" \
+      "pyannote.database>=5.0" \
+      "pyannote.metrics>=3.2" \
+      "pyannote.pipeline>=3.0" \
+      -c /constraints.txt
+
+# Audio processing and quality scoring used by whisperX transcription path
+RUN pip install --no-cache-dir scipy jiwer scikit-learn soundfile librosa -c /constraints.txt
+
+# whisperX — all deps satisfied above; --no-deps avoids torch reinstall
+RUN pip install --no-cache-dir whisperx --no-deps
+
+# FastAPI HTTP server for ASR_WhisperX.py
+RUN pip install --no-cache-dir "fastapi>=0.100" "uvicorn[standard]" -c /constraints.txt
+
+# --- ASR service code ---
+# Only ASR_WhisperX.py is copied; no orchestrator deps (no pyyaml, openwakeword, etc.)
+WORKDIR /app
+RUN mkdir -p /app/Speech && touch /app/Speech/__init__.py
+COPY System/Speech/ASR_WhisperX.py /app/Speech/ASR_WhisperX.py
+
+EXPOSE 8095
+CMD ["python3", "-m", "Speech.ASR_WhisperX"]

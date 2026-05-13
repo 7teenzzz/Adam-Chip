@@ -45,33 +45,30 @@ services:
       - ./models:/root/.cache
 
   adam-asr-whisperx:
-    # WhisperX ASR service — CUDA on Jetson Orin.
+    # WhisperX ASR service — CUDA 12.8 on Jetson Orin (l4t-pytorch base).
     # Build once: docker compose build adam-asr-whisperx  (~15-30 min, internet required)
     # Run:        docker compose up -d adam-asr-whisperx
     # Health:     curl http://127.0.0.1:8095/health
     build:
       context: .
-      dockerfile: deploy/docker/Dockerfile.asr-whisperx
+      dockerfile: System/Dockerfile.asr
     container_name: adam-asr-whisperx
     network_mode: host
     restart: unless-stopped
     runtime: nvidia
     environment:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      PYTHONPATH: /app/System
       ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8095}
       ADAM_ASR_WHISPERX_MODEL: ${ADAM_ASR_WHISPERX_MODEL:-medium}
       ADAM_ASR_LANGUAGE: ${ADAM_ASR_LANGUAGE:-ru}
       ADAM_ASR_DEVICE: cuda
       ADAM_ASR_COMPUTE_TYPE: float16
       ADAM_ASR_SAMPLE_RATE: "16000"
-      ADAM_MODELS_DIR: /app/Subsystem/Models
+      ADAM_MODELS_DIR: /models
       HF_HOME: /hf_cache
       HF_HUB_CACHE: /hf_cache/hub
-    command: ["python3", "-m", "Speech.ASR_WhisperX"]
     volumes:
-      - ./System:/app/System:ro
-      - ./Subsystem/Models:/app/Subsystem/Models
+      - ./Subsystem/Models:/models:ro
       - ./data/hf_cache:/hf_cache
       - /etc/localtime:/etc/localtime:ro
 

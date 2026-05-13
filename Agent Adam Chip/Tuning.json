@@ -26,12 +26,12 @@
     "recent_injection": {
       "enabled": true,
       "limit": 2,
-      "strategy": "by_name_or_theme",
+      "strategy": "by_name",
       "max_age_days": 30
     },
     "consolidator": {
       "enabled": true,
-      "model": "qwen2.5:7b",
+      "model": null,
       "window_start": "03:00",
       "window_end": "05:00",
       "max_episodes_per_run": 200,
@@ -60,7 +60,7 @@
     "end_strategy": "combined",
     "vad_silence_seconds": 60,
     "face_lost_seconds": 15,
-    "grace_message": "Покеда, кожанные!"
+    "grace_message": "вы там?"
   },
   "scene_director": {
     "enabled": true,
@@ -72,13 +72,13 @@
     ]
   },
   "llm": {
-    "temperature": 0.9,
+    "temperature": 0.7,
     "max_tokens": 200,
-    "response_word_target": 50
+    "response_word_target": 30
   },
   "voice": {
     "speaker": "eugene",
-    "speed_multiplier": 1.17,
+    "speed_multiplier": 1.0,
     "volume": 1.0
   },
   "prompt": {
@@ -89,6 +89,6 @@
   "diagnostics": {
     "log_level": "info",
     "metrics_enabled": true,
-    "trace_prompts": true
+    "trace_prompts": false
   }
 }
