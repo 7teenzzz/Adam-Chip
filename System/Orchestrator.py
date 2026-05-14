@@ -1233,6 +1233,9 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
     # that real voice turns actually hit). Without this, Turn 1 pays ~8s of
     # extra LLM TTFT for full prefill of the ~2800-token persona prefix.
     await _warmup_llm_prefix()
+    # N6: pre-synthesize filler WAV once so per-turn playback skips the
+    # synthesis round-trip. Saves ~100-300ms on each filler-triggering turn.
+    await _prewarm_filler()
     # Brief buffer after TTS finishes so ALSA drain noise decays before OWW starts.
     await asyncio.sleep(0.5)
     for _retry in range(5):
@@ -2107,10 +2110,16 @@ async def _stream_llm_and_speak(
             filler_done_event.set()
             return
         try:
-            # Synthesize WAV upfront (cheap on Silero, ~100–300ms).
-            wav = await asyncio.to_thread(tts._get_wav_bytes_sync, phrase)
-            if wav is not None:
-                wav = _apply_wav_speed(wav, _playback_speed)
+            # N6: check pre-warmed cache first (populated by _prewarm_filler at boot).
+            # Cache key matches (phrase, speed). Miss → fall back to on-demand synth.
+            cache_key = (phrase, _playback_speed)
+            wav = _FILLER_WAV_CACHE.get(cache_key)
+            if wav is None:
+                wav = await asyncio.to_thread(tts._get_wav_bytes_sync, phrase)
+                if wav is not None:
+                    wav = _apply_wav_speed(wav, _playback_speed)
+                    # Store for future turns (best-effort, no lock — single-writer loop).
+                    _FILLER_WAV_CACHE[cache_key] = wav
             # Wait until either delay elapses OR real TTS has already started.
             try:
                 await asyncio.wait_for(asyncio.sleep(delay_s), timeout=delay_s + 0.1)
@@ -2489,6 +2498,42 @@ async def _warmup_llm_prefix() -> None:
         event_log.append("warmup_llm_prefix", {"ok": True, "latency_ms": round(latency_ms, 1)})
     except Exception as exc:
         event_log.append("warmup_llm_prefix", {"ok": False, "error": str(exc)})
+
+
+# N6: filler-WAV cache keyed by (phrase, speed). Populated once at boot via
+# _prewarm_filler(). Saves ~100–300ms per turn on TTS service round-trip.
+# Per-turn fallback in _filler_task synthesizes on demand if cache misses
+# (graceful degradation — never blocks the turn).
+_FILLER_WAV_CACHE: dict[tuple[str, float], bytes] = {}
+
+
+async def _prewarm_filler() -> None:
+    """Pre-synthesize the configured filler phrase at the current playback speed
+    so per-turn filler playback skips the synthesis round-trip entirely.
+    """
+    tts_cfg = settings.section("services").get("tts", {}) or {}
+    if not tts_cfg.get("filler_enabled", False):
+        return
+    phrase = str(tts_cfg.get("filler_phrase", "Хм...")).strip()
+    if not phrase:
+        return
+    try:
+        speed = float(tuning_store.current().voice.speed_multiplier)
+    except Exception:
+        speed = 1.0
+    cache_key = (phrase, speed)
+    if cache_key in _FILLER_WAV_CACHE:
+        return
+    try:
+        wav = await asyncio.to_thread(tts._get_wav_bytes_sync, phrase)
+        if wav is None:
+            event_log.append("prewarm_filler", {"ok": False, "reason": "tts_returned_none"})
+            return
+        wav = _apply_wav_speed(wav, speed)
+        _FILLER_WAV_CACHE[cache_key] = wav
+        event_log.append("prewarm_filler", {"ok": True, "phrase": phrase, "speed": speed, "bytes": len(wav)})
+    except Exception as exc:
+        event_log.append("prewarm_filler", {"ok": False, "error": str(exc)})
 
 
 async def _warmup_asr() -> None:
