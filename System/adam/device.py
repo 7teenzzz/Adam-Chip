@@ -28,7 +28,7 @@ class DeviceResult:
 class MCUClient:
     def __init__(self, config: dict[str, Any]) -> None:
         self.base_url = str(config.get("base_url", "http://192.168.0.171")).rstrip("/")
-        self.speaker_url = str(config.get("speaker_url", "http://192.168.0.171:83/speaker")).strip()
+        self.speaker_url = str(config.get("speaker_url", "http://192.168.0.171:81/speaker")).strip()
         self.timeout = float(config.get("timeout_sec", 3))
         self.idle_scene = str(config.get("idle_scene", "boot_idle"))
         self.allowed_scenes = set(config.get("allowed_scenes", ["boot_idle"]))
@@ -85,7 +85,11 @@ class MCUClient:
         return self._url_for_port(81, "/stream")
 
     def mic_stream_url(self) -> str:
-        return self._url_for_port(82, "/audio")
+        return self._url_for_port(81, "/audio")
+
+    def mic_clip_url(self, ms: int = 2000) -> str:
+        ms = max(250, min(4000, ms))
+        return self._url_for_port(80, f"/api/audio/clip?ms={ms}")
 
     def speaker_endpoint_url(self) -> str:
         return self.speaker_url
