@@ -420,6 +420,9 @@ export function mount(target) {
     } else if (ev.type === "asr_no_reply_standby") {
       updateHearing("standby", standbyText());
       asrBox.style.color = "var(--muted)";
+    } else if (ev.type === "reply_window_expired") {
+      updateHearing("standby", standbyText());
+      asrBox.style.color = "var(--muted)";
     } else if (ev.type === "asr_wake_only") {
       updateHearing("standby", `«${ev.payload?.raw || "—"}» — только wake word`);
       asrBox.style.color = "var(--muted)";
