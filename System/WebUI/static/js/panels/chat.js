@@ -153,40 +153,55 @@ export function mount(target) {
     thinking:     "#22d3ee",       // cyan    — LLM generating
     tts:          "#60a5fa",       // blue    — Adam is speaking
   };
+  const HEARING_LABELS = {
+    loading:      "🎧 Инициализация",
+    standby:      "🎧 Ожидаю обращения",
+    listening:    "🎤 Слушаю",
+    reply:        "🎤 Слушаю",
+    transcribing: "⏳ Распознаю",
+    thinking:     "💭 Думаю",
+    tts:          "🔊 Говорю",
+  };
   let hearingState = "loading";
+  let dotsTick = 0;
+  const DOTS_PERIOD_MS = 400;
   const hearingDot = el("span", {
     style: `display:inline-block; width:8px; height:8px; border-radius:50%;
             background:${HEARING_COLORS.loading}; flex-shrink:0; transition:background 0.35s`,
   });
   const asrBox = el("div", {
     style: "min-height:28px; padding:6px 8px; border-radius:4px; background:var(--bg-2); font-size:12px; color:var(--muted); font-family:var(--font-mono); white-space:pre-wrap; word-break:break-word; line-height:1.4",
-  }, "OWW / ASR инициализация…");
-  let asrClearTimer = null;
+  }, HEARING_LABELS.loading);
 
-  function standbyText() {
-    const vl = state.get("status")?.voice_loop;
-    if (!vl?.running) return "OWW / ASR инициализация…";
-    const words = vl.wake_words?.length ? vl.wake_words : null;
-    return words ? `ожидание «${words.join(" / ")}»` : "ожидание…";
+  function renderHearing() {
+    asrBox.textContent = (HEARING_LABELS[hearingState] || "—") + ".".repeat(dotsTick);
   }
+  function tickDots() {
+    dotsTick = (dotsTick + 1) % 4;   // 0,1,2,3 → "" "." ".." "..."
+    renderHearing();
+  }
+  const dotsTimer = setInterval(tickDots, DOTS_PERIOD_MS);
 
-  function updateHearing(newState, text) {
+  function updateHearing(newState) {
     hearingState = newState;
     hearingDot.style.background = HEARING_COLORS[newState] || "var(--muted)";
-    if (text !== undefined) {
-      asrBox.textContent = text;
-      asrBox.style.color = newState === "loading" ? "var(--muted)" : "var(--text)";
-    }
+    asrBox.style.color = newState === "loading" ? "var(--muted)" : "var(--text)";
+    dotsTick = 0;
+    renderHearing();
   }
 
-  // Sync dot from current status snapshot on load
+  // Route to idle: standby if voice loop is up, loading otherwise.
+  // Called explicitly when an active SSE state ends.
+  function routeToIdle() {
+    const running = state.get("status")?.voice_loop?.running;
+    updateHearing(running ? "standby" : "loading");
+  }
+
+  // Polling-time sync — preserves active SSE-driven states so polling
+  // never overrides "слушаю / распознаю / думаю / говорю" mid-flow.
   function syncHearingFromStatus() {
-    const vl = state.get("status")?.voice_loop;
-    if (!vl?.running) { updateHearing("loading", standbyText()); return; }
-    // Don't override active states set by SSE events
     if (["listening", "reply", "transcribing", "thinking", "tts"].includes(hearingState)) return;
-    updateHearing("standby", standbyText());
-    asrBox.style.color = "var(--muted)";
+    routeToIdle();
   }
   syncHearingFromStatus();
   state.subscribe("status", syncHearingFromStatus);
@@ -388,57 +403,41 @@ export function mount(target) {
       // TTS was interrupted — discard any incomplete streaming bubble.
       pendingAdamBubble = null;
     } else if (ev.type === "voice_loop_started") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
+      updateHearing("standby");
     } else if (ev.type === "voice_loop_stopped") {
-      updateHearing("loading", "OWW / ASR инициализация…");
+      updateHearing("loading");
     } else if (ev.type === "wake_word_detected") {
-      if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
-      updateHearing("listening", "🎤 слушаю…");
+      updateHearing("listening");
     } else if (ev.type === "asr_partial") {
-      if (ev.payload?.state === "speech_started") {
-        if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
-        updateHearing("listening", "🎤 слушаю…");
-      }
+      if (ev.payload?.state === "speech_started") updateHearing("listening");
     } else if (ev.type === "asr_reply_window_open") {
-      updateHearing("reply", "🎤 слушаю…");
+      updateHearing("reply");
     } else if (ev.type === "mic_muted" && ev.payload?.reason === "asr_transcribing") {
-      updateHearing("transcribing", "⏳ распознаю…");
+      updateHearing("transcribing");
     } else if (ev.type === "llm_thinking_started") {
-      updateHearing("thinking", "💭 думает…");
-    } else if (ev.type === "llm_thinking_finished") {
-      if (hearingState === "thinking") updateHearing("standby", standbyText());
+      updateHearing("thinking");
     } else if (ev.type === "tts_started") {
-      if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
-      updateHearing("tts", "🔊 говорит…");
+      updateHearing("tts");
     } else if (ev.type === "tts_finished") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
-    } else if (ev.type === "wake_silence_timeout") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
-    } else if (ev.type === "asr_no_reply_standby") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
-    } else if (ev.type === "reply_window_expired") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
-    } else if (ev.type === "asr_wake_only") {
-      updateHearing("standby", `«${ev.payload?.raw || "—"}» — только wake word`);
-      asrBox.style.color = "var(--muted)";
-      if (asrClearTimer) clearTimeout(asrClearTimer);
-      asrClearTimer = setTimeout(() => { updateHearing("standby", standbyText()); asrBox.style.color = "var(--muted)"; asrClearTimer = null; }, 5000);
-    } else if (ev.type === "asr_final") {
-      const text = ev.payload?.text || "";
-      updateHearing("listening", text || standbyText());
-      asrBox.style.color = text ? "var(--text)" : "var(--muted)";
-      if (asrClearTimer) clearTimeout(asrClearTimer);
-      asrClearTimer = setTimeout(() => {
-        if (hearingState !== "tts") updateHearing("standby", standbyText());
-        asrBox.style.color = "var(--muted)";
-        asrClearTimer = null;
-      }, 10000);
+      // Only exit if we're actually in "Говорю" — guards against stale
+      // tts_finished from a previous turn flickering UI mid-flow.
+      if (hearingState === "tts") routeToIdle();
+    } else if (
+      ev.type === "wake_silence_timeout" ||
+      ev.type === "asr_no_reply_standby" ||
+      ev.type === "reply_window_expired" ||
+      ev.type === "asr_wake_only"
+    ) {
+      // These events terminate a pre-LLM listening/transcribing phase.
+      // Skip if pipeline already advanced past them (LLM or TTS in flight).
+      if (["listening", "reply", "transcribing"].includes(hearingState)) routeToIdle();
+    } else if (ev.type === "llm_thinking_finished") {
+      // Streaming pipeline often emits tts_started before LLM finishes — if we're
+      // already in "tts", let it run. Only react if still in "thinking".
+      if (hearingState === "thinking") routeToIdle();
     }
+    // asr_final: no label override — mic_muted set "Распознаю", llm_thinking_started
+    // will follow within milliseconds with "Думаю".
   });
 
   input.focus();
@@ -447,6 +446,6 @@ export function mount(target) {
     unsubScene();
     stopJetTimer();
     if (eqRafId) { cancelAnimationFrame(eqRafId); eqRafId = null; }
-    if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
+    if (dotsTimer) clearInterval(dotsTimer);
   };
 }

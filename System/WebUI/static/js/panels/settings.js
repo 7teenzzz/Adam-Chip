@@ -147,29 +147,26 @@ const SCHEMA = [
   {
     source: "config", section: "services.asr", title: "ASR · WhisperX",
     fields: [
-      { key: "base_url",  label: "Адрес службы ASR",    type: "text",
-        hint: "http://127.0.0.1:8095" },
-      { key: "model",     label: "Модель WhisperX",     type: "text",
-        hint: "medium · large-v3 (требует 12+ ГБ VRAM)" },
-      { key: "language",  label: "Язык распознавания",  type: "select",
-        choices: ["ru", "en", "auto"] },
-      { key: "wake_words",         label: "Wake words (список)",        type: "text",
-        hint: "через запятую: адам,дохлый · используется для стрипа из транскрипта" },
-      { key: "wake_word_required", label: "Wake word обязателен",       type: "bool",
-        hint: "включать в exhibition mode" },
-      { key: "command_endpointing_ms", label: "Endpointing — тишина для отправки (мс)", type: "number",
-        hint: "3000 рекомендуется · после этой тишины фраза уходит в ASR",
+      { key: "model", label: "Модель WhisperX", type: "select",
+        choices: ["tiny", "base", "small", "medium", "large-v2", "large-v3"],
+        hint: "tiny/base — быстро, точность низкая · small — баланс · medium — рекомендуется · large-v2/v3 — максимум точности, 10+ ГБ VRAM" },
+      { key: "command_endpointing_ms", label: "Endpointing — пауза перед отправкой (мс)", type: "number",
+        hint: "3000 рекомендуется · VAD ждёт такую паузу тишины, затем отправляет фразу в распознавание",
         min: 200, max: 5000, step: 100 },
-      { key: "reply_window_sec",           label: "Reply window (с)",           type: "number",
-        hint: "4.0 · окно ожидания ответной реплики зрителя",
+      { key: "reply_window_sec", label: "Reply window — ожидание ответа (с)", type: "number",
+        hint: "4.0 · после ответа Адама открывается окно, в котором зритель может говорить без wake word",
         min: 1, max: 30, step: 0.5 },
-      { key: "reply_absolute_deadline_sec", label: "Абсолютный дедлайн reply (с)", type: "number",
-        hint: "12.0 · принудительный выход из reply-окна",
+      { key: "reply_absolute_deadline_sec", label: "Reply window — жёсткий дедлайн (с)", type: "number",
+        hint: "12.0 · принудительное закрытие reply window даже при наличии звука",
         min: 5, max: 60, step: 1 },
-      { key: "reply_noise_gate",   label: "Noise gate в reply (RMS)",   type: "number",
-        hint: "1600 рекомендуется · фильтрует фоновый шум в reply-окне · ставить выше фактического уровня шума в комнате",
-        min: 0, max: 10000, step: 50 },
-      { key: "timeout_sec",        label: "Таймаут HTTP-запроса (с)",   type: "number",
+      { key: "reply_window_expired_action", label: "Reply window — действие по истечении", type: "select",
+        choices: ["standby", "stop"],
+        hint: "standby — остаётся в ожидании wake word · stop — отключает микрофон (принудительно, как в exhibition)" },
+      { key: "webrtc_vad_aggressiveness", label: "WebRTC VAD — агрессивность", type: "number",
+        sourceSection: "media.audio",
+        hint: "0–3 · 2 = баланс, 3 = строго · выше = меньше ложных срабатываний на фоновый шум, но возможны пропуски тихой речи",
+        min: 0, max: 3, step: 1 },
+      { key: "timeout_sec", label: "Таймаут HTTP-запроса к ASR (с)", type: "number",
         hint: "30 рекомендуется" },
     ],
   },
@@ -214,9 +211,6 @@ const SCHEMA = [
         choices: ["8000", "16000", "22050", "44100"],
         hint: "рекомендуется 16000",
         toValue: Number, fromValue: String },
-      { key: "webrtc_vad_aggressiveness", label: "WebRTC VAD — агрессивность", type: "number",
-        hint: "0–3 · 3 рекомендуется · выше = строже фильтрует тишину и шум",
-        min: 0, max: 3, step: 1 },
       { key: "min_speech_ms", label: "Мин. длина реплики (мс)", type: "number",
         hint: "250–404 рекомендуется" },
       { key: "max_segment_ms", label: "Макс. длина сегмента (мс)", type: "number",
@@ -627,14 +621,21 @@ export function mount(target) {
       const grid = el("div", { class: "field-grid" });
 
       group.fields.forEach((field) => {
-        const value = sectionData[field.key];
+        // sourceSection on a field overrides the group section for both load and save.
+        const effectiveSection = (group.source === "config" && field.sourceSection)
+          ? field.sourceSection
+          : group.section;
+        const fieldSectionData = (group.source === "config" && field.sourceSection)
+          ? (getNested(config, field.sourceSection) || {})
+          : sectionData;
+        const value = fieldSectionData[field.key];
         const isWide = field.type === "textarea" || field.type === "csv_array" ||
           (field.type === "string" && String(value ?? "").length > 30) ||
           (field.type === "text"   && String(value ?? "").length > 40);
 
         const row = renderFieldRow(field, value, (f, st) => {
           if (group.source === "config") {
-            return fieldInput(f, value, (v) => saveConfigField(group.section, field.key, v, st), ctx);
+            return fieldInput(f, value, (v) => saveConfigField(effectiveSection, field.key, v, st), ctx);
           } else {
             return fieldInput(f, value, (v) => saveTuningField(group.tuningSectionPath, field.key, v, st), ctx);
           }
