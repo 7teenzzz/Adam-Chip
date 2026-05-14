@@ -41,6 +41,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
             ),
             "remote_rtsp_url": "",
             "preview_enabled": False,
+            "esp_mjpeg_url": "",
+            "esp_fail_threshold": 3,
+            "esp_retry_interval_sec": 30.0,
         },
         "audio": {
             "input_device": "pulse",

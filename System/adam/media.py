@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -70,6 +72,23 @@ class MediaHealth:
             video_ready = bool(remote_rtsp_url)
             video_device = remote_rtsp_url
             video_detail = remote_rtsp_url or "remote_rtsp_url is not configured"
+        elif video_primary == "esp_mjpeg":
+            esp_url = str(video.get("esp_mjpeg_url", ""))
+            video_device = esp_url or "esp_mjpeg (url not configured)"
+            if not esp_url:
+                video_ready = False
+                video_detail = "esp_mjpeg_url not configured"
+            else:
+                video_ready, video_detail = self._probe_http_url(esp_url)
+                if not video_ready:
+                    fallback_dev = (
+                        str(video.get("video_device", "")).strip()
+                        or self._extract_v4l2_device(pipeline)
+                        or "/dev/video0"
+                    )
+                    if Path(fallback_dev).exists():
+                        video_ready = True
+                        video_detail = f"ESP unavailable, Jetson fallback ready ({fallback_dev})"
         else:
             device = (
                 str(video.get("video_device", "")).strip()
@@ -128,6 +147,16 @@ class MediaHealth:
             audio_output_device=output_device,
             audio_detail="; ".join(audio_details),
         )
+
+    @staticmethod
+    def _probe_http_url(url: str, timeout: float = 2.0) -> tuple[bool, str]:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return True, f"{url} reachable (HTTP {resp.status})"
+        except urllib.error.HTTPError as exc:
+            return False, f"HTTP {exc.code}: {url}"
+        except Exception as exc:
+            return False, str(exc)
 
     @staticmethod
     def _extract_v4l2_device(pipeline: str) -> str | None:

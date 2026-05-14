@@ -60,7 +60,13 @@ vlm = VLMClient(settings.section("services").get("vlm", {}))
 tts = TTSClient(settings.section("services").get("tts", {}))
 scene_cache = SceneCache()
 _media_cfg = settings.section("media")
-camera_reader = CameraReader(_media_cfg.get("video", {}))
+_video_cfg = dict(_media_cfg.get("video", {}))
+if not _video_cfg.get("esp_mjpeg_url"):
+    from urllib.parse import urlparse as _urlparse
+    _mcu_base = settings.section("mcu").get("base_url", "http://192.168.0.171").rstrip("/")
+    _parsed = _urlparse(_mcu_base)
+    _video_cfg["esp_mjpeg_url"] = f"{_parsed.scheme}://{_parsed.hostname}:81/stream"
+camera_reader = CameraReader(_video_cfg)
 scene_buffer = SceneDescriptionBuffer(int(_media_cfg.get("scene_buffer_maxlen", 8)))
 prompt_builder = PromptBuilder(
     settings.persona_paths,
