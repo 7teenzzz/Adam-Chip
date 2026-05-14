@@ -134,6 +134,6 @@
     "threshold": 0.35,
     "debounce_hits": 3,
     "vad_threshold": 0,
-    "wake_silence_timeout_sec": 3.0
+    "wake_silence_timeout_sec": 6.0
   }
 }
