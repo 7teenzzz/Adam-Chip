@@ -1,5 +1,6 @@
 import { api } from "../api.js";
 import { toast } from "../widgets/toast.js";
+import { createWakeMeter, createCalibrateButton } from "../widgets/wakeMeter.js";
 
 function el(tag, attrs, children = []) {
   const node = document.createElement(tag);
@@ -129,18 +130,19 @@ const SCHEMA = [
     source: "config", section: "wake_word", title: "OWW · Wake word",
     fields: [
       { key: "threshold",     label: "Порог срабатывания (OWW score)", type: "number",
-        hint: "0–1 · 0.35 рекомендуется · чем ниже — тем чувствительнее",
+        hint: "0–1 · 0.25 рекомендуется · можно настроить ползунком ниже или калибровкой",
         min: 0, max: 1, step: 0.05 },
       { key: "debounce_hits", label: "Подтверждений подряд", type: "number",
-        hint: "3 рекомендуется · больше = меньше ложных срабатываний",
+        hint: "2 рекомендуется · больше = меньше ложных срабатываний",
         min: 1, max: 20, step: 1 },
       { key: "vad_threshold", label: "VAD порог (Silero внутри OWW)", type: "number",
-        hint: "0–1 · 0.4 рекомендуется · выше = строже фильтрует тишину",
+        hint: "0–1 · 0 — выключено · выше = строже фильтрует тишину",
         min: 0, max: 1, step: 0.05 },
       { key: "wake_silence_timeout_sec", label: "Тишина после wake word (с)", type: "number",
-        hint: "3.0 рекомендуется · после истечения — обратно в standby",
+        hint: "5 рекомендуется · после истечения — обратно в standby",
         min: 0.5, max: 10, step: 0.5 },
     ],
+    extras: () => buildWakeWordExtras(),
   },
 
   // ── ASR · WhisperX ───────────────────────────────────────────────────────────
@@ -532,6 +534,30 @@ async function saveTuningField(tuningSectionPath, key, value, status) {
   }
 }
 
+// ── OWW extras ────────────────────────────────────────────────────────────────
+// Adds a draggable wake-word meter + calibration button to the OWW card.
+// The meter widget subscribes to SSE on its own; both the meter and the
+// number-field above it stay in sync via the `wake_sensitivity_updated`
+// event that the orchestrator emits on every PATCH.
+function buildWakeWordExtras() {
+  const meter = createWakeMeter({ draggable: true, height: 96 });
+  const { btn: calibrateBtn, status: calibStatus } = createCalibrateButton();
+  return el("div", { style: "display:flex; flex-direction:column; gap:6px; margin-top:10px" }, [
+    el("div", { style: "display:flex; align-items:center; gap:8px" }, [
+      el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Уровень микрофона · порог OWW"),
+      el("span", { class: "spacer" }),
+      calibrateBtn,
+    ]),
+    meter.canvas,
+    el("div", { style: "display:flex; align-items:center; gap:8px" }, [
+      el("span", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.3" },
+        "Перетащи оранжевую линию — порог wake-word. Циан — текущий OWW-score. Изменение сохраняется автоматически."),
+      el("span", { class: "spacer" }),
+      calibStatus,
+    ]),
+  ]);
+}
+
 // ── Render helpers ────────────────────────────────────────────────────────────
 
 function renderFieldRow(field, value, buildInput) {
@@ -648,12 +674,18 @@ export function mount(target) {
         ? el("span", { class: "caps mono dim" }, group.section)
         : el("span", { class: "caps mono", style: "color:var(--accent-dim, var(--accent)); opacity:0.55" }, `tuning:${group.tuningSectionPath}`);
 
+      const bodyChildren = [grid];
+      if (typeof group.extras === "function") {
+        const extra = group.extras(ctx, sectionData);
+        if (extra) bodyChildren.push(extra);
+      }
+
       const card = el("section", { class: "card" }, [
         el("div", { class: "card-header" }, [
           el("span", { class: "card-title" }, group.title),
           badge,
         ]),
-        el("div", { class: "card-body" }, [grid]),
+        el("div", { class: "card-body" }, bodyChildren),
       ]);
       const hasTextarea = group.fields.some((f) => f.type === "textarea");
       if (hasTextarea) card.classList.add("card-full");
