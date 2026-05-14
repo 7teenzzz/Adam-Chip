@@ -269,7 +269,7 @@ class VoiceLoopController:
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
         self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
         self._wake_detected_at: float = 0.0
-        self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 3.0))
+        self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
 
     @property
     def device_in_use(self) -> bool:
@@ -453,7 +453,12 @@ class VoiceLoopController:
                 # This ensures no leading syllables are clipped if they start below
                 # the RMS threshold.
                 # WebRTC VAD drives speech_ms/silence_ms counters in LISTENING and REPLY.
-                effective_voiced = voiced
+                # In REPLY, also apply an RMS noise gate to prevent low-level room noise
+                # from inflating speech_ms when WebRTC VAD fires on ambient sound.
+                if self._voice_state == "reply" and self._reply_noise_gate > 0:
+                    effective_voiced = voiced and _rms >= self._reply_noise_gate
+                else:
+                    effective_voiced = voiced
 
                 if self._voice_state == "listening":
                     # Always accumulate in listening — VAD only drives counters.
@@ -494,20 +499,20 @@ class VoiceLoopController:
                     silence_ms = 0
                     if enough_speech:
                         # Stop mic — processing + TTS runs with mic off
+                        self.muted_by_tts = True
                         self._stop_process()
                         event_log.append("mic_muted", {"reason": "asr_transcribing"})
                         self.vad_state = "transcribing"
-                        self.muted_by_tts = True
 
                         spoke = await self._transcribe_and_dispatch(pcm)
 
                         # TTS done → restart mic; enter reply window only if agent spoke
-                        self.muted_by_tts = False
                         self._process = self._start_arecord()
                         event_log.append("mic_unmuted", {"reason": "transcription_complete"})
                         stdout = self._process.stdout
                         if stdout is None:
                             raise RuntimeError("arecord restart failed")
+                        self.muted_by_tts = False
                         speech_frames.clear()
                         speech_ms = 0
                         silence_ms = 0
@@ -1990,7 +1995,7 @@ def _rebuild_clients(section_path: str) -> list[str]:
     if section_path.startswith("wake_word"):
         ww_cfg = settings.section("wake_word") or {}
         voice_loop._wake_engine = _create_wake_engine(ww_cfg)
-        voice_loop._wake_silence_timeout_sec = float(ww_cfg.get("wake_silence_timeout_sec", 3.0))
+        voice_loop._wake_silence_timeout_sec = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
         voice_loop._ww_buf.clear()
         restarted.append("voice_loop")
     if section_path.startswith("mcu"):
