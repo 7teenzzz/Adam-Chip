@@ -75,15 +75,54 @@ export function mount(target) {
   const jetStatus = el("span", { style: "font-size:10px; color:var(--muted); font-family:var(--font-mono)" }, "—");
   const sceneCaption = el("div", { style: "color:var(--muted); font-size:12px; white-space:pre-wrap; line-height:1.5" }, "Сцена не описана.");
 
-  // ---- Equalizer — driven by server-side audio_level SSE events ----
-  // Shows what Adam actually hears from the Jetson ALSA mic. No browser mic needed.
+  // ---- Equalizer + Wake-word threshold overlay ----
+  // Renders three layers on a single canvas:
+  //   1. Live audio_level bars (existing) — what Adam hears.
+  //   2. Current OWW score marker (cyan line) — where "адам" lands right now.
+  //   3. Threshold slider (orange dashed line + handle) — draggable to tune
+  //      OWW sensitivity. PATCHes /api/wake_word/sensitivity on release.
   const eqCanvas = el("canvas", {
-    style: "width:100%; height:52px; border-radius:4px; display:block; background:var(--bg-2)",
+    style: "width:100%; height:96px; border-radius:4px; display:block; background:var(--bg-2); cursor:ns-resize; touch-action:none",
   });
   const BAR_N = 28;
   const eqPeaks = new Float32Array(BAR_N);
   let eqServerLevel = 0;   // latest normalized level (0–1) from audio_level SSE event
   let eqRafId = null;
+
+  // Wake-word state (driven by SSE oww_score events + REST GET on mount).
+  let wakeThreshold = 0.25;
+  let wakeScore = 0;
+  let wakeScoreDecay = 0;     // visual smoothing of score marker
+  let wakeScorePeak = 0;      // peak hold for short window
+  let wakeScorePeakTs = 0;
+  let wakeDragging = false;
+  let wakePendingPersistTimer = null;
+  let wakeEngineReady = false;
+
+  async function loadWakeSensitivity() {
+    try {
+      const r = await fetch("/api/wake_word/sensitivity");
+      const d = await r.json();
+      if (d.ok && typeof d.threshold === "number") {
+        wakeThreshold = d.threshold;
+        wakeEngineReady = true;
+      }
+    } catch (_) { /* engine not up yet — keep default */ }
+  }
+  loadWakeSensitivity();
+
+  async function pushWakeThreshold(v, opts = {}) {
+    if (!wakeEngineReady) return;
+    try {
+      await fetch("/api/wake_word/sensitivity", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threshold: v, persist: !!opts.persist }),
+      });
+    } catch (e) {
+      toast?.("Не удалось обновить порог OWW: " + e.message);
+    }
+  }
 
   // Spectral shape: voice-like curve peaking around bar 6-10 (mid-low frequencies).
   const EQ_SHAPE = Float32Array.from({ length: BAR_N }, (_, i) => {
@@ -138,10 +177,94 @@ export function mount(target) {
           Math.max(1, Math.round(bh)),
         );
       }
+
+      // ── Wake-word overlay ──────────────────────────────────────────────
+      // Score marker (cyan line) — pulses on speech, decays back.
+      wakeScoreDecay = Math.max(wakeScore, wakeScoreDecay * 0.86);
+      const now = Date.now();
+      if (wakeScore > wakeScorePeak || now - wakeScorePeakTs > 1500) {
+        wakeScorePeak = wakeScore;
+        wakeScorePeakTs = now;
+      }
+      if (wakeScoreDecay > 0.02) {
+        const yS = (1 - wakeScoreDecay) * h;
+        ctx.fillStyle = "rgba(96,165,250,0.85)";  // cyan-ish (matches "thinking" hearing color family)
+        ctx.fillRect(0, Math.round(yS) - 1, w, 2);
+      }
+
+      // Threshold line — dashed horizontal. Orange/warn so it stands apart from
+      // the green bars. Glows brighter as wakeScore approaches/exceeds it.
+      const yT = (1 - wakeThreshold) * h;
+      const proximity = Math.max(0, Math.min(1, 1 - Math.abs(wakeScoreDecay - wakeThreshold) * 4));
+      const alpha = 0.55 + proximity * 0.40;
+      ctx.strokeStyle = wakeDragging
+        ? "rgba(240,184,74,1.0)"
+        : `rgba(240,184,74,${alpha.toFixed(2)})`;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, Math.round(yT));
+      ctx.lineTo(w, Math.round(yT));
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Slider handle — right-side knob on the threshold line.
+      const knobR = 7;
+      ctx.fillStyle = wakeDragging ? "rgba(240,184,74,1.0)" : "rgba(240,184,74,0.92)";
+      ctx.beginPath();
+      ctx.arc(w - knobR - 3, yT, knobR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Numeric labels — top-left corner, small monospace.
+      ctx.fillStyle = "rgba(220,220,220,0.78)";
+      ctx.font = "10px ui-monospace,monospace";
+      ctx.textBaseline = "top";
+      ctx.fillText(
+        `t=${wakeThreshold.toFixed(2)}  s=${wakeScoreDecay.toFixed(2)}  max=${wakeScorePeak.toFixed(2)}`,
+        4,
+        3,
+      );
     }
     eqRafId = requestAnimationFrame(drawEqualizer);
   }
   eqRafId = requestAnimationFrame(drawEqualizer);
+
+  // ── Pointer interaction for the threshold slider ───────────────────────
+  function thresholdFromEvent(ev) {
+    const rect = eqCanvas.getBoundingClientRect();
+    const y = ev.clientY - rect.top;
+    const v = 1 - (y / Math.max(1, rect.height));
+    return Math.max(0.05, Math.min(0.95, v));
+  }
+  function applyThresholdLive(v) {
+    wakeThreshold = v;
+    // Live PATCH without persist so the engine updates immediately, but the
+    // Config.json write is deferred to pointerup to avoid disk churn on drag.
+    pushWakeThreshold(v, { persist: false });
+  }
+  eqCanvas.addEventListener("pointerdown", (ev) => {
+    if (!wakeEngineReady) return;
+    wakeDragging = true;
+    eqCanvas.setPointerCapture(ev.pointerId);
+    applyThresholdLive(thresholdFromEvent(ev));
+  });
+  eqCanvas.addEventListener("pointermove", (ev) => {
+    if (!wakeDragging) return;
+    if (wakePendingPersistTimer) { clearTimeout(wakePendingPersistTimer); wakePendingPersistTimer = null; }
+    applyThresholdLive(thresholdFromEvent(ev));
+  });
+  function endDrag(ev) {
+    if (!wakeDragging) return;
+    wakeDragging = false;
+    try { eqCanvas.releasePointerCapture(ev.pointerId); } catch (_) {}
+    // One final persist so the chosen value survives a restart.
+    pushWakeThreshold(wakeThreshold, { persist: true });
+  }
+  eqCanvas.addEventListener("pointerup", endDrag);
+  eqCanvas.addEventListener("pointercancel", endDrag);
 
   // ---- Hearing (OWW + ASR) live display ----
   const HEARING_COLORS = {
@@ -265,6 +388,72 @@ export function mount(target) {
   const sendBtn = el("button", { class: "btn btn-primary", onclick: () => send() }, "Отправить ⏎");
   const clearBtn = el("button", { class: "btn btn-ghost", onclick: () => { input.value = ""; input.focus(); } }, "Очистить");
 
+  // ---- Wake-word noise calibration UI ----
+  // The "Откалибровать" button records 20s of room noise via the orchestrator,
+  // computes a recommended threshold above the noise floor, and offers Apply.
+  let calibrationInProgress = false;
+  const calibStatus = el("span", { class: "dim", style: "font-size:10px; color:var(--muted)" }, "");
+  const calibrateBtn = el("button", {
+    class: "btn btn-ghost",
+    style: "font-size:11px; padding:4px 10px",
+    onclick: () => startNoiseCalibration(),
+  }, "🎚 Откалибровать по шуму");
+
+  async function startNoiseCalibration() {
+    if (calibrationInProgress) return;
+    if (!confirm(
+      "Калибровка фонового шума.\n\n" +
+      "Адам послушает комнату 20 секунд.\n" +
+      "Не говорите и не двигайте микрофон.\n" +
+      "Оставьте обычный фон комнаты (вентилятор, проектор, гул).\n\n" +
+      "Продолжить?"
+    )) return;
+    calibrationInProgress = true;
+    calibrateBtn.disabled = true;
+    calibStatus.textContent = "Запись шума…";
+    calibStatus.style.color = "var(--warn)";
+    try {
+      const resp = await fetch("/api/wake_word/calibrate/noise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ duration_sec: 20, margin: 0.08 }),
+      });
+      if (!resp.ok) {
+        const detail = await resp.text();
+        throw new Error(resp.status + " " + detail);
+      }
+      const data = await resp.json();
+      const rec = data.recommended_threshold;
+      const p = data.profile || {};
+      const apply = confirm(
+        `Профиль шума (${data.duration_sec}с, ${data.samples} событий):\n` +
+        `  max  = ${(p.max ?? 0).toFixed(3)}\n` +
+        `  p99  = ${(p.p99 ?? 0).toFixed(3)}\n` +
+        `  p95  = ${(p.p95 ?? 0).toFixed(3)}\n` +
+        `  mean = ${(p.mean ?? 0).toFixed(3)}\n\n` +
+        `Рекомендуемый порог: ${rec.toFixed(2)}` +
+        (data.warning ? `\n\n⚠ ${data.warning}` : "") +
+        `\n\nПрименить?`
+      );
+      if (apply) {
+        await pushWakeThreshold(rec, { persist: true });
+        wakeThreshold = rec;
+        calibStatus.textContent = `Порог обновлён: ${rec.toFixed(2)}`;
+        calibStatus.style.color = "var(--accent)";
+      } else {
+        calibStatus.textContent = "Отменено.";
+        calibStatus.style.color = "var(--muted)";
+      }
+    } catch (e) {
+      calibStatus.textContent = "Ошибка: " + (e.message || e);
+      calibStatus.style.color = "var(--bad)";
+    } finally {
+      calibrationInProgress = false;
+      calibrateBtn.disabled = false;
+      setTimeout(() => { calibStatus.textContent = ""; }, 6000);
+    }
+  }
+
   // ---- Layout ----
   const card = el("section", { class: "card", style: "flex:1; display:flex; flex-direction:column; min-height:0" }, [
     el("div", { class: "card-header" }, [
@@ -292,8 +481,18 @@ export function mount(target) {
         jetImg,
         el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Сцена"),
         sceneCaption,
-        el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Микрофон"),
+        el("div", { style: "display:flex; align-items:center; gap:8px; margin-top:4px" }, [
+          el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Микрофон · OWW"),
+          el("span", { class: "spacer" }),
+          calibrateBtn,
+        ]),
         eqCanvas,
+        el("div", { style: "display:flex; align-items:center; gap:8px" }, [
+          el("span", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.4" },
+            "Перетащи оранжевую линию, чтобы изменить порог wake-word. Циан — текущий OWW-score."),
+          el("span", { class: "spacer" }),
+          calibStatus,
+        ]),
         el("div", { style: "display:flex; align-items:center; gap:6px; margin-top:4px" }, [
           hearingDot,
           el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Слух"),
@@ -393,6 +592,20 @@ export function mount(target) {
       scrollBottom();
     } else if (ev.type === "audio_level") {
       eqServerLevel = typeof ev.payload?.level === "number" ? ev.payload.level : 0;
+    } else if (ev.type === "oww_score") {
+      wakeScore = typeof ev.payload?.score === "number" ? ev.payload.score : 0;
+      // If the engine just published a fresh threshold (e.g. someone PATCHed
+      // sensitivity from another tab), sync it — but NEVER while the local
+      // user is mid-drag, or the handle would jump out from under them.
+      if (!wakeDragging && typeof ev.payload?.threshold === "number") {
+        wakeThreshold = ev.payload.threshold;
+        wakeEngineReady = true;
+      }
+    } else if (ev.type === "wake_sensitivity_updated") {
+      // Echo from our own PATCH or from a script (calibration). Reflect it.
+      if (!wakeDragging && typeof ev.payload?.threshold === "number") {
+        wakeThreshold = ev.payload.threshold;
+      }
     } else if (ev.type === "scene_updated") {
       const text = ev.payload?.text || ev.payload?.summary || "";
       if (text) {

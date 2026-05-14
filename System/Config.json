@@ -52,7 +52,7 @@
         "clip_burst_threshold": 20,
         "restore_threshold_polls": 5
       },
-      "webrtc_vad_aggressiveness": 3,
+      "webrtc_vad_aggressiveness": 2,
       "max_command_segment_ms": 15000,
       "normalize_factor": 8000
     },
@@ -84,14 +84,14 @@
       "base_url": "http://127.0.0.1:8095",
       "model": "medium",
       "language": "ru",
-      "command_endpointing_ms": 3000,
-      "reply_window_sec": 6.0,
-      "reply_absolute_deadline_sec": 12.0,
-      "reply_window_expired_action": "standby",
+      "command_endpointing_ms": 3500,
+      "reply_window_sec": 5,
+      "reply_absolute_deadline_sec": 10,
       "sample_rate": 16000,
       "timeout_sec": 30,
       "wake_words": "адам",
-      "wake_word_required": true
+      "wake_word_required": true,
+      "reply_window_expired_action": "standby"
     },
     "tts": {
       "provider": "silero",
@@ -131,9 +131,9 @@
   "sounds": {
     "enabled": true,
     "success_path": "data/sounds/success.wav",
-    "error_path": "data/sounds/boot.wav",
     "local_output_device": "default",
-    "esp_boot_note": "ESP boot sound is embedded in ESP firmware and played by ESP after speaker init"
+    "esp_boot_note": "ESP boot sound is embedded in ESP firmware and played by ESP after speaker init",
+    "error_path": "data/sounds/boot.wav"
   },
   "safety": {
     "motor_default_duration_ms": 900,
@@ -144,9 +144,9 @@
   "wake_word": {
     "engine": "openwakeword",
     "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.35,
-    "debounce_hits": 3,
+    "threshold": 0.2,
+    "debounce_hits": 2,
     "vad_threshold": 0,
-    "wake_silence_timeout_sec": 4
+    "wake_silence_timeout_sec": 5
   }
 }

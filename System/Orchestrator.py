@@ -468,7 +468,6 @@ class VoiceLoopController:
         speech_ms = 0
         silence_ms = 0
         level_tick = 0
-        _oww_score_tick = 0   # log oww score every ~1s for diagnostics
         _reader = [read_fn]  # mutable ref — updated when arecord restarts during transcription
         try:
             while self.running:
@@ -498,12 +497,15 @@ class VoiceLoopController:
                             self._ww_buf.clear()
                             triggered = self._wake_engine.process_chunk(pcm_80ms)
                             score = getattr(self._wake_engine, "last_score", None)
-                            _oww_score_tick += 1
-                            if score is not None and score >= 0.05 and _oww_score_tick >= 4:
-                                _oww_score_tick = 0
+                            if score is not None:
+                                # Stream every score (~12.5 Hz) — UI overlay needs full
+                                # dynamics, and noise calibration uses the low tail of
+                                # the distribution as baseline. Includes current threshold
+                                # so UI does not need a separate poll.
                                 event_log.append("oww_score", {
-                                    "score": round(score, 3),
+                                    "score": round(float(score), 3),
                                     "hits": getattr(self._wake_engine, "_consecutive_hits", None),
+                                    "threshold": getattr(self._wake_engine, "_threshold", None),
                                 })
                             if triggered:
                                 event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None})
@@ -2407,6 +2409,7 @@ _runtime_deps = RuntimeDeps(
     rebuild_clients=_rebuild_clients,
     capture_snapshot=camera_reader.get_latest,
     run_dialogue_turn=_run_dialogue_turn,
+    get_voice_loop=lambda: voice_loop,
 )
 app.include_router(build_router(_runtime_deps))
 
