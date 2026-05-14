@@ -84,7 +84,7 @@
       "base_url": "http://127.0.0.1:8095",
       "model": "small",
       "language": "ru",
-      "command_endpointing_ms": 2000,
+      "command_endpointing_ms": 1000,
       "reply_window_sec": 5,
       "reply_absolute_deadline_sec": 10,
       "sample_rate": 16000,
