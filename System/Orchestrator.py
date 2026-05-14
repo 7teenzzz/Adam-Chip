@@ -234,6 +234,7 @@ class VoiceLoopController:
         self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
         self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
         self._reply_absolute_deadline_sec: float = float(asr_cfg.get("reply_absolute_deadline_sec", 12.0))
+        self._reply_window_expired_action: str = str(asr_cfg.get("reply_window_expired_action", "standby"))
         self._reply_noise_gate: int = int(asr_cfg.get("reply_noise_gate", 0))
         self._voice_state: str       = "standby"   # standby | listening | reply
         self._reply_start: float     = 0.0
@@ -377,11 +378,16 @@ class VoiceLoopController:
         event_log.append("reply_window_open", {"timeout_sec": timeout_sec})
         try:
             await asyncio.sleep(timeout_sec)
-            if self.running and runtime_state.get("mode") == "exhibition":
-                event_log.append("reply_window_expired", {"action": "voice_loop_stopped"})
+            cfg_action = self._reply_window_expired_action
+            # "stop" — always stop; "standby" (default) — stop only in exhibition mode
+            should_stop = self.running and (
+                cfg_action == "stop" or runtime_state.get("mode") == "exhibition"
+            )
+            if should_stop:
+                event_log.append("reply_window_expired", {"action": "voice_loop_stopped", "config": cfg_action})
                 await self.stop()
             else:
-                event_log.append("reply_window_expired", {"action": "voice_loop_kept"})
+                event_log.append("reply_window_expired", {"action": "voice_loop_kept", "config": cfg_action})
         except asyncio.CancelledError:
             raise
         finally:
@@ -1174,12 +1180,41 @@ async def _audio_level_monitor() -> None:
             await asyncio.sleep(2.0)
 
 
-async def _warmup_then_start_voice_loop() -> None:
-    """Boot sequence: play warmup monologue first, then activate the voice loop.
+async def _wait_for_services(expected: set[str]) -> bool:
+    """Poll expected AI services until all healthy or 120 s deadline. Returns True if all OK."""
+    clients = {k: v for k, v in {"llm": llm, "tts": tts, "asr": asr, "vlm": vlm}.items()
+               if k in expected}
+    deadline = time.monotonic() + 120.0
+    while time.monotonic() < deadline:
+        results = await asyncio.gather(*(c.health() for c in clients.values()))
+        if all(h.ok for h in results):
+            return True
+        await asyncio.sleep(5.0)
+    event_log.append("startup_services_timeout", {"expected": sorted(expected)})
+    return False
 
-    Keeps the mic physically off (arecord subprocess never started) during the
-    warmup monologue so OWW cannot fire on TTS audio or ALSA init noise.
+
+async def _orchestrated_startup(services_confirmed: bool) -> None:
+    """Sequential boot: wait for services → sound → warmup greeting → voice loop.
+
+    Keeps the mic off during the entire sequence so OWW cannot fire on TTS audio.
     """
+    expected_raw = os.environ.get("ADAM_EXPECTED_SERVICES", "llm,tts,asr,vlm")
+    expected = {s.strip() for s in expected_raw.split(",") if s.strip()}
+
+    if services_confirmed:
+        services_ok: bool | None = True       # exhibition gate already verified
+    elif expected:
+        services_ok = await _wait_for_services(expected)
+    else:
+        services_ok = None                    # --empty mode: no services, skip sound
+
+    if _sounds_enabled() and services_ok is not None:
+        if services_ok:
+            await _play_success_sound("startup_services_ok")
+        else:
+            await _play_error_sound("startup_services_failed")
+
     event_log.append("voice_loop_boot_muted", {"reason": "warmup_in_progress"})
     await _warmup_wakeup()
     # Brief buffer after TTS finishes so ALSA drain noise decays before OWW starts.
@@ -1201,6 +1236,7 @@ async def lifespan(_: FastAPI):
     await session_watcher.start()
     await esp_audio_health.start()
     level_monitor = asyncio.create_task(_audio_level_monitor(), name="audio_level_monitor")
+    services_confirmed = False
     if runtime_state["mode"] == "exhibition" and settings.section("power").get("enforce_in_exhibition", True):
         status_payload = await _status_payload()
         gate = status_payload["exhibition_gate"]
@@ -1208,10 +1244,8 @@ async def lifespan(_: FastAPI):
             runtime_state["mode"] = "maintenance"
             event_log.append("exhibition_gate_failed", gate)
             raise RuntimeError(f"exhibition mode gate failed: {gate['failed']}")
-        _schedule_success_sound("startup_exhibition_gate_ok")
-    else:
-        asyncio.create_task(_startup_sound_when_ready(), name="startup_sound")
-    asyncio.create_task(_warmup_then_start_voice_loop(), name="warmup_sequence")
+        services_confirmed = True
+    asyncio.create_task(_orchestrated_startup(services_confirmed), name="startup_sequence")
     asyncio.create_task(_warmup_asr(), name="warmup_asr")
     try:
         yield
@@ -2200,44 +2234,17 @@ async def _play_success_sound(reason: str) -> dict[str, Any]:
     return payload
 
 
-async def _startup_sound_when_ready() -> None:
-    """Poll until expected AI services are healthy, then play startup sound once.
-
-    The set of expected services is read from ADAM_EXPECTED_SERVICES (comma-separated:
-    llm, tts, asr, vlm). Set by adam_start.sh based on which flags were passed.
-    Empty string = --empty mode, no services to wait for, no sound.
-    Unset = default to llm,tts,asr,vlm (full stack).
-    """
-    expected_raw = os.environ.get("ADAM_EXPECTED_SERVICES", "llm,tts,asr,vlm")
-    expected = {s.strip() for s in expected_raw.split(",") if s.strip()}
-    if not expected:
-        return
-
-    clients: dict[str, Any] = {}
-    if "llm" in expected:
-        clients["llm"] = llm
-    if "tts" in expected:
-        clients["tts"] = tts
-    if "asr" in expected:
-        clients["asr"] = asr
-    if "vlm" in expected:
-        clients["vlm"] = vlm
-
-    poll_interval = 5.0
-    deadline = time.monotonic() + 120.0
-    while time.monotonic() < deadline:
-        if not _sounds_enabled() or runtime_state.get("success_sound_played"):
-            return
-        results = await asyncio.gather(*(c.health() for c in clients.values()))
-        health = dict(zip(clients.keys(), results))
-        if all(h.ok for h in health.values()):
-            _schedule_success_sound("startup_services_ok")
-            return
-        await asyncio.sleep(poll_interval)
-    event_log.append("startup_sound_skipped", {
-        "reason": "services_not_ready_within_120s",
-        "expected": sorted(expected),
-    })
+async def _play_error_sound(reason: str) -> dict[str, Any]:
+    path = _sound_path("error_path")
+    if not path.exists():
+        event_log.append("sound_error_skipped", {"reason": "file_not_found", "path": str(path)})
+        return {"ok": False, "reason": reason, "error": "file_not_found"}
+    tts_device = str(settings.section("services").get("tts", {}).get("output_device") or "")
+    output_device = tts_device or str(settings.section("sounds").get("local_output_device", "default"))
+    result = await asyncio.to_thread(play_local_sound, path, output_device)
+    payload = {"reason": reason, "path": str(path), **result.as_dict()}
+    event_log.append("sound_error", payload)
+    return payload
 
 
 async def _warmup_wakeup() -> None:

@@ -87,6 +87,7 @@
       "command_endpointing_ms": 3000,
       "reply_window_sec": 4.0,
       "reply_absolute_deadline_sec": 12.0,
+      "reply_window_expired_action": "standby",
       "reply_noise_gate": 1600,
       "sample_rate": 16000,
       "timeout_sec": 30,
@@ -131,6 +132,7 @@
   "sounds": {
     "enabled": true,
     "success_path": "data/sounds/success.wav",
+    "error_path": "data/sounds/boot.wav",
     "local_output_device": "default",
     "esp_boot_note": "ESP boot sound is embedded in ESP firmware and played by ESP after speaker init"
   },
