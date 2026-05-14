@@ -633,22 +633,26 @@ class VoiceLoopController:
                     speech_frames.clear()
                     speech_ms = 0
                     silence_ms = 0
-                    if enough_speech:
-                        # Stop mic — processing + TTS runs with mic off
+                    if enough:
+                        # In local ALSA mode self._process is set; in ESP32 mode it is None.
+                        _using_process = self._process is not None
+                        if _using_process:
+                            self._stop_process()
                         self.muted_by_tts = True
-                        self._stop_process()
                         event_log.append("mic_muted", {"reason": "asr_transcribing"})
                         self.vad_state = "transcribing"
 
                         spoke = await self._transcribe_and_dispatch(pcm)
 
-                        # TTS done → restart mic; update _reader so next reads go to the new process
-                        self._process = self._start_arecord()
+                        # Local mode: restart arecord and update _reader.
+                        # ESP32 mode: stream was never stopped, reader stays valid.
+                        if _using_process:
+                            self._process = self._start_arecord()
+                            stdout = self._process.stdout
+                            if stdout is None:
+                                raise RuntimeError("arecord restart failed")
+                            _reader[0] = stdout.read
                         event_log.append("mic_unmuted", {"reason": "transcription_complete"})
-                        stdout = self._process.stdout
-                        if stdout is None:
-                            raise RuntimeError("arecord restart failed")
-                        _reader[0] = stdout.read
                         self.muted_by_tts = False
                         speech_frames.clear()
                         speech_ms = 0
