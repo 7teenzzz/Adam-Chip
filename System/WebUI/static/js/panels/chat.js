@@ -113,6 +113,32 @@ export function mount(target) {
     style: "min-height:28px; padding:6px 8px; border-radius:4px; background:var(--bg-2); font-size:12px; color:var(--muted); font-family:var(--font-mono); white-space:pre-wrap; word-break:break-word; line-height:1.4",
   }, HEARING_LABELS.loading);
 
+  // ---- Countdown bar ----
+  const countdownFill = el("div", {
+    style: "height:100%; width:0%; background:var(--accent); border-radius:2px; transition:none",
+  });
+  const countdownTrack = el("div", {
+    style: "width:100%; height:3px; background:rgba(67,209,122,0.12); border-radius:2px; overflow:hidden",
+  }, [countdownFill]);
+  let _cdTimer = null;
+
+  function startCountdown(durationMs) {
+    if (_cdTimer) { clearTimeout(_cdTimer); _cdTimer = null; }
+    countdownFill.style.transition = "none";
+    countdownFill.style.width = "100%";
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      countdownFill.style.transition = `width ${durationMs}ms linear`;
+      countdownFill.style.width = "0%";
+    }));
+    _cdTimer = setTimeout(stopCountdown, durationMs + 100);
+  }
+
+  function stopCountdown() {
+    if (_cdTimer) { clearTimeout(_cdTimer); _cdTimer = null; }
+    countdownFill.style.transition = "none";
+    countdownFill.style.width = "0%";
+  }
+
   function renderHearing() {
     asrBox.textContent = (HEARING_LABELS[hearingState] || "—") + ".".repeat(dotsTick);
   }
@@ -253,6 +279,7 @@ export function mount(target) {
           el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Слух"),
         ]),
         asrBox,
+        countdownTrack,
       ]),
     ]),
   ]);
@@ -354,25 +381,34 @@ export function mount(target) {
     } else if (ev.type === "barge_in") {
       // TTS was interrupted — discard any incomplete streaming bubble.
       pendingAdamBubble = null;
+      stopCountdown();
     } else if (ev.type === "voice_loop_started") {
       updateHearing("standby");
     } else if (ev.type === "voice_loop_stopped") {
       updateHearing("loading");
+      stopCountdown();
     } else if (ev.type === "wake_word_detected") {
       updateHearing("listening");
+      startCountdown((ev.payload?.silence_timeout_sec ?? 5) * 1000);
     } else if (ev.type === "asr_partial") {
-      if (ev.payload?.state === "speech_started") updateHearing("listening");
+      if (ev.payload?.state === "speech_started") {
+        updateHearing("listening");
+        stopCountdown();
+      }
+    } else if (ev.type === "endpointing_started") {
+      startCountdown(ev.payload?.duration_ms ?? 3500);
     } else if (ev.type === "asr_reply_window_open") {
       updateHearing("reply");
+      startCountdown((ev.payload?.timeout_sec ?? 4) * 1000);
     } else if (ev.type === "mic_muted" && ev.payload?.reason === "asr_transcribing") {
       updateHearing("transcribing");
+      stopCountdown();
     } else if (ev.type === "llm_thinking_started") {
       updateHearing("thinking");
     } else if (ev.type === "tts_started") {
       updateHearing("tts");
+      stopCountdown();
     } else if (ev.type === "tts_finished") {
-      // Only exit if we're actually in "Говорю" — guards against stale
-      // tts_finished from a previous turn flickering UI mid-flow.
       if (hearingState === "tts") routeToIdle();
     } else if (
       ev.type === "wake_silence_timeout" ||
@@ -380,12 +416,9 @@ export function mount(target) {
       ev.type === "reply_window_expired" ||
       ev.type === "asr_wake_only"
     ) {
-      // These events terminate a pre-LLM listening/transcribing phase.
-      // Skip if pipeline already advanced past them (LLM or TTS in flight).
       if (["listening", "reply", "transcribing"].includes(hearingState)) routeToIdle();
+      stopCountdown();
     } else if (ev.type === "llm_thinking_finished") {
-      // Streaming pipeline often emits tts_started before LLM finishes — if we're
-      // already in "tts", let it run. Only react if still in "thinking".
       if (hearingState === "thinking") routeToIdle();
     }
     // asr_final: no label override — mic_muted set "Распознаю", llm_thinking_started
@@ -399,5 +432,6 @@ export function mount(target) {
     stopJetTimer();
     if (wakeMeter && typeof wakeMeter.dispose === "function") wakeMeter.dispose();
     if (dotsTimer) clearInterval(dotsTimer);
+    stopCountdown();
   };
 }
