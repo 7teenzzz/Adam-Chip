@@ -86,10 +86,13 @@ install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-tts-silero.service" /etc/system
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-asr-whisperx.service" /etc/systemd/system/adam-asr-whisperx.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-llm.service" /etc/systemd/system/adam-llm.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-vlm.service" /etc/systemd/system/adam-vlm.service
+install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-logviewer.service" /etc/systemd/system/adam-logviewer.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-exhibition.target" /etc/systemd/system/adam-exhibition.target
 
+ensure_env_line "ADAM_LOG_VIEWER_PORT" "8083"
+
 systemctl daemon-reload
-systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service adam-exhibition.target
+systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service adam-logviewer.service adam-exhibition.target
 
 echo "Installed Adam Chip systemd units."
 echo "Edit ${ENV_FILE} for device/service overrides."

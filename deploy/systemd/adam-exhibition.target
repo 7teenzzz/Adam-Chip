@@ -1,7 +1,7 @@
 [Unit]
 Description=Adam Chip Exhibition Runtime
 Requires=adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service
-Wants=docker.service
+Wants=docker.service adam-logviewer.service
 After=adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service docker.service
 AllowIsolate=yes
 

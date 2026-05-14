@@ -1,0 +1,22 @@
+[Unit]
+Description=Adam Chip Log Viewer (read-only HTTP :8083)
+After=network.target
+PartOf=adam-exhibition.target
+
+[Service]
+Type=simple
+User=i17jet
+Group=i17jet
+WorkingDirectory=/home/i17jet/Agents/Adam-Chip
+EnvironmentFile=-/etc/adam-chip/adam.env
+Environment=PYTHONPATH=System
+Environment=ADAM_LOG_VIEWER_PORT=8083
+ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python System/adam/log_viewer.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=adam-logviewer
+
+[Install]
+WantedBy=adam-exhibition.target
