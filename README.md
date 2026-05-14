@@ -40,6 +40,7 @@ Jetson (inference node)             ESP32-S3 (peripheral node)
 | ASR | WhisperX (CUDA, Docker) | medium, ru-RU, wake word «адам» | 8095 |
 | TTS | Silero v5_5_ru | голос eugene | 8082 |
 | Orchestrator | FastAPI + asyncio | — | 8080 |
+| Log Viewer | FastAPI (always-on) | — | 8083 |
 
 ## Структура
 
@@ -58,8 +59,9 @@ System/
     echoes_gate.py         Пул готовых реплик (Echoes / Chinese)
     tuning.py              Hot-reloadable параметры персоны
     metrics.py             Метрики: timing, tokens, memory
-    api_runtime.py         Runtime API: config R/W, SSE, camera snapshot
+    api_runtime.py         Runtime API: config R/W, SSE, camera snapshot, /api/events
     events.py              Event bus + JSONL log
+    log_viewer.py          Always-on read-only log HTTP сервис (порт 8083)
     power.py               Jetson power gate (nvpmodel / jetson_clocks)
     media.py               Video/audio health checks
     sound.py               Jetson-side cue playback
@@ -136,6 +138,7 @@ docker compose --profile speech-local up --build adam-asr-whisperx
 ./scripts/adam_torch_doctor.sh
 ./scripts/adam_install_systemd.sh
 
+sudo systemctl start adam-logviewer.service   # always-on, до остальных
 sudo systemctl start adam-llm.service
 sudo systemctl start adam-tts-silero.service
 sudo systemctl start adam-asr-whisperx.service
@@ -179,7 +182,23 @@ PyTorch для Silero ставится только Jetson-compatible спосо
 ./.venv/bin/python -m pip install --no-deps "silero>=0.5.0"
 ```
 
-## Логи Pipeline (удалённо с Windows / macOS)
+## Логи Pipeline
+
+### Log Viewer (браузер, всегда доступен)
+
+Самостоятельный сервис на порту **8083** — работает даже когда оркестратор упал.
+
+```text
+http://JETSON_IP:8083/          # дашборд: события, метрики, статус сервисов
+http://JETSON_IP:8083/events    # JSON: последние N событий
+http://JETSON_IP:8083/metrics   # JSON: latency per turn (proxy → оркестратор или файл)
+http://JETSON_IP:8083/journal   # JSON: journalctl для любого adam-* сервиса
+http://JETSON_IP:8083/services  # JSON: systemctl статус всех adam-* юнитов
+```
+
+Из основного UI (`:8080`) панель **Логи** показывает статус сервисов и открывает Log Viewer.
+
+### Скрипт adam_pull_logs.py (терминал, удалённо с Windows / macOS)
 
 Каждый диалоговый turn получает `turn_id` — короткий UUID, который связывает все события ASR → LLM → TTS → Action в один trace.
 

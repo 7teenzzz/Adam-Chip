@@ -161,6 +161,16 @@ if ! ${EXPLICIT_NODES} && ! ${EMPTY_MODE}; then
 fi
 echo
 
+# --------- 0. Log Viewer (always-on, independent of AI services) -------------
+if systemctl cat adam-logviewer.service >/dev/null 2>&1; then
+  if ! systemctl is-active --quiet adam-logviewer 2>/dev/null; then
+    sudo systemctl start adam-logviewer >/dev/null 2>&1 || true
+  fi
+  systemctl is-active --quiet adam-logviewer 2>/dev/null \
+    && echo "  ✓ adam-logviewer.service (:${ADAM_LOG_VIEWER_PORT:-8083})" \
+    || echo "  ! adam-logviewer.service не стартовал"
+fi
+
 # --------- 1. LLM (llama-server) ---------------------------------------------
 if ${START_LLM}; then
   LLAMA_BIN="${LLAMACPP_DIR}/build/bin/llama-server"
@@ -367,6 +377,7 @@ cat <<EOF
   Local UI:  http://127.0.0.1:${PORT}/
   LAN UI:    http://${IP}:${PORT}/${vlm_url:+
   Live VLM:  ${vlm_url}}
+  Log Viewer: http://${IP}:${ADAM_LOG_VIEWER_PORT:-8083}/
 
 Проверить:    curl --noproxy '*' -s http://127.0.0.1:${PORT}/api/agent/status | python3 -m json.tool
 Логи:         tail -f ${LOG_FILE}

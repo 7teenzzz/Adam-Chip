@@ -15,7 +15,16 @@ PID_FILE="${LOG_DIR}/orchestrator.pid"
 SYSTEMD_SERVICES=(adam-orchestrator.service adam-llm.service adam-tts-silero.service)
 LIVE_VLM_CONTAINER="adam-live-vlm"
 
-echo "▶ Adam Chip — stop"
+STOP_ALL=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --all) STOP_ALL=true ;;
+    *) echo "Неизвестный аргумент: $1" >&2; echo "Использование: $0 [--all]" >&2; exit 1 ;;
+  esac
+  shift
+done
+
+echo "▶ Adam Chip — stop${STOP_ALL:+ (--all)}"
 echo
 
 # --------- 0. Disarm systemd orchestrator first (prevents Restart=on-failure) -
@@ -108,6 +117,16 @@ for s in "${SYSTEMD_SERVICES[@]}"; do
     echo "  ✓ ${s} остановлен"
   fi
 done
+
+# --------- 4. Log Viewer (only with --all) -----------------------------------
+if ${STOP_ALL}; then
+  if systemctl is-active --quiet adam-logviewer.service 2>/dev/null; then
+    echo
+    echo "⏵ Останавливаю adam-logviewer.service (--all)…"
+    sudo systemctl stop adam-logviewer.service || true
+    echo "  ✓ adam-logviewer.service остановлен"
+  fi
+fi
 
 echo
 echo "▶ Готово."
