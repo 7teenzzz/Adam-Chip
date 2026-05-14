@@ -2042,6 +2042,15 @@ async def _stream_llm_and_speak(
             await queue.put(None)  # sentinel
 
     t_tts_start: list[float] = [0.0]
+    speaking_started: list[bool] = [False]
+
+    def _mark_speaking_started() -> None:
+        # Switch UI from "Думаю" → "Говорю" exactly when first WAV starts playing.
+        if speaking_started[0]:
+            return
+        speaking_started[0] = True
+        runtime_state["speaking"] = True
+        event_log.append("tts_started", {"text": "(streaming)"})
 
     async def _consumer() -> None:
         """Pipeline: synthesize chunk N+1 while playing chunk N.
@@ -2057,6 +2066,7 @@ async def _stream_llm_and_speak(
             if chunk is None:
                 # No more chunks — play the last pending wav if any.
                 if pending_wav is not None and not runtime_state.get("interrupt_tts"):
+                    _mark_speaking_started()
                     result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                     tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
                 runtime_state["interrupt_tts"] = False
@@ -2073,9 +2083,11 @@ async def _stream_llm_and_speak(
                 # /wav endpoint failed — fall back to /speak (blocks for synth+play).
                 # First play any pending chunk, then play this one synchronously.
                 if pending_wav is not None:
+                    _mark_speaking_started()
                     result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                     tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
                     pending_wav = None
+                _mark_speaking_started()
                 result = await asyncio.to_thread(tts._synthesize_sync, chunk)
                 tts_chunks.append(result)
                 continue
@@ -2085,14 +2097,17 @@ async def _stream_llm_and_speak(
                 if runtime_state.get("interrupt_tts"):
                     runtime_state["interrupt_tts"] = False
                     break
+                _mark_speaking_started()
                 result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                 tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
 
             pending_wav = wav
             pending_ok = True
 
-    runtime_state["speaking"] = True
-    event_log.append("tts_started", {"text": "(streaming)"})
+    # NOTE: runtime_state["speaking"] и event "tts_started" больше НЕ ставятся здесь.
+    # Они выставляются внутри _consumer() в момент первого реального playback,
+    # чтобы статус "Говорю" в UI появлялся только когда TTS реально звучит,
+    # а не на стадии генерации LLM-токенов (статус "Думаю").
     producer_task = asyncio.create_task(_producer(), name="llm_producer")
     consumer_task = asyncio.create_task(_consumer(), name="tts_consumer")
     try:
@@ -2126,7 +2141,10 @@ async def _stream_llm_and_speak(
     tts_ms = round((time.perf_counter() - tts_start) * 1000, 1)
     ok = all(bool(r.get("ok")) for r in tts_chunks) if tts_chunks else True
     tts_result: dict[str, Any] = {"ok": ok, "degraded": not ok, "chunks": len(tts_chunks), "results": tts_chunks}
-    event_log.append("tts_finished", {"ok": ok, "degraded": not ok})
+    # Эмитим tts_finished только если ранее реально начинали говорить.
+    # Иначе UI может застрять в "Говорю" из-за событий-призраков.
+    if speaking_started[0]:
+        event_log.append("tts_finished", {"ok": ok, "degraded": not ok})
     return reply, llm_ms, ttfv_ms, tts_ms, tts_result
 
 

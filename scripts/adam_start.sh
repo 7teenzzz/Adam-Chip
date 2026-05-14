@@ -269,7 +269,34 @@ if ! ${EMPTY_MODE}; then
   EXPECTED_SERVICES="${EXPECTED_SERVICES%,}"
 fi
 
-# --------- 3. Orchestrator ---------------------------------------------------
+# --------- 3. Live VLM (optional) --------------------------------------------
+# Стартует ДО orchestrator: orchestrator при инициализации проверяет health
+# AI-сервисов (см. ADAM_EXPECTED_SERVICES) и ждёт их готовности. Если VLM
+# поднимается позже, orchestrator успевает зафиксировать его как недоступный
+# и переходит в degraded-state до следующего health-poll.
+if ${should_start_vlm}; then
+  echo
+  echo "⏵ Запуск Live VLM (Docker, detached)…"
+  if docker ps --format '{{.Names}}' | grep -qx "${LIVE_VLM_CONTAINER}"; then
+    echo "  · ${LIVE_VLM_CONTAINER} уже работает"
+  else
+    if ! "${ROOT_DIR}/scripts/adam_live_vlm.sh" bg >/dev/null 2>&1; then
+      echo "  ✗ Live VLM не стартовал — посмотри: ${ROOT_DIR}/scripts/adam_live_vlm.sh bg"
+    else
+      sleep 2
+      if docker ps --format '{{.Names}}' | grep -qx "${LIVE_VLM_CONTAINER}"; then
+        echo "  ✓ ${LIVE_VLM_CONTAINER} (логи: docker logs -f ${LIVE_VLM_CONTAINER})"
+      else
+        echo "  ✗ контейнер не появился — docker logs ${LIVE_VLM_CONTAINER}"
+      fi
+    fi
+  fi
+elif [[ "${START_VLM}" == "auto" ]] && [[ ! -e "${LIVE_VLM_CAMERA}" ]]; then
+  echo
+  echo "  · Live VLM пропущен (нет ${LIVE_VLM_CAMERA}). Запусти руками: scripts/adam_live_vlm.sh"
+fi
+
+# --------- 4. Orchestrator ---------------------------------------------------
 if ${START_ORCH}; then
   existing_pids="$(pgrep -f 'System/Orchestrator\.py' || true)"
   if [[ -n "${existing_pids}" ]]; then
@@ -319,29 +346,6 @@ else
     echo
     echo "  ! Оркестратор не запущен. Запусти без --no-orch или через adam_start.sh --empty"
   fi
-fi
-
-# --------- 4. Live VLM (optional) --------------------------------------------
-if ${should_start_vlm}; then
-  echo
-  echo "⏵ Запуск Live VLM (Docker, detached)…"
-  if docker ps --format '{{.Names}}' | grep -qx "${LIVE_VLM_CONTAINER}"; then
-    echo "  · ${LIVE_VLM_CONTAINER} уже работает"
-  else
-    if ! "${ROOT_DIR}/scripts/adam_live_vlm.sh" bg >/dev/null 2>&1; then
-      echo "  ✗ Live VLM не стартовал — посмотри: ${ROOT_DIR}/scripts/adam_live_vlm.sh bg"
-    else
-      sleep 2
-      if docker ps --format '{{.Names}}' | grep -qx "${LIVE_VLM_CONTAINER}"; then
-        echo "  ✓ ${LIVE_VLM_CONTAINER} (логи: docker logs -f ${LIVE_VLM_CONTAINER})"
-      else
-        echo "  ✗ контейнер не появился — docker logs ${LIVE_VLM_CONTAINER}"
-      fi
-    fi
-  fi
-elif [[ "${START_VLM}" == "auto" ]] && [[ ! -e "${LIVE_VLM_CAMERA}" ]]; then
-  echo
-  echo "  · Live VLM пропущен (нет ${LIVE_VLM_CAMERA}). Запусти руками: scripts/adam_live_vlm.sh"
 fi
 
 # --------- summary -----------------------------------------------------------
