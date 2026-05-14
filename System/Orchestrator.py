@@ -418,6 +418,7 @@ class VoiceLoopController:
             self.last_asr_error = str(exc)
             runtime_state["last_error"] = f"voice_loop:{exc}"
             event_log.append("voice_loop_error", {"error": str(exc)})
+            event_log.append("voice_loop_stopped", self.status())
         finally:
             self._stop_process()
             self.running = False
@@ -596,7 +597,7 @@ class VoiceLoopController:
                     or speech_ms >= self.max_segment_ms
                 ):
                     pcm = b"".join(speech_frames)
-                    enough = speech_ms >= self.min_speech_ms
+                    enough_speech = speech_ms >= self.min_speech_ms
                     speech_frames.clear()
                     speech_ms = 0
                     silence_ms = 0
@@ -641,6 +642,7 @@ class VoiceLoopController:
             self.last_asr_error = str(exc)
             runtime_state["last_error"] = f"voice_loop:{exc}"
             event_log.append("voice_loop_error", {"error": str(exc)})
+            event_log.append("voice_loop_stopped", self.status())
         finally:
             self._stop_process()
             self.running = False
