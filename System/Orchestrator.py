@@ -452,7 +452,7 @@ class VoiceLoopController:
                 # controls only speech_ms/silence_ms counters and vad_state display.
                 # This ensures no leading syllables are clipped if they start below
                 # the RMS threshold.
-                # Silero VAD drives both LISTENING and REPLY states.
+                # WebRTC VAD drives speech_ms/silence_ms counters in LISTENING and REPLY.
                 effective_voiced = voiced
 
                 if self._voice_state == "listening":

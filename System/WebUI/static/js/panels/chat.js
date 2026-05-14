@@ -414,6 +414,12 @@ export function mount(target) {
     } else if (ev.type === "tts_finished") {
       updateHearing("standby", standbyText());
       asrBox.style.color = "var(--muted)";
+    } else if (ev.type === "wake_silence_timeout") {
+      updateHearing("standby", standbyText());
+      asrBox.style.color = "var(--muted)";
+    } else if (ev.type === "asr_no_reply_standby") {
+      updateHearing("standby", standbyText());
+      asrBox.style.color = "var(--muted)";
     } else if (ev.type === "asr_wake_only") {
       updateHearing("standby", `«${ev.payload?.raw || "—"}» — только wake word`);
       asrBox.style.color = "var(--muted)";
