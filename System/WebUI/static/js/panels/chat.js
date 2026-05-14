@@ -225,6 +225,15 @@ export function mount(target) {
   }, "OWW / ASR инициализация…");
   let asrClearTimer = null;
 
+  const countdownTrack = el("div", {
+    style: "width:100%; height:3px; background:rgba(67,209,122,0.12); border-radius:2px; overflow:hidden; margin-top:2px",
+  });
+  const countdownFill = el("div", {
+    style: "height:100%; width:0%; background:var(--accent); border-radius:2px; transition:none",
+  });
+  countdownTrack.appendChild(countdownFill);
+  let _cdTimer = null;
+
   function standbyText() {
     const vl = state.get("status")?.voice_loop;
     if (!vl?.running) return "OWW / ASR инициализация…";
@@ -239,6 +248,23 @@ export function mount(target) {
       asrBox.textContent = text;
       asrBox.style.color = newState === "loading" ? "var(--muted)" : "var(--text)";
     }
+  }
+
+  function startCountdown(durationMs) {
+    if (_cdTimer) { clearTimeout(_cdTimer); _cdTimer = null; }
+    countdownFill.style.transition = "none";
+    countdownFill.style.width = "100%";
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      countdownFill.style.transition = `width ${durationMs}ms linear`;
+      countdownFill.style.width = "0%";
+    }));
+    _cdTimer = setTimeout(stopCountdown, durationMs + 100);
+  }
+
+  function stopCountdown() {
+    if (_cdTimer) { clearTimeout(_cdTimer); _cdTimer = null; }
+    countdownFill.style.transition = "none";
+    countdownFill.style.width = "0%";
   }
 
   // Sync dot from current status snapshot on load
@@ -354,6 +380,7 @@ export function mount(target) {
           el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Слух"),
         ]),
         asrBox,
+        countdownTrack,
       ]),
     ]),
   ]);
@@ -465,23 +492,31 @@ export function mount(target) {
     } else if (ev.type === "barge_in") {
       // TTS was interrupted — discard any incomplete streaming bubble.
       pendingAdamBubble = null;
+      stopCountdown();
     } else if (ev.type === "voice_loop_started") {
       updateHearing("standby", standbyText());
       asrBox.style.color = "var(--muted)";
     } else if (ev.type === "voice_loop_stopped") {
       updateHearing("loading", "OWW / ASR инициализация…");
+      stopCountdown();
     } else if (ev.type === "wake_word_detected") {
       if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
       updateHearing("listening", "🎤 слушаю…");
+      startCountdown((ev.payload?.silence_timeout_sec ?? 6) * 1000);
+    } else if (ev.type === "endpointing_started") {
+      startCountdown(ev.payload?.duration_ms ?? 3000);
     } else if (ev.type === "asr_partial") {
       if (ev.payload?.state === "speech_started") {
         if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
         updateHearing("listening", "🎤 слушаю…");
+        stopCountdown();
       }
     } else if (ev.type === "asr_reply_window_open") {
       updateHearing("reply", "🎤 слушаю…");
+      startCountdown((ev.payload?.timeout_sec ?? 4) * 1000);
     } else if (ev.type === "mic_muted" && ev.payload?.reason === "asr_transcribing") {
       updateHearing("transcribing", "⏳ распознаю…");
+      stopCountdown();
     } else if (ev.type === "llm_thinking_started") {
       updateHearing("thinking", "💭 думает…");
     } else if (ev.type === "llm_thinking_finished") {
@@ -489,15 +524,18 @@ export function mount(target) {
     } else if (ev.type === "tts_started") {
       if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
       updateHearing("tts", "🔊 говорит…");
+      stopCountdown();
     } else if (ev.type === "tts_finished") {
       updateHearing("standby", standbyText());
       asrBox.style.color = "var(--muted)";
     } else if (ev.type === "wake_silence_timeout") {
       updateHearing("standby", standbyText());
       asrBox.style.color = "var(--muted)";
+      stopCountdown();
     } else if (ev.type === "asr_no_reply_standby") {
       updateHearing("standby", standbyText());
       asrBox.style.color = "var(--muted)";
+      stopCountdown();
     } else if (ev.type === "reply_window_expired") {
       updateHearing("standby", standbyText());
       asrBox.style.color = "var(--muted)";
@@ -527,5 +565,6 @@ export function mount(target) {
     if (eqRafId) { cancelAnimationFrame(eqRafId); eqRafId = null; }
     if (vuRafId) { cancelAnimationFrame(vuRafId); vuRafId = null; }
     if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
+    stopCountdown();
   };
 }

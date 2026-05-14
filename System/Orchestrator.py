@@ -408,23 +408,31 @@ class VoiceLoopController:
             await self._run_local(frame_bytes)
 
     async def _run_local(self, frame_bytes: int) -> None:
-        try:
-            self._process = self._start_arecord()
-            stdout = self._process.stdout
-            if stdout is None:
-                raise RuntimeError("arecord stdout unavailable")
-            await self._vad_loop(stdout.read, frame_bytes)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            self.running = False
-            self.vad_state = "error"
-            self.last_asr_error = str(exc)
-            runtime_state["last_error"] = f"voice_loop:{exc}"
-            event_log.append("voice_loop_error", {"error": str(exc)})
-        finally:
-            self._stop_process()
-            self.running = False
+        _delays = [1.0, 2.0, 4.0]
+        for attempt, delay in enumerate([0.0] + _delays):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                self._process = self._start_arecord()
+                stdout = self._process.stdout
+                if stdout is None:
+                    raise RuntimeError("arecord stdout unavailable")
+                await self._vad_loop(stdout.read, frame_bytes)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.vad_state = "error"
+                self.last_asr_error = str(exc)
+                runtime_state["last_error"] = f"voice_loop:{exc}"
+                event_log.append("voice_loop_error", {
+                    "error": str(exc),
+                    "attempt": attempt + 1,
+                    "retrying": attempt < len(_delays),
+                })
+            finally:
+                self._stop_process()
+        self.running = False
 
     async def _run_esp32(self, frame_bytes: int) -> None:
         if self._mcu is None:
@@ -437,7 +445,9 @@ class VoiceLoopController:
             await self._mcu.request("POST", "/api/audio", {"profile": profile})
             try:
                 resp = await asyncio.to_thread(urllib.request.urlopen, url, timeout=10)
-                await asyncio.to_thread(resp.read, 44)  # skip WAV header
+                header = await asyncio.to_thread(resp.read, 44)
+                if len(header) < 44:
+                    raise RuntimeError(f"ESP32 WAV header truncated ({len(header)}/44 bytes)")
                 if is_stereo:
                     self._raw_is_stereo = True
                     read_fn = self._make_stereo_reader(resp.read)
@@ -498,11 +508,18 @@ class VoiceLoopController:
         level_tick = 0
         _oww_score_tick = 0   # log oww score every ~1s for diagnostics
         _reader = [read_fn]  # mutable ref — updated when arecord restarts during transcription
+        _empty_streak = 0
+        _was_endpointing = False
         try:
             while self.running:
                 chunk = await asyncio.to_thread(_reader[0], frame_bytes)
                 if not chunk:
-                    raise RuntimeError("audio source ended unexpectedly")
+                    _empty_streak += 1
+                    if _empty_streak >= 3:
+                        raise RuntimeError("audio source ended: 3 consecutive empty reads")
+                    await asyncio.sleep(0.005)
+                    continue
+                _empty_streak = 0
 
                 _rms = audioop.rms(chunk, 2)
                 voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
@@ -539,7 +556,7 @@ class VoiceLoopController:
                                     "hits": getattr(self._wake_engine, "_consecutive_hits", None),
                                 })
                             if triggered:
-                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None})
+                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None, "silence_timeout_sec": self._wake_silence_timeout_sec})
                                 self._set_voice_state("listening", "wake_word")
                                 self._webrtc_vad.reset_states()
                                 self._wake_detected_at = time.perf_counter()
@@ -605,8 +622,12 @@ class VoiceLoopController:
                         speech_ms += self.frame_ms
                         silence_ms = 0
                         self.vad_state = "speech"
+                        _was_endpointing = False
                     elif speech_frames:
                         silence_ms += self.frame_ms
+                        if not _was_endpointing:
+                            _was_endpointing = True
+                            event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms})
                         self.vad_state = "endpointing"
                     else:
                         self.vad_state = "silence"
@@ -617,9 +638,13 @@ class VoiceLoopController:
                     speech_frames.append(chunk)
                     speech_ms += self.frame_ms
                     silence_ms = 0
+                    _was_endpointing = False
                 elif speech_frames:
                     speech_frames.append(chunk)
                     silence_ms += self.frame_ms
+                    if not _was_endpointing:
+                        _was_endpointing = True
+                        event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms})
                     self.vad_state = "endpointing"
                 else:
                     self.vad_state = "silence"
@@ -633,6 +658,7 @@ class VoiceLoopController:
                     speech_frames.clear()
                     speech_ms = 0
                     silence_ms = 0
+                    _was_endpointing = False
                     if enough:
                         # In local ALSA mode self._process is set; in ESP32 mode it is None.
                         _using_process = self._process is not None
