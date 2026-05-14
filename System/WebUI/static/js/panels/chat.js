@@ -145,10 +145,13 @@ export function mount(target) {
 
   // ---- Hearing (OWW + ASR) live display ----
   const HEARING_COLORS = {
-    loading:   "var(--warn)",   // yellow  — OWW/ASR not ready
-    standby:   "var(--accent)", // green   — waiting for wake word
-    listening: "#a855f7",       // purple  — recording / accumulating speech
-    tts:       "#60a5fa",       // blue    — Adam is speaking
+    loading:      "var(--warn)",   // yellow  — OWW/ASR not ready
+    standby:      "var(--accent)", // green   — waiting for wake word
+    listening:    "#a855f7",       // purple  — recording / accumulating speech
+    reply:        "#a855f7",       // purple  — reply window open (same as listening)
+    transcribing: "#f0b84a",       // amber   — WhisperX processing
+    thinking:     "#22d3ee",       // cyan    — LLM generating
+    tts:          "#60a5fa",       // blue    — Adam is speaking
   };
   let hearingState = "loading";
   const hearingDot = el("span", {
@@ -395,6 +398,14 @@ export function mount(target) {
         if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
         updateHearing("listening", "🎤 слушаю…");
       }
+    } else if (ev.type === "asr_reply_window_open") {
+      updateHearing("reply", "🎤 слушаю…");
+    } else if (ev.type === "mic_muted" && ev.payload?.reason === "asr_transcribing") {
+      updateHearing("transcribing", "⏳ распознаю…");
+    } else if (ev.type === "llm_thinking_started") {
+      updateHearing("thinking", "💭 думает…");
+    } else if (ev.type === "llm_thinking_finished") {
+      if (hearingState === "thinking") updateHearing("standby", standbyText());
     } else if (ev.type === "tts_started") {
       if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
       updateHearing("tts", "🔊 говорит…");

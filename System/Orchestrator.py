@@ -1353,10 +1353,12 @@ async def _run_dialogue_turn(transcript: str, source: str, asr_ms: float | None 
 
     async with turn_lock:
         runtime_state["thinking"] = True
+        event_log.append("llm_thinking_started", {})
         try:
             return await _run_dialogue_turn_locked(transcript, source, asr_ms)
         finally:
             runtime_state["thinking"] = False
+            event_log.append("llm_thinking_finished", {})
 
 
 async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float | None) -> dict[str, Any]:
