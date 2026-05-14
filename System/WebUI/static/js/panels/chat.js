@@ -96,6 +96,14 @@ export function mount(target) {
   let eqServerLevel = 0;   // latest normalized level (0–1) from audio_level SSE event
   let eqRafId = null;
 
+  const vuCanvas = el("canvas", {
+    style: "width:44px; flex-shrink:0; height:52px; border-radius:4px; display:block; background:var(--bg-2)",
+  });
+  let vuChannels = 1;
+  let vuLevelL = 0, vuLevelR = 0, vuLevelMono = 0;
+  let vuPeakL = 0,  vuPeakR = 0,  vuPeakMono = 0;
+  let vuRafId = null;
+
   // Spectral shape: voice-like curve peaking around bar 6-10 (mid-low frequencies).
   const EQ_SHAPE = Float32Array.from({ length: BAR_N }, (_, i) => {
     const x = i / (BAR_N - 1);
@@ -153,6 +161,49 @@ export function mount(target) {
     eqRafId = requestAnimationFrame(drawEqualizer);
   }
   eqRafId = requestAnimationFrame(drawEqualizer);
+
+  function drawVuMeter() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = vuCanvas.getBoundingClientRect();
+    if (rect.width > 0) {
+      const cw = Math.round(rect.width * dpr), ch = Math.round(rect.height * dpr);
+      if (vuCanvas.width !== cw || vuCanvas.height !== ch) {
+        vuCanvas.width = cw; vuCanvas.height = ch;
+      }
+      const ctx = vuCanvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const w = rect.width, h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const isStereo = vuChannels === 2;
+      const GAP = isStereo ? 4 : 0;
+      const barW = isStereo ? (w - GAP) / 2 : w;
+
+      function drawBar(x, level, peak) {
+        ctx.fillStyle = "rgba(67,209,122,0.10)";
+        ctx.fillRect(Math.round(x), h - 2, Math.round(barW), 2);
+        const newPeak = Math.max(level, peak * 0.90);
+        const bh = Math.max(1, newPeak * (h - 4));
+        ctx.fillStyle = `rgba(67,209,122,${0.35 + newPeak * 0.65})`;
+        ctx.fillRect(Math.round(x), Math.round(h - 2 - bh), Math.round(barW), Math.round(bh));
+        return newPeak;
+      }
+
+      if (isStereo) {
+        vuPeakL = drawBar(0, vuLevelL, vuPeakL);
+        vuPeakR = drawBar(barW + GAP, vuLevelR, vuPeakR);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = "rgba(67,209,122,0.45)";
+        ctx.font = "9px var(--font-mono, monospace)";
+        ctx.fillText("L", 2, h - 3);
+        ctx.fillText("R", Math.round((barW + GAP) * dpr) + 2, h - 3);
+      } else {
+        vuPeakMono = drawBar(0, vuLevelMono, vuPeakMono);
+      }
+    }
+    vuRafId = requestAnimationFrame(drawVuMeter);
+  }
+  vuRafId = requestAnimationFrame(drawVuMeter);
 
   // ---- Hearing (OWW + ASR) live display ----
   const HEARING_COLORS = {
@@ -294,7 +345,10 @@ export function mount(target) {
         el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Сцена"),
         sceneCaption,
         el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Микрофон"),
-        eqCanvas,
+        el("div", { style: "display:flex; gap:6px; align-items:stretch" }, [
+          el("div", { style: "flex:1; min-width:0" }, [eqCanvas]),
+          vuCanvas,
+        ]),
         el("div", { style: "display:flex; align-items:center; gap:6px; margin-top:4px" }, [
           hearingDot,
           el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Слух"),
@@ -394,6 +448,14 @@ export function mount(target) {
       scrollBottom();
     } else if (ev.type === "audio_level") {
       eqServerLevel = typeof ev.payload?.level === "number" ? ev.payload.level : 0;
+      if (ev.payload?.channels === 2) {
+        vuChannels = 2;
+        vuLevelL = ev.payload.level_l ?? 0;
+        vuLevelR = ev.payload.level_r ?? 0;
+      } else {
+        vuChannels = 1;
+        vuLevelMono = ev.payload?.level ?? 0;
+      }
     } else if (ev.type === "scene_updated") {
       const text = ev.payload?.text || ev.payload?.summary || "";
       if (text) {
@@ -463,6 +525,7 @@ export function mount(target) {
     unsubScene();
     stopJetTimer();
     if (eqRafId) { cancelAnimationFrame(eqRafId); eqRafId = null; }
+    if (vuRafId) { cancelAnimationFrame(vuRafId); vuRafId = null; }
     if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
   };
 }

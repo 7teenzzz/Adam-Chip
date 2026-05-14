@@ -285,6 +285,9 @@ class VoiceLoopController:
         self._esp_mic_fallback: bool = False
         self._esp_mic_fail_count: int = 0
         self._esp_mic_last_retry: float = 0.0
+        self._raw_is_stereo: bool = False
+        self._raw_level_l: float = 0.0
+        self._raw_level_r: float = 0.0
 
     @property
     def device_in_use(self) -> bool:
@@ -435,13 +438,19 @@ class VoiceLoopController:
             try:
                 resp = await asyncio.to_thread(urllib.request.urlopen, url, timeout=10)
                 await asyncio.to_thread(resp.read, 44)  # skip WAV header
-                read_fn = self._stereo_to_mono_reader(resp.read) if is_stereo else resp.read
+                if is_stereo:
+                    self._raw_is_stereo = True
+                    read_fn = self._make_stereo_reader(resp.read)
+                else:
+                    self._raw_is_stereo = False
+                    read_fn = resp.read
                 _session_fail_count = 0
                 self._esp_mic_fail_count = 0
                 await self._vad_loop(read_fn, frame_bytes)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._raw_is_stereo = False
                 self.vad_state = "error"
                 self.last_asr_error = str(exc)
                 event_log.append("voice_loop_error", {"stage": "esp32_mic", "error": str(exc)})
@@ -462,19 +471,22 @@ class VoiceLoopController:
         self.running = False
         self.vad_state = "idle"
 
-    @staticmethod
-    def _stereo_to_mono_reader(read_fn: Callable[[int], bytes]) -> Callable[[int], bytes]:
+    def _make_stereo_reader(self, read_fn: Callable[[int], bytes]) -> Callable[[int], bytes]:
         """Wraps a stereo PCM read_fn to return downmixed mono (L+R)/2.
 
+        Also tracks per-channel RMS in self._raw_level_l / _raw_level_r for UI diagnostics.
         read_fn is expected to produce interleaved 16-bit stereo (2× the mono byte count).
         Partial reads return empty bytes to trigger reconnect in _run_esp32.
         """
+        normalize = self.normalize_factor
         def _read(n: int) -> bytes:
             raw = read_fn(n * 2)
-            if not raw:
+            if not raw or len(raw) < n * 2:
                 return b""
-            if len(raw) < n * 2:
-                return b""
+            rms_l = audioop.rms(audioop.tomono(raw, 2, 1.0, 0.0), 2)
+            rms_r = audioop.rms(audioop.tomono(raw, 2, 0.0, 1.0), 2)
+            self._raw_level_l = round(min(1.0, (rms_l / normalize) ** 0.5), 3)
+            self._raw_level_r = round(min(1.0, (rms_r / normalize) ** 0.5), 3)
             return audioop.tomono(raw, 2, 0.5, 0.5)
         return _read
 
@@ -498,7 +510,12 @@ class VoiceLoopController:
                 if level_tick >= 5:
                     level_tick = 0
                     norm = round(min(1.0, (_rms / self.normalize_factor) ** 0.5), 3)
-                    event_log.append("audio_level", {"level": norm, "state": self._voice_state})
+                    payload: dict[str, Any] = {"level": norm, "state": self._voice_state}
+                    if self._raw_is_stereo:
+                        payload["channels"] = 2
+                        payload["level_l"] = self._raw_level_l
+                        payload["level_r"] = self._raw_level_r
+                    event_log.append("audio_level", payload)
 
                 # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
                 if self._voice_state == "standby":
