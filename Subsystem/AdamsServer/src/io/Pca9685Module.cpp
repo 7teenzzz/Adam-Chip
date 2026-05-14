@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include <Preferences.h>
 #include <Wire.h>
 
 #include "../../config/AdamsConfig.h"
@@ -9,6 +10,24 @@
 #include "../core/RuntimeState.h"
 
 namespace {
+
+constexpr char kNvsNamespace[] = "pca9685";
+constexpr char kNvsKeyFreq[]   = "freq";
+constexpr char kNvsKeyScene[]  = "scene";
+
+void nvsSaveFrequency(uint16_t frequency) {
+  Preferences prefs;
+  prefs.begin(kNvsNamespace, false);
+  prefs.putUShort(kNvsKeyFreq, frequency);
+  prefs.end();
+}
+
+void nvsSaveScene(const char *scene) {
+  Preferences prefs;
+  prefs.begin(kNvsNamespace, false);
+  prefs.putString(kNvsKeyScene, scene);
+  prefs.end();
+}
 
 constexpr uint8_t kMode1Reg = 0x00;
 constexpr uint8_t kMode2Reg = 0x01;
@@ -40,16 +59,21 @@ bool writeRegisters(uint8_t reg, const uint8_t *data, size_t len) {
 }
 
 bool readRegister(uint8_t reg, uint8_t &value) {
-  Wire.beginTransmission(kPca9685Address);
-  Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) {
-    return false;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    Wire.beginTransmission(kPca9685Address);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) {
+      delay(2);
+      continue;
+    }
+    if (Wire.requestFrom(static_cast<int>(kPca9685Address), 1) != 1) {
+      delay(2);
+      continue;
+    }
+    value = Wire.read();
+    return true;
   }
-  if (Wire.requestFrom(static_cast<int>(kPca9685Address), 1) != 1) {
-    return false;
-  }
-  value = Wire.read();
-  return true;
+  return false;
 }
 
 void fillChannelPayload(uint16_t duty, uint8_t *payload) {
@@ -163,25 +187,38 @@ bool initPca9685() {
     bootLog("pca9685", "failed to configure MODE2");
     return false;
   }
-  if (!setPca9685Frequency(kPca9685DefaultFrequency)) {
-    bootLogf("pca9685", "failed to set frequency %u", kPca9685DefaultFrequency);
+
+  Preferences prefs;
+  prefs.begin(kNvsNamespace, true);
+  const uint16_t savedFreq = prefs.getUShort(kNvsKeyFreq, kPca9685DefaultFrequency);
+  const String savedSceneStr = prefs.getString(kNvsKeyScene, kPca9685BootScene);
+  prefs.end();
+  char savedScene[32];
+  strncpy(savedScene, savedSceneStr.c_str(), sizeof(savedScene) - 1);
+  savedScene[sizeof(savedScene) - 1] = '\0';
+
+  if (!setPca9685Frequency(savedFreq)) {
+    bootLogf("pca9685", "failed to set frequency %u", savedFreq);
     return false;
   }
 
   portENTER_CRITICAL(&gRuntimeStateMux);
-  gRuntimeState.pca9685Ready = true;
   gRuntimeState.pca9685Address = kPca9685Address;
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
-  bootLogf("pca9685", "ready, address=0x%02x, frequency=%u", kPca9685Address, kPca9685DefaultFrequency);
-  if (!applyPca9685Scene(kPca9685BootScene)) {
-    portENTER_CRITICAL(&gRuntimeStateMux);
-    gRuntimeState.pca9685Ready = false;
-    portEXIT_CRITICAL(&gRuntimeStateMux);
-    bootLogf("pca9685", "failed to apply boot scene '%s'", kPca9685BootScene);
-    return false;
+  bootLogf("pca9685", "address=0x%02x freq=%u scene=%s (from nvs)", kPca9685Address, savedFreq, savedScene);
+  if (!applyPca9685Scene(savedScene)) {
+    bootLogf("pca9685", "saved scene '%s' not found, falling back to '%s'", savedScene, kPca9685BootScene);
+    if (!applyPca9685Scene(kPca9685BootScene)) {
+      bootLogf("pca9685", "failed to apply boot scene '%s'", kPca9685BootScene);
+      return false;
+    }
   }
 
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  gRuntimeState.pca9685Ready = true;
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+  bootLogf("pca9685", "ready");
   return true;
 }
 
@@ -205,17 +242,22 @@ bool setPca9685Frequency(uint16_t frequency) {
   if (!writeRegister(kPrescaleReg, prescale)) {
     return false;
   }
-  if (!writeRegister(kMode1Reg, oldMode)) {
+  // Clear SLEEP bit before waking up — required because initPca9685 puts
+  // the chip to sleep first, so oldMode has SLEEP=1. Writing it back as-is
+  // would keep the oscillator disabled and produce no PWM output.
+  const uint8_t wakeMode = static_cast<uint8_t>(oldMode & ~0x10);
+  if (!writeRegister(kMode1Reg, wakeMode)) {
     return false;
   }
   delay(5);
-  if (!writeRegister(kMode1Reg, static_cast<uint8_t>(oldMode | 0xA1))) {
+  if (!writeRegister(kMode1Reg, static_cast<uint8_t>(wakeMode | 0xA1))) {
     return false;
   }
 
   portENTER_CRITICAL(&gRuntimeStateMux);
   gRuntimeState.pca9685Frequency = frequency;
   portEXIT_CRITICAL(&gRuntimeStateMux);
+  nvsSaveFrequency(frequency);
   bootLogf("pca9685", "frequency set to %u Hz", frequency);
   return true;
 }
@@ -280,6 +322,7 @@ bool applyPca9685Scene(const char *sceneName) {
   strncpy(gRuntimeState.activeScene, scene->name, sizeof(gRuntimeState.activeScene) - 1);
   gRuntimeState.activeScene[sizeof(gRuntimeState.activeScene) - 1] = '\0';
   portEXIT_CRITICAL(&gRuntimeStateMux);
+  nvsSaveScene(scene->name);
   return true;
 }
 

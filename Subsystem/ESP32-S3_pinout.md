@@ -1,82 +1,305 @@
-# ESP32-S3 N16R8 WROOM CAM — Pinout & Hardware Reference
-
-format: ai-md
-version: 1.0
+# ESP32-S3 WROOM CAM — Full Pinout Reference
 
 ---
 
-## DEVICE OVERVIEW
+# LEFT SIDE PINS
 
-* MCU: ESP32-S3
-* Flash: 16MB (N16)
-* PSRAM: 8MB (R8)
-* Wi-Fi: 2.4 GHz
-* Bluetooth: BLE 5
-* Logic Level: 3.3V
-* Power Input: 5V (VIN / USB)
+GPIO4:
+functions:
+- CAM_SIOD
+- ADC1_CH3
+- TOUCH4
+reserved_for_camera: true
 
-constraints:
+GPIO5:
+functions:
+- CAM_SIOC
+- ADC1_CH4
+- TOUCH5
+reserved_for_camera: true
 
-* gpio_max_voltage: 3.3V
-* 5v_tolerant: false
+GPIO6:
+functions:
+- CAM_VSYNC
+- ADC1_CH5
+- TOUCH6
+reserved_for_camera: true
 
----
+GPIO7:
+functions:
+- CAM_HREF
+- ADC1_CH6
+- TOUCH7
+reserved_for_camera: true
 
-## POWER SYSTEM
+GPIO15:
+functions:
+- CAM_XCLK
+- ADC2_CH4
+- U0RTS
+reserved_for_camera: true
 
-pins:
-5V:
-type: power_input
-description: main supply input
+GPIO16:
+functions:
+- CAM_Y9
+- ADC2_CH5
+- U0CTS
+reserved_for_camera: true
+
+GPIO17:
+functions:
+- CAM_Y8
+- ADC2_CH6
+- U1TXD
+reserved_for_camera: true
+
+GPIO18:
+functions:
+- CAM_Y7
+- ADC2_CH7
+- U1RXD
+reserved_for_camera: true
+
+GPIO8:
+functions:
+- CAM_Y4
+- ADC1_CH7
+- TOUCH8
+reserved_for_camera: true
+
+GPIO3:
+functions:
+- JTAG_EN
+- ADC1_CH2
+- TOUCH3
+reserved_for_camera: false
+
+GPIO46:
+functions:
+- GPIO
+- LOG_UART
+- DEBUG
+input_only: true
+
+GPIO9:
+functions:
+- CAM_Y3
+- ADC1_CH8
+- TOUCH9
+reserved_for_camera: true
+
+GPIO10:
+functions:
+- CAM_Y5
+- ADC1_CH9
+- TOUCH10
+reserved_for_camera: true
+
+GPIO11:
+functions:
+- CAM_Y2
+- ADC2_CH0
+- TOUCH11
+reserved_for_camera: true
+
+GPIO12:
+functions:
+- CAM_Y6
+- ADC2_CH1
+- TOUCH12
+reserved_for_camera: true
+
+GPIO13:
+functions:
+- CAM_PCLK
+- ADC2_CH2
+- TOUCH13
+reserved_for_camera: true
+
+GPIO14:
+functions:
+- ADC2_CH3
+- TOUCH14
+reserved_for_camera: false
 
 3V3:
-type: regulated_output
-description: onboard regulator output
+type: power
+voltage: 3.3V
+
+RST:
+type: reset
+
+5V:
+type: power
+voltage: 5V
+
+---
+
+# RIGHT SIDE PINS
+
+GPIO43:
+functions:
+- U0TXD
+- LED_TX
+recommended_usage:
+- I2C_SDA
+- UART_TX
+
+GPIO44:
+functions:
+- U0RXD
+- LED_RX
+recommended_usage:
+- I2C_SCL
+- UART_RX
+
+GPIO1:
+functions:
+- ADC1_CH0
+- TOUCH1
+recommended_usage:
+- analog_sensor
+
+GPIO2:
+functions:
+- ADC1_CH1
+- TOUCH2
+- LED_ON
+recommended_usage:
+- digital_io
+
+GPIO42:
+functions:
+- MTMS
+recommended_usage:
+- I2S_SCK
+- SPI_MISO
+
+GPIO41:
+functions:
+- MTDI
+recommended_usage:
+- I2S_WS
+- SPI_MOSI
+
+GPIO40:
+functions:
+- SD_DATA
+- MTDO
+recommended_usage:
+- I2S_DATA
+
+GPIO39:
+functions:
+- SD_CLK
+recommended_usage:
+- I2S_LRCK
+
+GPIO38:
+functions:
+- SD_CMD
+- MTCK
+recommended_usage:
+- I2S_BCLK
+
+GPIO37:
+functions:
+- PSRAM
+reserved_internal: true
+
+GPIO36:
+functions:
+- PSRAM
+reserved_internal: true
+
+GPIO35:
+functions:
+- PSRAM
+reserved_internal: true
+
+GPIO0:
+functions:
+- BOOT
+dangerous_for_general_io: true
+
+GPIO45:
+functions:
+- VSPI
+recommended_usage:
+- SPI_SCK
+
+GPIO48:
+functions:
+- WS2812
+recommended_usage:
+- onboard_led
+
+GPIO47:
+functions:
+- GPIO
+recommended_usage:
+- I2S_MIC_SD
+- PWM
+
+GPIO21:
+functions:
+- GPIO
+recommended_usage:
+- motion_sensor
+- PWM
+
+GPIO20:
+functions:
+- USB_D-
+- ADC2_CH9
+- U1CTS
+reserved_for_usb: true
+
+GPIO19:
+functions:
+- USB_D+
+- ADC2_CH8
+- U1RTS
+reserved_for_usb: true
 
 GND:
 type: ground
 
-rules:
-
-* all_grounds_common: true
-
 ---
 
-## RESERVED PINS
+# INTERNAL RESERVATIONS
 
+reserved:
 camera:
-GPIO4: CAM_SIOD
-GPIO5: CAM_SIOC
-GPIO6: CAM_VSYNC
-GPIO7: CAM_HREF
-GPIO8: CAM_Y4
-GPIO9: CAM_Y3
-GPIO10: CAM_Y5
-GPIO11: CAM_Y2
-GPIO12: CAM_Y6
-GPIO13: CAM_PCLK
-GPIO15: CAM_XCLK
-GPIO16: CAM_Y9
-GPIO17: CAM_Y8
-GPIO18: CAM_Y7
+- GPIO4
+- GPIO5
+- GPIO6
+- GPIO7
+- GPIO8
+- GPIO9
+- GPIO10
+- GPIO11
+- GPIO12
+- GPIO13
+- GPIO15
+- GPIO16
+- GPIO17
+- GPIO18
 
 psram:
-GPIO35: RESERVED
-GPIO36: RESERVED
-GPIO37: RESERVED
+- GPIO35
+- GPIO36
+- GPIO37
 
 usb:
-GPIO19: USB_D+
-GPIO20: USB_D-
-
-boot:
-GPIO0: BOOT_STRAP
+- GPIO19
+- GPIO20
 
 ---
 
-## AVAILABLE GPIO
+# SAFE GPIO SUMMARY
 
-usable:
+safe_gpio:
 
 * GPIO1
 * GPIO2
@@ -96,160 +319,16 @@ usable:
 
 ---
 
-## ADC
-
-adc1:
-GPIO1: ADC1_CH0
-GPIO2: ADC1_CH1
-GPIO3: ADC1_CH2
-
-adc2:
-GPIO14: ADC2_CH3
-GPIO38: ADC2
-GPIO39: ADC2
+# SPECIAL NOTES
 
 notes:
 
-* adc2_conflict_with_wifi: true
-
----
-
-## I2C
-
-recommended:
-SDA: GPIO43
-SCL: GPIO44
-
-configurable: true
-
----
-
-## I2S CONFIGURATION
-
-output_dac:
-BCLK: GPIO38
-LRCK: GPIO39
-DATA: GPIO40
-
-input_mic:
-SCK: GPIO42
-WS: GPIO41
-SD: GPIO47
-
----
-
-## UART
-
-uart0:
-TX: GPIO43
-RX: GPIO44
-
----
-
-## PWM
-
-available_on:
-
-* GPIO1
-* GPIO2
-* GPIO3
-* GPIO14
-* GPIO21
-* GPIO38
-* GPIO39
-* GPIO40
-* GPIO41
-* GPIO42
-* GPIO43
-* GPIO44
-* GPIO45
-* GPIO47
-* GPIO48
-
-engine: LEDC
-
----
-
-## SPECIAL FUNCTIONS
-
-jtag:
-GPIO41: MTDI
-GPIO42: MTMS
-
-spi:
-GPIO45: VSPI
-
-onboard_led:
-GPIO48: optional_ws2812
-
----
-
-## RESTRICTIONS
-
-rules:
-
-* do_not_use:
-
-  * GPIO0
-  * GPIO4-18
-  * GPIO19
-  * GPIO20
-  * GPIO35-37
-
-* avoid_adc2_when_wifi: true
-
----
-
-## RECOMMENDED ASSIGNMENT MAP
-
-mapping:
-i2c:
-SDA: GPIO43
-SCL: GPIO44
-
-i2s_dac:
-BCLK: GPIO38
-LRCK: GPIO39
-DATA: GPIO40
-
-i2s_mic:
-SCK: GPIO42
-WS: GPIO41
-SD: GPIO47
-
-analog_sensor:
-pin: GPIO1
-
-digital_sensor:
-pin: GPIO21
-
----
-
-## ELECTRICAL GUIDELINES
-
-rules:
-
-* decoupling_required: true
-* ceramic_caps_near_pins: true
-* electrolytic_caps_near_loads: true
-* no_direct_high_current_on_gpio: true
-* use_mosfet_for_loads: true
-
----
-
-## DECOUPLING BASELINE
-
-standard:
-logic:
-- 100nF ceramic per module
-
-audio:
-- 100nF + 10uF
-
-power_lines:
-- 100nF + 220-470uF
-
-motors:
-- 100nF + 470uF
+* GPIO46 is input only
+* GPIO0 affects boot mode
+* GPIO19 and GPIO20 reserved for USB
+* GPIO35-37 reserved for PSRAM
+* GPIO4-18 occupied by camera
+* all GPIO logic levels are 3.3V
+* GPIO are NOT 5V tolerant
 
 ---

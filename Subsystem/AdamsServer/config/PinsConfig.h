@@ -24,12 +24,15 @@
 #define PCLK_GPIO_NUM  13
 
 
-/*********************** I2S МИКРОФОН INMP441 x1 ************************/
+/*********************** I2S МИКРОФОН INMP441 x2 ************************/
+// Оба микрофона используют одни и те же пины — I2S time-division multiplex:
+//   Mic 1: L/R → GND  (левый канал, выходит на SD когда WS=LOW)
+//   Mic 2: L/R → VDD  (правый канал, выходит на SD когда WS=HIGH)
+// Пин SD не конфликтует — неактивный микрофон переходит в Hi-Z.
 
-#define I2S_MIC_BCLK   48   // SCK / BCLK
-#define I2S_MIC_WS     47   // LRCLK / WS
-#define I2S_MIC_SD     21   // SD / DATA
-// L/R → GND (левый канал)
+#define I2S_MIC_BCLK   48   // SCK / BCLK  — shared mic1 + mic2
+#define I2S_MIC_WS     47   // LRCLK / WS  — shared mic1 + mic2
+#define I2S_MIC_SD     21   // SD / DATA   — shared, time-multiplexed
 
 
 /*********************** I2S DAC PCM5102 / PCM5102A *********************/
@@ -51,6 +54,7 @@
 #define I2C_SDA_PIN   43
 #define I2C_SCL_PIN   44
 
+//both have pull-ups 4.7K resistors
 
 /*********************** W5500 LITE Ethernet ****************************/
 // Шелкография модуля W5500 НОТАЦИЯ ОБРАТНАЯ относительно ESP:
@@ -58,8 +62,8 @@
 //   MO (Module Output) = физически ESP MOSI (GPIO 42)
 
 #define ETH_SPI_SCK   14   // SCK
-#define ETH_SPI_MISO  46   // MI
-#define ETH_SPI_MOSI  42   // MO
+#define ETH_SPI_MISO  42   // MI
+#define ETH_SPI_MOSI  46   // MO
 #define ETH_SPI_CS    41   // CS
 
 #define ETH_INT       -1   // INT not connected, W5500 works in polling mode

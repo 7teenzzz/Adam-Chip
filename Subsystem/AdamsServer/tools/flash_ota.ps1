@@ -1,19 +1,19 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Host,
+    [string]$Target,
     [string]$Token = "",
     [string]$Scheme = "http"
 )
 
 $ErrorActionPreference = "Stop"
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$sketchPath = Split-Path -Parent $scriptDir
-$subsystemDir = Split-Path -Parent $sketchPath
-$fqbn = "esp32:esp32:esp32s3:FlashMode=qio,FlashSize=16M,PartitionScheme=custom,PSRAM=opi,CDCOnBoot=cdc"
+$scriptDir     = Split-Path -Parent $MyInvocation.MyCommand.Path
+$sketchPath    = Split-Path -Parent $scriptDir
+$subsystemDir  = Split-Path -Parent $sketchPath
+$fqbn          = "esp32:esp32:esp32s3:FlashMode=qio,FlashSize=16M,PartitionScheme=custom,PSRAM=opi,CDCOnBoot=cdc"
 $partitionsFile = Join-Path $sketchPath "partitions.csv"
-$arduinoCli = Join-Path $scriptDir "arduino-cli.exe"
-$outputDir = Join-Path $sketchPath "artifacts\\ota-build"
+$arduinoCli    = Join-Path $scriptDir "arduino-cli.exe"
+$outputDir     = Join-Path $sketchPath "artifacts\ota-build"
 
 if (-not (Test-Path $arduinoCli)) {
     throw "arduino-cli.exe not found at $arduinoCli"
@@ -26,7 +26,7 @@ if (-not (Test-Path $outputDir)) {
 Write-Host "Sketch path : $sketchPath"
 Write-Host "Arduino CLI : $arduinoCli"
 Write-Host "Output dir  : $outputDir"
-Write-Host "Target host : $Host"
+Write-Host "Target host : $Target"
 Write-Host ""
 
 Push-Location $subsystemDir
@@ -40,8 +40,9 @@ finally {
     Pop-Location
 }
 
-$firmwareBin = Get-ChildItem -Path $outputDir -Filter *.bin |
-    Where-Object { $_.Name -notlike "*bootloader*" -and $_.Name -notlike "*partitions*" } |
+# Pick app binary (exclude bootloader, partitions table, merged full-flash image)
+$firmwareBin = Get-ChildItem -Path $outputDir -Filter "*.bin" |
+    Where-Object { $_.Name -notlike "*bootloader*" -and $_.Name -notlike "*partitions*" -and $_.Name -notlike "*merged*" } |
     Sort-Object Length -Descending |
     Select-Object -First 1
 
@@ -49,19 +50,37 @@ if (-not $firmwareBin) {
     throw "Firmware .bin not found in $outputDir"
 }
 
-$uri = "${Scheme}://${Host}/api/ota/upload"
-$headers = @{}
+$uri = "${Scheme}://${Target}/api/ota/upload"
+
+Write-Host "Firmware    : $($firmwareBin.Name) ($($firmwareBin.Length) bytes)"
+Write-Host "POST        : $uri"
+Write-Host ""
+
+# Use curl: Invoke-WebRequest sends Expect:100-continue which ESP32 httpd rejects.
+# --limit-rate 300k paces the upload so ESP32 flash writes keep up with the recv loop.
+$curlArgs = @(
+    "-X", "POST", $uri,
+    "-H", "Content-Type: application/octet-stream",
+    "-H", "Expect:",
+    "--limit-rate", "300k",
+    "--data-binary", "@$($firmwareBin.FullName)",
+    "-w", "`nHTTP %{http_code}",
+    "--silent", "--show-error"
+)
 if ($Token) {
-    $headers["X-OTA-Token"] = $Token
+    $curlArgs += @("-H", "X-OTA-Token: $Token")
 }
 
-Write-Host "Uploading firmware: $($firmwareBin.FullName)"
-Write-Host "POST $uri"
-Write-Host ""
+$output = & curl.exe @curlArgs 2>&1
+Write-Host $output
 
-$response = Invoke-WebRequest -Uri $uri -Method Post -InFile $firmwareBin.FullName -ContentType "application/octet-stream" -Headers $headers
+if ($LASTEXITCODE -ne 0) {
+    throw "curl upload failed (exit $LASTEXITCODE)"
+}
 
-Write-Host "HTTP status: $($response.StatusCode)"
-Write-Host "Response   : $($response.Content)"
+if (($output -join " ") -notlike "*ota_uploaded_reboot_pending*") {
+    throw "Unexpected response from ESP32 - check token or OTA state"
+}
+
 Write-Host ""
-Write-Host "If upload succeeded, the ESP32 will reboot into the new OTA slot."
+Write-Host "Upload succeeded. ESP32 will reboot into new firmware in a few seconds." -ForegroundColor Green

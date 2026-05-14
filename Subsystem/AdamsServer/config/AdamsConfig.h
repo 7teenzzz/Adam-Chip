@@ -94,7 +94,7 @@ inline constexpr uint8_t kAudioChannels = 1;
 inline constexpr uint8_t kAudioPreferredSlot = 1;  // 1 = left, 2 = right
 inline constexpr uint8_t kAudioI2sStdFormat = 2;   // 1 = Philips, 2 = MSB
 inline constexpr uint8_t kAudioCaptureShift = 0;
-inline constexpr size_t kAudioRingBufferBytes = 65536;
+inline constexpr size_t kAudioRingBufferBytes = 262144;  // 4s stereo @ 16kHz 16-bit
 inline constexpr size_t kAudioReadChunkBytes = 1024;
 inline constexpr size_t kSpeakerRingBufferBytes = 65536;
 inline constexpr size_t kSpeakerReadChunkBytes = 1024;
@@ -104,20 +104,21 @@ inline constexpr size_t kSpeakerHttpChunkBytes = 1024;
 inline constexpr uint32_t kSensorPollMs = 100;
 inline constexpr uint32_t kMotionDebounceMs = 60;
 inline constexpr float kLightAlpha = 0.18f;
-inline constexpr uint32_t kI2cClockHz = 400000;
+inline constexpr uint32_t kI2cClockHz = 100000;
 
 inline constexpr uint8_t kPca9685Address = 0x40;
 inline constexpr uint16_t kPca9685DefaultFrequency = 1000;
-inline constexpr char kPca9685BootScene[] = "boot_idle";
+inline constexpr char kPca9685BootScene[] = "test_all";
 
 inline constexpr Pca9685SceneConfig kPca9685Scenes[] = {
   {"boot_idle", {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+  {"test_all",  {2907, 2907, 2907, 2907, 2907, 2907, 2907, 2907, 2907, 2907, 2907, 2907, 2907, 2907, 2907, 2907}},
   {"all_on", {4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095}},
   {"alternating", {4095, 0, 4095, 0, 4095, 0, 4095, 0, 4095, 0, 4095, 0, 4095, 0, 4095, 0}}
 };
 
 inline constexpr size_t kPca9685SceneCount = sizeof(kPca9685Scenes) / sizeof(kPca9685Scenes[0]);
 
-inline constexpr size_t kStatusJsonCapacity = 6144;
+inline constexpr size_t kStatusJsonCapacity = 16384;
 inline constexpr size_t kSensorJsonCapacity = 768;
 inline constexpr size_t kPcaJsonCapacity = 1024;

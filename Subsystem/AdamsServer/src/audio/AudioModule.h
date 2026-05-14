@@ -58,6 +58,7 @@ struct AudioRuntimeUpdate {
   uint8_t sampleShift = 0;
 };
 
+uint8_t getAudioOutputChannels();
 bool initAudioCapture();
 bool initSpeakerPlayback();
 bool readAudioChunk(uint8_t *dst, size_t maxBytes, size_t &outBytes, uint64_t &cursor);

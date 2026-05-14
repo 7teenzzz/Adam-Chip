@@ -41,7 +41,7 @@ struct AudioCaptureConfigState {
 };
 
 StaticTask_t sAudioTaskBuffer;
-StackType_t sAudioTaskStack[4096];
+StackType_t sAudioTaskStack[8192];
 
 StaticTask_t sSpeakerTaskBuffer;
 StackType_t sSpeakerTaskStack[4096];
@@ -78,8 +78,10 @@ volatile uint32_t sAudioClipCount = 0;
 volatile uint8_t sAudioDetectedChannelMask = 0;
 char sAudioSignalState[16] = "silence";
 
-float sDcPrevInput = 0.0f;
-float sDcPrevOutput = 0.0f;
+struct DcBlockState { float prevInput = 0.0f; float prevOutput = 0.0f; };
+DcBlockState sDcLeft = {};
+DcBlockState sDcRight = {};
+volatile uint8_t sAudioOutputChannels = 1;
 AudioCaptureConfigState sCaptureConfig = {};
 
 constexpr i2s_port_t kAudioCapturePort = I2S_NUM_0;
@@ -87,12 +89,14 @@ constexpr i2s_port_t kSpeakerPlaybackPort = I2S_NUM_1;
 constexpr uint32_t kAudioSilenceThreshold = 24;
 constexpr float kDcBlockAlpha = 0.995f;
 constexpr AudioProfileDefinition kAudioProfiles[] = {
-  {"inmp441_philips32_left", AudioFormatMode::Philips, 32, 32, 1, 14},
-  {"inmp441_philips32_right", AudioFormatMode::Philips, 32, 32, 2, 14},
-  {"inmp441_msb32_left", AudioFormatMode::Msb, 32, 32, 1, 14},
-  {"inmp441_msb32_right", AudioFormatMode::Msb, 32, 32, 2, 14},
-  {"compat16_left", AudioFormatMode::Philips, 16, 16, 1, 0},
-  {"compat16_right", AudioFormatMode::Philips, 16, 16, 2, 0},
+  {"inmp441_philips32_left",   AudioFormatMode::Philips, 32, 32, 1, 14},
+  {"inmp441_philips32_right",  AudioFormatMode::Philips, 32, 32, 2, 14},
+  {"inmp441_philips32_stereo", AudioFormatMode::Philips, 32, 32, 0, 14},
+  {"inmp441_msb32_left",       AudioFormatMode::Msb,     32, 32, 1, 14},
+  {"inmp441_msb32_right",      AudioFormatMode::Msb,     32, 32, 2, 14},
+  {"inmp441_msb32_stereo",     AudioFormatMode::Msb,     32, 32, 0, 14},
+  {"compat16_left",            AudioFormatMode::Philips, 16, 16, 1,  0},
+  {"compat16_right",           AudioFormatMode::Philips, 16, 16, 2,  0},
 };
 
 void copyText(char *dst, size_t dstSize, const char *src) {
@@ -120,7 +124,8 @@ const AudioProfileDefinition *findProfile(const char *name) {
 }
 
 const AudioProfileDefinition *defaultProfile() {
-  return &kAudioProfiles[0];
+  const AudioProfileDefinition *p = findProfile("inmp441_philips32_stereo");
+  return p != nullptr ? p : &kAudioProfiles[0];
 }
 
 uint8_t *allocateRingBuffer(const char *name, size_t size) {
@@ -157,6 +162,7 @@ void applyProfileDefaults(const AudioProfileDefinition &profile) {
   sCaptureConfig.slotBits = profile.slotBits;
   sCaptureConfig.preferredSlot = profile.preferredSlot;
   sCaptureConfig.sampleShift = profile.sampleShift;
+  sAudioOutputChannels = (profile.preferredSlot == 0) ? 2 : 1;
 }
 
 i2s_data_bit_width_t toDataWidth(uint8_t bits) {
@@ -173,16 +179,17 @@ void appendAudioBytes(const uint8_t *src, size_t length) {
   }
 
   portENTER_CRITICAL(&sAudioMux);
-  uint64_t sequence = sAudioWriteSequence;
-  size_t writeIndex = static_cast<size_t>(sequence % kAudioRingBufferBytes);
-  size_t firstCopy = min(length, kAudioRingBufferBytes - writeIndex);
+  const uint64_t writeSeq = sAudioWriteSequence;
+  sAudioWriteSequence += length;
+  sAudioLastSampleMs = millis();
+  portEXIT_CRITICAL(&sAudioMux);
+
+  const size_t writeIndex = static_cast<size_t>(writeSeq % kAudioRingBufferBytes);
+  const size_t firstCopy = min(length, kAudioRingBufferBytes - writeIndex);
   memcpy(sAudioRing + writeIndex, src, firstCopy);
   if (firstCopy < length) {
     memcpy(sAudioRing, src + firstCopy, length - firstCopy);
   }
-  sAudioWriteSequence += length;
-  sAudioLastSampleMs = millis();
-  portEXIT_CRITICAL(&sAudioMux);
 
   portENTER_CRITICAL(&gRuntimeStateMux);
   gRuntimeState.audioWriteSequenceLow = static_cast<uint32_t>(sAudioWriteSequence & 0xFFFFFFFFULL);
@@ -198,13 +205,13 @@ int32_t convertRawSampleToPcm(int32_t rawSample, const AudioCaptureConfigState &
   return rawSample;
 }
 
-float applyDcBlockFilter(float input, bool enabled) {
+float applyDcBlockFilter(float input, bool enabled, DcBlockState &state) {
   if (!enabled) {
     return input;
   }
-  const float output = input - sDcPrevInput + (kDcBlockAlpha * sDcPrevOutput);
-  sDcPrevInput = input;
-  sDcPrevOutput = output;
+  const float output = input - state.prevInput + (kDcBlockAlpha * state.prevOutput);
+  state.prevInput = input;
+  state.prevOutput = output;
   return output;
 }
 
@@ -240,8 +247,8 @@ const char *classifySignalState(uint32_t averageLevel, uint32_t peakLevel, uint3
 }
 
 void resetDcBlockState() {
-  sDcPrevInput = 0.0f;
-  sDcPrevOutput = 0.0f;
+  sDcLeft = {};
+  sDcRight = {};
 }
 
 bool initAudioStdRxChannelLocked() {
@@ -406,11 +413,12 @@ void updateAudioStats(
   sAudioZeroCrossRateTimes1000 = zeroCrossRateTimes1000;
   sAudioClipCount += chunkClipCount;
   sAudioDetectedChannelMask = channelMask;
-  copyText(sAudioSignalState, sizeof(sAudioSignalState), signalState);
   if (selectedPeak >= kAudioSilenceThreshold) {
     sAudioLastNonZeroMs = now;
   }
   portEXIT_CRITICAL(&sAudioMux);
+  // String copy outside spinlock to keep critical section short (string literals in flash).
+  copyText(sAudioSignalState, sizeof(sAudioSignalState), signalState);
 }
 
 void audioCaptureTask(void *parameter) {
@@ -443,11 +451,55 @@ void audioCaptureTask(void *parameter) {
       continue;
     }
 
+#ifndef NDEBUG
+    {
+      static bool sFirstDumpDone = false;
+      if (!sFirstDumpDone && bytesRead >= 32) {
+        sFirstDumpDone = true;
+        const uint32_t *raw32 = reinterpret_cast<const uint32_t *>(rawBytes);
+        bootLogf("audio-diag", "raw I2S[0..3]: 0x%08lx 0x%08lx 0x%08lx 0x%08lx",
+          static_cast<unsigned long>(raw32[0]),
+          static_cast<unsigned long>(raw32[1]),
+          static_cast<unsigned long>(raw32[2]),
+          static_cast<unsigned long>(raw32[3]));
+        bootLogf("audio-diag", "profile=%s dataBits=%u shift=%u gain=%.1f slot=%u",
+          config.profile,
+          static_cast<unsigned>(config.dataBits),
+          static_cast<unsigned>(config.sampleShift),
+          static_cast<double>(config.softwareGain),
+          static_cast<unsigned>(config.preferredSlot));
+      }
+    }
+#endif
+
     const size_t frameStride = config.dataBits >= 32 ? sizeof(int32_t) * 2 : sizeof(int16_t) * 2;
     const size_t framesRead = bytesRead / frameStride;
     if (framesRead == 0) {
       continue;
     }
+
+#if defined(DEBUG_TONE_TEST)
+    // Bypass I2S data with a 440 Hz sine to verify ring buffer → WAV delivery chain.
+    {
+      static uint32_t tonePhase = 0;
+      const bool isStereo = (config.preferredSlot == 0);
+      for (size_t i = 0; i < framesRead; ++i) {
+        const int16_t s = static_cast<int16_t>(sinf(tonePhase * 0.17271f) * 12000.0f);
+        tonePhase++;
+        if (isStereo) {
+          monoBuffer[i * 2]     = s;
+          monoBuffer[i * 2 + 1] = s;
+        } else {
+          monoBuffer[i] = s;
+        }
+      }
+      const size_t outSamplesTone = isStereo ? framesRead * 2 : framesRead;
+      const uint32_t tonePeak = 12000;
+      updateAudioStats(tonePeak, tonePeak, tonePeak, 7000, 0, 200, 0);
+      appendAudioBytes(reinterpret_cast<const uint8_t *>(monoBuffer), outSamplesTone * sizeof(int16_t));
+      continue;
+    }
+#endif
 
     uint64_t absSum = 0;
     int64_t signedSum = 0;
@@ -456,6 +508,8 @@ void audioCaptureTask(void *parameter) {
     uint32_t selectedPeak = 0;
     uint32_t zeroCrossCount = 0;
     uint32_t clipCount = 0;
+
+    const bool stereoMode = (config.preferredSlot == 0);
 
     for (size_t i = 0; i < framesRead; ++i) {
       int32_t leftRaw = 0;
@@ -478,30 +532,59 @@ void audioCaptureTask(void *parameter) {
       leftPeak = max(leftPeak, static_cast<uint32_t>(abs(leftPcm)));
       rightPeak = max(rightPeak, static_cast<uint32_t>(abs(rightPcm)));
 
-      float selected = static_cast<float>(selectPreferredOutputSample(leftPcm, rightPcm, config.preferredSlot));
-      signedSum += static_cast<int32_t>(selected);
-      selected = applyDcBlockFilter(selected, config.dcBlock);
-      selected *= config.softwareGain;
+      if (stereoMode) {
+        float fl = static_cast<float>(leftPcm);
+        float fr = static_cast<float>(rightPcm);
+        signedSum += (static_cast<int32_t>(fl) + static_cast<int32_t>(fr)) / 2;
+        fl = applyDcBlockFilter(fl, config.dcBlock, sDcLeft);
+        fr = applyDcBlockFilter(fr, config.dcBlock, sDcRight);
+        fl *= config.softwareGain;
+        fr *= config.softwareGain;
 
-      int32_t output = static_cast<int32_t>(lroundf(selected));
-      if (output > 32767) {
-        output = 32767;
-        clipCount++;
-      } else if (output < -32768) {
-        output = -32768;
-        clipCount++;
+        int32_t outL = static_cast<int32_t>(lroundf(fl));
+        int32_t outR = static_cast<int32_t>(lroundf(fr));
+        if (outL > 32767) { outL = 32767; clipCount++; } else if (outL < -32768) { outL = -32768; clipCount++; }
+        if (outR > 32767) { outR = 32767; clipCount++; } else if (outR < -32768) { outR = -32768; clipCount++; }
+
+        const int16_t sampleL = static_cast<int16_t>(outL);
+        const int16_t sampleR = static_cast<int16_t>(outR);
+        const int16_t mixed = static_cast<int16_t>((outL + outR) / 2);
+        if ((lastOutputSample < 0 && mixed >= 0) || (lastOutputSample >= 0 && mixed < 0)) zeroCrossCount++;
+        lastOutputSample = mixed;
+
+        const uint32_t absL = static_cast<uint32_t>(abs(outL));
+        const uint32_t absR = static_cast<uint32_t>(abs(outR));
+        selectedPeak = max(selectedPeak, max(absL, absR));
+        absSum += (absL + absR) / 2;
+        monoBuffer[i * 2]     = sampleL;
+        monoBuffer[i * 2 + 1] = sampleR;
+      } else {
+        DcBlockState &dcState = (config.preferredSlot == 2) ? sDcRight : sDcLeft;
+        float selected = static_cast<float>(selectPreferredOutputSample(leftPcm, rightPcm, config.preferredSlot));
+        signedSum += static_cast<int32_t>(selected);
+        selected = applyDcBlockFilter(selected, config.dcBlock, dcState);
+        selected *= config.softwareGain;
+
+        int32_t output = static_cast<int32_t>(lroundf(selected));
+        if (output > 32767) {
+          output = 32767;
+          clipCount++;
+        } else if (output < -32768) {
+          output = -32768;
+          clipCount++;
+        }
+
+        const int16_t outputSample = static_cast<int16_t>(output);
+        if ((lastOutputSample < 0 && outputSample >= 0) || (lastOutputSample >= 0 && outputSample < 0)) {
+          zeroCrossCount++;
+        }
+        lastOutputSample = outputSample;
+
+        const uint32_t sampleAbs = static_cast<uint32_t>(abs(output));
+        selectedPeak = max(selectedPeak, sampleAbs);
+        absSum += sampleAbs;
+        monoBuffer[i] = outputSample;
       }
-
-      const int16_t outputSample = static_cast<int16_t>(output);
-      if ((lastOutputSample < 0 && outputSample >= 0) || (lastOutputSample >= 0 && outputSample < 0)) {
-        zeroCrossCount++;
-      }
-      lastOutputSample = outputSample;
-
-      const uint32_t sampleAbs = static_cast<uint32_t>(abs(output));
-      selectedPeak = max(selectedPeak, sampleAbs);
-      absSum += sampleAbs;
-      monoBuffer[i] = outputSample;
     }
 
     const uint32_t averageLevel = static_cast<uint32_t>(absSum / framesRead);
@@ -509,7 +592,8 @@ void audioCaptureTask(void *parameter) {
     const uint32_t zeroCrossRateTimes1000 = static_cast<uint32_t>((zeroCrossCount * 1000UL) / max<size_t>(framesRead, 1));
 
     updateAudioStats(leftPeak, rightPeak, selectedPeak, averageLevel, dcOffset, zeroCrossRateTimes1000, clipCount);
-    appendAudioBytes(reinterpret_cast<const uint8_t *>(monoBuffer), framesRead * sizeof(int16_t));
+    const size_t outSamples = stereoMode ? framesRead * 2 : framesRead;
+    appendAudioBytes(reinterpret_cast<const uint8_t *>(monoBuffer), outSamples * sizeof(int16_t));
   }
 }
 
@@ -573,6 +657,10 @@ void speakerPlaybackTask(void *parameter) {
 
 }  // namespace
 
+uint8_t getAudioOutputChannels() {
+  return sAudioOutputChannels;
+}
+
 bool initAudioCapture() {
   if (!ensureAudioConfigMutex()) {
     bootLog("audio-mic", "failed to create config mutex");
@@ -596,7 +684,7 @@ bool initAudioCapture() {
     const AudioProfileDefinition *profile = defaultProfile();
     applyProfileDefaults(*profile);
     sCaptureConfig.dcBlock = true;
-    sCaptureConfig.softwareGain = 1.0f;
+    sCaptureConfig.softwareGain = 7.0f;
   }
 
   const bool ready = reconfigureAudioCaptureLocked("boot");
@@ -666,25 +754,29 @@ bool readAudioChunk(uint8_t *dst, size_t maxBytes, size_t &outBytes, uint64_t &c
     return false;
   }
 
+  size_t readIndex = 0;
+  size_t firstCopy = 0;
   portENTER_CRITICAL(&sAudioMux);
   const uint64_t writeSequence = sAudioWriteSequence;
   const uint64_t earliestSequence = (writeSequence > kAudioRingBufferBytes) ? (writeSequence - kAudioRingBufferBytes) : 0;
   if (cursor < earliestSequence) {
     cursor = earliestSequence;
   }
-
   const size_t available = static_cast<size_t>(writeSequence - cursor);
   const size_t toCopy = min(maxBytes, available);
-  const size_t readIndex = static_cast<size_t>(cursor % kAudioRingBufferBytes);
-  const size_t firstCopy = min(toCopy, kAudioRingBufferBytes - readIndex);
-  memcpy(dst, sAudioRing + readIndex, firstCopy);
-  if (firstCopy < toCopy) {
-    memcpy(dst + firstCopy, sAudioRing, toCopy - firstCopy);
-  }
+  readIndex = static_cast<size_t>(cursor % kAudioRingBufferBytes);
+  firstCopy = min(toCopy, kAudioRingBufferBytes - readIndex);
   cursor += toCopy;
   outBytes = toCopy;
   portEXIT_CRITICAL(&sAudioMux);
 
+  if (outBytes == 0) {
+    return true;
+  }
+  memcpy(dst, sAudioRing + readIndex, firstCopy);
+  if (firstCopy < outBytes) {
+    memcpy(dst + firstCopy, sAudioRing, outBytes - firstCopy);
+  }
   return true;
 }
 
@@ -736,7 +828,7 @@ bool getAudioStatusSnapshot(AudioStatusSnapshot &snapshot) {
   const uint32_t recentActivityMs = lastSampleMs == 0 ? 0 : millis() - lastSampleMs;
   snapshot.capture.sampleRate = kAudioSampleRate;
   snapshot.capture.pcmBits = kAudioBitsPerSample;
-  snapshot.capture.pcmChannels = kAudioChannels;
+  snapshot.capture.pcmChannels = sAudioOutputChannels;
   snapshot.capture.dataBits = config.dataBits;
   snapshot.capture.slotBits = config.slotBits;
   snapshot.capture.preferredSlot = config.preferredSlot;
@@ -792,7 +884,8 @@ bool applyAudioRuntimeUpdate(const AudioRuntimeUpdate &update) {
     resetDcBlockState();
   }
   if (update.hasSlotOverride) {
-    sCaptureConfig.preferredSlot = update.preferredSlot == 2 ? 2 : 1;
+    sCaptureConfig.preferredSlot = update.preferredSlot <= 2 ? update.preferredSlot : 1;
+    sAudioOutputChannels = (sCaptureConfig.preferredSlot == 0) ? 2 : 1;
   }
   if (update.hasShiftOverride) {
     sCaptureConfig.sampleShift = min<uint8_t>(update.sampleShift, 24);
@@ -820,7 +913,7 @@ bool getAudioProfileName(size_t index, char *dst, size_t dstSize) {
 
 size_t getAudioClipBytesForDurationMs(uint32_t durationMs) {
   const uint32_t clampedMs = constrain(durationMs, 250UL, 4000UL);
-  const uint64_t bytes = (static_cast<uint64_t>(kAudioSampleRate) * kAudioChannels * (kAudioBitsPerSample / 8) * clampedMs) / 1000ULL;
+  const uint64_t bytes = (static_cast<uint64_t>(kAudioSampleRate) * sAudioOutputChannels * (kAudioBitsPerSample / 8) * clampedMs) / 1000ULL;
   return static_cast<size_t>(min<uint64_t>(bytes, kAudioRingBufferBytes));
 }
 
@@ -835,6 +928,10 @@ bool copyRecentAudioClip(uint32_t durationMs, uint8_t *dst, size_t capacity, siz
     return false;
   }
 
+  // Compute indices under spinlock only — memcpy outside to avoid blocking
+  // interrupts for the duration of a large PSRAM copy (~65KB takes ~8ms).
+  size_t readIndex = 0;
+  size_t firstCopy = 0;
   portENTER_CRITICAL(&sAudioMux);
   const uint64_t writeSequence = sAudioWriteSequence;
   const uint64_t earliestSequence = (writeSequence > kAudioRingBufferBytes) ? (writeSequence - kAudioRingBufferBytes) : 0;
@@ -843,14 +940,18 @@ bool copyRecentAudioClip(uint32_t durationMs, uint8_t *dst, size_t capacity, siz
     startSequence = earliestSequence;
   }
   outBytes = static_cast<size_t>(writeSequence - startSequence);
-  const size_t readIndex = static_cast<size_t>(startSequence % kAudioRingBufferBytes);
-  const size_t firstCopy = min(outBytes, kAudioRingBufferBytes - readIndex);
+  readIndex = static_cast<size_t>(startSequence % kAudioRingBufferBytes);
+  firstCopy = min(outBytes, kAudioRingBufferBytes - readIndex);
+  portEXIT_CRITICAL(&sAudioMux);
+
+  if (outBytes == 0) {
+    return false;
+  }
   memcpy(dst, sAudioRing + readIndex, firstCopy);
   if (firstCopy < outBytes) {
     memcpy(dst + firstCopy, sAudioRing, outBytes - firstCopy);
   }
-  portEXIT_CRITICAL(&sAudioMux);
-  return outBytes > 0;
+  return true;
 }
 
 bool beginSpeakerStream() {
