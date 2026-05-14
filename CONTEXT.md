@@ -1,7 +1,7 @@
 # Adam Chip — Agent Handoff Context
 
 > Этот файл — полный снимок состояния проекта для передачи контекста новому агенту.
-> Дата последнего обновления: 2026-05-07
+> Дата последнего обновления: 2026-05-14
 
 ---
 
@@ -47,12 +47,12 @@
 | **TTS** | Silero v5_5_ru | голос `eugene` | http://127.0.0.1:8082 |
 | **Orchestrator** | FastAPI + asyncio | — | http://127.0.0.1:8080 |
 
-**Whisper wake word:** `адам` (обязателен в exhibition mode)  
-**LLM параметры:** temperature=0.7, max_tokens=80, num_ctx=8192  
+**Wake word ASR:** `адам` (обязателен в exhibition mode)  
+**LLM параметры:** temperature=0.7, max_tokens=40, num_ctx=8192  
 **TTS output:** ALSA device `plughw:1,3`  
-**Audio input:** ALSA `hw:1,0`
-
-> NVIDIA Riva ASR — legacy адаптер (`Speech/ASR.py`), не активен по умолчанию (port 50051).
+**Audio input:** PulseAudio (`pulse`)  
+**VAD:** WebRTC VAD (CPU, stateless, агрессивность 2) в VoiceLoopController  
+**Wake word:** OpenWakeWord — ONNX-модель `adam.onnx`, порог 0.35, debounce 3 детекции
 
 ---
 
@@ -85,35 +85,69 @@ PYTHONPATH=System ADAM_MODE=maintenance ./.venv/bin/python System/Orchestrator.p
 | `sound.py` | Локальный cue playback (ffplay/paplay) |
 | `ui.py` | Web UI: agent_page, dash_page, debug_page |
 | `system.py` | Systemd service control, docker health |
+| `webrtc_vad.py` | WebRtcVadWrapper: CPU VAD для эндпоинтирования (10/20/30ms фреймы, агрессивность 0–3) |
+| `wake_word.py` | OpenWakeWord интеграция: ONNX-модель `adam.onnx`, debounce, wake silence timeout |
 
 ### Speech Services (System/Speech/)
 
-- `ASR_WhisperX.py` — WhisperX ASR HTTP сервис (CUDA, основной, запускается в Docker)
-- `ASR.py` — NVIDIA Riva adapter (legacy, не активен)
-- `TTS.py` — Silero v5_5_ru HTTP сервис
+- `ASR_WhisperX.py` — WhisperX ASR сервис (CUDA, Docker, порт 8095)
+- `ASR.py` — NVIDIA Riva adapter (legacy, резерв)
+- `TTS.py` — Silero v5_5_ru HTTP сервис (порт 8082)
 
 ---
 
 ## Config.json (System/Config.json)
 
-Актуальные значения на 2026-05-07:
+Актуальные значения на 2026-05-14:
 
 ```json
 {
   "agent": { "mode": "maintenance", "history_turns": 2 },
   "power": { "required_mode_id": 0, "enforce_in_exhibition": true },
   "media": {
-    "video": { "primary": "jetson_gstreamer" },
-    "audio": { "input_device": "hw:1,0", "vad_threshold": 650 },
-    "scene_interval_sec": 8
+    "video": { "primary": "jetson_gstreamer", "video_device": "/dev/video0" },
+    "audio": { "input_device": "pulse", "vad_threshold": 400, "webrtc_vad_aggressiveness": 2 },
+    "scene_interval_sec": 4,
+    "scene_stale_after_sec": 8
   },
   "services": {
-    "llm": { "model": "gemma-4-E4B-it-UD-Q4_K_XL", "base_url": "http://127.0.0.1:8081/v1", "max_tokens": 80 },
-    "asr": { "provider": "whisperx", "base_url": "http://127.0.0.1:8095", "model": "medium", "wake_words": "адам" },
-    "tts": { "speaker": "eugene", "output_device": "plughw:1,3" }
+    "llm": {
+      "provider": "openai",
+      "base_url": "http://127.0.0.1:8081/v1",
+      "model": "gemma-4-E4B-it-UD-Q4_K_XL",
+      "max_tokens": 40,
+      "temperature": 0.7,
+      "num_ctx": 8192
+    },
+    "asr": {
+      "provider": "whisperx",
+      "base_url": "http://127.0.0.1:8095",
+      "model": "medium",
+      "language": "ru",
+      "command_endpointing_ms": 3000,
+      "reply_window_sec": 4.0,
+      "reply_absolute_deadline_sec": 12.0
+    },
+    "wake_word": {
+      "provider": "openwakeword",
+      "model_path": "data/wake_word/adam.onnx",
+      "wake_word_required": true,
+      "threshold": 0.35,
+      "debounce_hits": 3,
+      "wake_silence_timeout_sec": 6.0
+    },
+    "tts": { "speaker": "eugene", "output_device": "plughw:1,3", "sample_rate": 48000 }
   },
-  "mcu": { "base_url": "http://192.168.0.171" },
-  "safety": { "half_duplex_mute": true, "motor_max_duration_ms": 2500 }
+  "mcu": {
+    "base_url": "http://192.168.0.171",
+    "speaker_url": "http://192.168.0.171:81/speaker"
+  },
+  "safety": {
+    "motor_default_duration_ms": 900,
+    "motor_max_duration_ms": 2500,
+    "motor_cooldown_ms": 250,
+    "half_duplex_mute": true
+  }
 }
 ```
 
@@ -164,10 +198,12 @@ Allowed scenes: `boot_idle`, `all_on`, `alternating`
 
 ## Эпизодическая память
 
-- **SQLite БД:** `data/adam/memory.sqlite3`
-- **Events stream:** `data/adam/events.jsonl`
-- **Notes/Summaries:** `data/adam/notes/`, `data/adam/summaries/`
-- **Консолидация:** `Engineering/consolidator.py` + `deploy/systemd/adam-consolidator.timer` (daily)
+- **Диалоговая БД:** `data/adam/memory.sqlite3` — таблицы `dialogue_turns`, `notes`
+- **Эпизоды:** `data/adam/memory/episodes/*.jsonl` — JSONL-файлы по дате; salience scoring при записи
+- **Семантика:** `data/adam/memory/semantic.md` — кюрированные наблюдения (4 фиксированных раздела)
+- **Events stream:** `data/adam/events.jsonl` — структурированный лог событий (ring buffer 500)
+- **Метрики:** `data/adam/inference_metrics.jsonl` — latency per turn (asr_ms, llm_ms, tts_ms)
+- **Консолидация:** `Engineering/consolidator.py` + `deploy/systemd/adam-consolidator.timer` (ежедневно)
 
 ---
 
@@ -176,7 +212,7 @@ Allowed scenes: `boot_idle`, `all_on`, `alternating`
 ```
 adam-llm.service            llama.cpp inference (NVIDIA CUDA)
 adam-tts-silero.service     Silero TTS HTTP
-adam-asr-whisperx.service   WhisperX ASR (Docker, CUDA)
+adam-asr-whisperx.service   WhisperX ASR (CUDA, Docker)
 adam-orchestrator.service   FastAPI orchestrator (type=notify)
 adam-exhibition.target      Exhibition target (wants orch + tts)
 adam-consolidator.service   Memory consolidation
@@ -211,7 +247,7 @@ ADAM_DATA_DIR=data/adam                 # data directory (memory, events, metric
 
 # MCU / ESP32
 ESP_BASE_URL=http://192.168.0.171
-ESP_SPEAKER_URL=http://192.168.0.171:83/speaker
+ESP_SPEAKER_URL=http://192.168.0.171:81/speaker
 
 # LLM (llama.cpp OpenAI-compat)
 ADAM_LLM_PROVIDER=openai
@@ -221,8 +257,9 @@ ADAM_LLM_MODEL=gemma-4-E4B-it-UD-Q4_K_XL
 # TTS (Silero HTTP)
 ADAM_TTS_BASE_URL=http://127.0.0.1:8082
 
-# ASR (WhisperX Docker container — HTTP)
-ADAM_ASR_PORT=8095                      # whisperx service port (default)
+# ASR (WhisperX)
+ADAM_ASR_PORT=8095
+ADAM_ASR_HOST=127.0.0.1
 
 # VLM (VILA via nano_llm Docker)
 ADAM_VLM_BASE_URL=http://127.0.0.1:8084
@@ -238,16 +275,16 @@ ADAM_SUCCESS_SOUND=data/sounds/success.wav
 ADAM_SOUNDS_ENABLED=1
 ```
 
-### ASR WhisperX service (deploy/docker/Dockerfile.asr-whisperx)
+### ASR WhisperX service (System/Speech/ASR_WhisperX.py)
 
 ```bash
-ADAM_ASR_WHISPERX_MODEL=medium          # whisperx model size
+ADAM_ASR_PORT=8095
+ADAM_ASR_WHISPERX_MODEL=medium          # tiny|base|small|medium|large
 ADAM_ASR_LANGUAGE=ru
-ADAM_ASR_DEVICE=cuda                    # CUDA on Jetson
-ADAM_ASR_COMPUTE_TYPE=float16
+ADAM_ASR_DEVICE=cuda                    # cuda|cpu|auto
+ADAM_ASR_COMPUTE_TYPE=float16           # float32|float16|int8|auto
 ADAM_ASR_SAMPLE_RATE=16000
 ADAM_ASR_HOST=0.0.0.0
-ADAM_ASR_PORT=8095
 ADAM_MODELS_DIR=Subsystem/Models
 HF_HOME=/hf_cache
 ```
@@ -307,22 +344,22 @@ curl -fsS http://192.168.0.171/api/status | python3 -m json.tool
 - ❌ pip install torch с dependency resolver (только Jetson wheel)
 - ❌ коммитить `PrivateConfig.h`, `.env`
 - ❌ exhibition mode без power gate
-- ❌ менять LLM на Ollama без обновления `base_url` в Config.json
-
 После установки NVIDIA PyTorch (Jetson wheel):
 ```bash
 ./.venv/bin/python -m pip install --no-deps "silero>=0.5.0"
+./.venv/bin/python -m pip install --no-deps "whisperx"
 ```
+(ctranslate2 для aarch64+CUDA — сборка из исходников: `scripts/adam_asr_cuda_check.sh`)
 
 ---
 
 ## Последние значимые изменения
 
-- LLM мигрирован с Ollama (`gemma3:4b`) на llama.cpp (`gemma-4-E4B-it-UD-Q4_K_XL`, порт 8051)
-- ASR переведён с faster-whisper/speaches на WhisperX CUDA Docker (`Speech/ASR_WhisperX.py`, порт 8095, модель medium)
-- ESP32 IP изменён: `192.168.0.171` → `192.168.0.171`
-- Добавлены модули: `echoes_gate.py`, `tuning.py`, `metrics.py`, `episodic.py`, `api_runtime.py`
-- Добавлена эпизодическая память с SQLite + ежедневной консолидацией
-- Оператор Web UI (`/`, `/dash`, `/debug`) реализован в `adam/ui.py`
-- Добавлен Whisper wake word `адам` как обязательное условие в exhibition mode
-- Audio input device: `hw:0,0` → `hw:1,0`
+- ASR мигрирован на WhisperX (CUDA, Docker) — порт 8095, модель medium, WebRTC VAD (CPU, stateless) вместо Silero VAD/RMS threshold; OpenWakeWord (ONNX) как детектор wake word
+- fix(speaker): устранены ошибки воспроизведения (silent drop, tail cut, ring full, WAV validation)
+- fix(pca9685+audio): исправлен PWM output, добавлены NVS persistence и stereo mic на ESP32
+- fix(prompt): VLM-описание сцены оформлено как собственное зрение Адама; сенсоры — как воплощённое состояние
+- Audio input: `hw:1,0` → `pulse` (PulseAudio); VAD threshold 650 → 400
+- LLM: provider=openai (llama.cpp OpenAI-compat API), порт 8081, max_tokens 80 → 40
+- scene_interval_sec: 8 → 4; mcu.speaker_url добавлен (порт 81)
+- Добавлен скрипт `adam_asr_cuda_check.sh` для диагностики CUDA/WhisperX

@@ -1,17 +1,15 @@
 # Adam-Chip
 
-github.com/7teenzzz/Adam-Chip
-
 Adam Chip — художественно-исследовательская агентная система для локальной edge-среды. Цель проекта — создать выставочного ИИ-агента, который взаимодействует со зрителями от лица персонажа инсталляции, воспринимает пространство, говорит голосом и управляет моторным слоем.
 
 Проект реализуется на базе:
 
 - **NVIDIA Jetson Orin NX Super 16 GB**
-  - ARMv8 × 8 cores, NVIDIA Tegra Orin GPU
+  - ARMv8 × 8 cores, NVIDIA Tegra Orin GPU with ARM architecture
   - Ubuntu 22.04.5 LTS / JetPack
 - **ESP32-S3 N16R8 WROOM CAM** — периферийный контроллер моторики и сенсоров
   - 16×12bit PWM: PCA9685
-  - Camera & Mic: OV5640 + INMP441
+  - Camera & Mic: OV5640 + 2x INMP441
   - Audio out: PCM5102A + PAM8403
   - ETH-SPI: W5500 LITE
   - Sensors: TEMT6000 (light), BTE16-19 (rip)
@@ -19,15 +17,16 @@ Adam Chip — художественно-исследовательская аг
 ## Архитектура
 
 ```
-Jetson (inference node)          ESP32-S3 (peripheral node)
-  FastAPI orchestrator      ←→     192.168.0.171
-  llama.cpp LLM                    PCA9685 PWM (motors)
-  VILA VLM (scene)                 INMP441 mic uplink
-  Whisper ASR (ru-RU)              PCM5102A speaker
-  Silero TTS (eugene)              WebSocket telemetry push
-  GStreamer video                  HTTP API (/api/*)
-  ALSA audio                       MJPEG camera stream
-  Episodic memory (SQLite)
+Jetson (inference node)             ESP32-S3 (peripheral node)
+  FastAPI orchestrator      ←→        192.168.0.171
+  llama.cpp LLM                       PCA9685 PWM (motor layer)
+  VILA VLM (scene)                    INMP441 mic uplink
+  WhisperX ASR (ru-RU)                PCM5102A speaker  ← POST :81/speaker
+  WebRTC VAD (endpointing)            WebSocket telemetry push
+  Silero TTS (eugene)                 HTTP API (/api/*)
+  GStreamer video                     MJPEG camera stream
+  ALSA audio
+  Episodic memory (SQLite + JSONL)
   EchoGate (dialogue filtering)
   Hot-reloadable tuning
 ```
@@ -36,15 +35,11 @@ Jetson (inference node)          ESP32-S3 (peripheral node)
 
 | Компонент | Runtime | Модель | Порт |
 |-----------|---------|--------|------|
-| LLM | llama.cpp (OpenAI-compat) | gemma-4-E4B-it-UD-Q4_K_XL | 8051 |
-| VLM | VILA 1.5-3b | Efficient-Large-Model/VILA1.5-3b | 8050 |
-| ASR | Whisper HTTP | tiny, ru-RU, wake word «адам» | 8095 |
-| TTS | Silero v5_5_ru | голос eugene | 8090 |
+| LLM | llama.cpp (OpenAI-compat) | gemma-4-E4B-it-UD-Q4_K_XL | 8081 |
+| VLM | nano_llm (Docker) | VILA 1.5-3b | 8084 |
+| ASR | WhisperX (CUDA, Docker) | medium, ru-RU, wake word «адам» | 8095 |
+| TTS | Silero v5_5_ru | голос eugene | 8082 |
 | Orchestrator | FastAPI + asyncio | — | 8080 |
-
-## Ключевой Принцип Диалога
-
-LLM отвечает чистым русским текстом, пригодным для прямой озвучки. Никакого JSON в LLM-ответе — action layer работает отдельно.
 
 ## Структура
 
@@ -71,9 +66,9 @@ System/
     ui.py                  Web UI backend (agent / dash / debug pages)
     system.py              Systemd service control
   Speech/
-    ASR_WhisperX.py        WhisperX ASR HTTP сервис (CUDA, Docker)
-    ASR.py                 NVIDIA Riva adapter (резерв)
-    TTS.py                 Silero TTS HTTP сервис
+    ASR_WhisperX.py        WhisperX ASR сервис (CUDA, Docker, порт 8095)
+    ASR.py                 NVIDIA Riva adapter (legacy, резерв)
+    TTS.py                 Silero TTS HTTP сервис (порт 8082)
   Interlayers/             Legacy модули
   HostUI/ + WebUI/         Операторский web-интерфейс
 data/
@@ -131,7 +126,7 @@ Optional сервисы:
 
 ```bash
 docker compose --profile speech-local up --build adam-tts-silero
-docker compose --profile speech-local up --build adam-asr-whisper
+docker compose --profile speech-local up --build adam-asr-whisperx
 ```
 
 ## Production Boot
@@ -143,7 +138,7 @@ docker compose --profile speech-local up --build adam-asr-whisper
 
 sudo systemctl start adam-llm.service
 sudo systemctl start adam-tts-silero.service
-docker compose up -d adam-asr-whisperx
+sudo systemctl start adam-asr-whisperx.service
 sudo systemctl start adam-orchestrator.service
 
 ./scripts/adam_service_status.sh
@@ -163,6 +158,7 @@ sudo systemctl start adam-orchestrator.service
 ./scripts/adam_service_logs.sh adam-orchestrator.service
 ./scripts/adam_service_logs.sh adam-llm.service
 ./scripts/adam_service_logs.sh adam-tts-silero.service
+./scripts/adam_service_logs.sh adam-asr-whisperx.service
 ```
 
 ## Диагностика
@@ -171,6 +167,7 @@ sudo systemctl start adam-orchestrator.service
 ./scripts/adam_healthcheck.sh
 ./scripts/adam_media_probe.sh       # камеры и аудиоустройства
 ./scripts/adam_torch_doctor.sh      # Jetson PyTorch/Silero
+./scripts/adam_asr_cuda_check.sh    # CUDA/WhisperX диагностика
 ./scripts/adam_tts_doctor.sh
 ./scripts/adam_tts_smoke.sh         # smoke test озвучки
 ./scripts/adam_service_status.sh
