@@ -11,18 +11,15 @@ services:
       ADAM_MODE: ${ADAM_MODE:-maintenance}
       ADAM_DATA_DIR: /data/adam
       ESP_BASE_URL: ${ESP_BASE_URL:-http://192.168.0.171}
-      ADAM_LLM_PROVIDER: ${ADAM_LLM_PROVIDER:-ollama}
-      ADAM_LLM_BASE_URL: ${ADAM_LLM_BASE_URL:-http://127.0.0.1:11434}
-      ADAM_LLM_MODEL: ${ADAM_LLM_MODEL:-gemma3:4b}
+      ADAM_LLM_PROVIDER: ${ADAM_LLM_PROVIDER:-openai}
+      ADAM_LLM_BASE_URL: ${ADAM_LLM_BASE_URL:-http://127.0.0.1:8081/v1}
+      ADAM_LLM_MODEL: ${ADAM_LLM_MODEL:-gemma-4-E4B-it-UD-Q4_K_XL}
       ADAM_TTS_BASE_URL: ${ADAM_TTS_BASE_URL:-http://127.0.0.1:8082}
-      ADAM_ASR_HOST: ${ADAM_ASR_HOST:-127.0.0.1}
-      ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8083}
       ADAM_VLM_BASE_URL: ${ADAM_VLM_BASE_URL:-http://127.0.0.1:8084}
       ADAM_VLM_MODEL: ${ADAM_VLM_MODEL:-Efficient-Large-Model/VILA1.5-3b}
       ADAM_ORCHESTRATOR_PORT: ${ADAM_ORCHESTRATOR_PORT:-8080}
       ADAM_VIDEO_DEVICE: ${ADAM_VIDEO_DEVICE:-/dev/video0}
-      ADAM_AUDIO_INPUT_DEVICE: ${ADAM_AUDIO_INPUT_DEVICE:-hw:1,0}
-      ADAM_ASR_WHISPER_BASE_URL: ${ADAM_ASR_WHISPER_BASE_URL:-http://127.0.0.1:8083}
+      ADAM_AUDIO_INPUT_DEVICE: ${ADAM_AUDIO_INPUT_DEVICE:-pulse}
       ADAM_AUDIO_OUTPUT_DEVICE: ${ADAM_AUDIO_OUTPUT_DEVICE:-default}
     volumes:
       - ./data:/data
@@ -47,24 +44,42 @@ services:
       - ./data:/data
       - ./models:/root/.cache
 
-  adam-asr-whisper:
+  adam-asr-whisperx:
+    # WhisperX ASR service — CUDA 12.8 on Jetson Orin (l4t-pytorch base).
+    # Build once: docker compose build adam-asr-whisperx  (~15-30 min, internet required)
+    # Run:        docker compose up -d adam-asr-whisperx
+    # Health:     curl http://127.0.0.1:8095/health
     build:
       context: .
-      dockerfile: System/Dockerfile
-    container_name: adam-asr-whisper
-    profiles:
-      - speech-local
+      dockerfile: System/Dockerfile.asr
+    container_name: adam-asr-whisperx
     network_mode: host
     restart: unless-stopped
+    runtime: nvidia
     environment:
-      ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8083}
-      ADAM_ASR_WHISPER_MODEL: ${ADAM_ASR_WHISPER_MODEL:-medium}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8095}
+      ADAM_ASR_WHISPERX_MODEL: ${ADAM_ASR_WHISPERX_MODEL:-medium}
       ADAM_ASR_LANGUAGE: ${ADAM_ASR_LANGUAGE:-ru}
-      ADAM_ASR_DEVICE: ${ADAM_ASR_DEVICE:-auto}
-    command: ["python", "-m", "Speech.ASR_Whisper"]
+      ADAM_ASR_DEVICE: cuda
+      ADAM_ASR_COMPUTE_TYPE: float16
+      ADAM_ASR_SAMPLE_RATE: "16000"
+      ADAM_MODELS_DIR: /models
+      HF_HOME: /hf_cache
+      HF_HUB_CACHE: /hf_cache/hub
     volumes:
-      - ./data:/data
-      - ./models:/root/.cache
+      - ./Subsystem/Models:/models:ro
+      - ./data/hf_cache:/hf_cache
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: >
+        python3 -c "import urllib.request,json;
+        d=json.load(urllib.request.urlopen('http://127.0.0.1:8095/health'));
+        exit(0 if d.get('device')=='cuda' else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   adam-llm:
     # Optional Docker alternative to the native systemd adam-llm.service.
@@ -86,30 +101,6 @@ services:
       LLAMA_ARG_PARALLEL: "1"
     volumes:
       - ./Subsystem/Models/gguf:/models:ro
-
-  adam-asr-speaches:
-    # faster-whisper + CUDA ASR via speaches (OpenAI-compatible API on :8000).
-    # Activate: docker compose --profile asr-speaches up adam-asr-speaches
-    image: dustynv/speaches:r36.4.0-cu128-24.04
-    container_name: adam-asr-speaches
-    profiles:
-      - asr-speaches
-    network_mode: host
-    restart: unless-stopped
-    runtime: nvidia
-    working_dir: /opt/speaches
-    environment:
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      PORT: "8083"
-      WHISPER__INFERENCE_DEVICE: cuda
-      WHISPER__COMPUTE_TYPE: float16
-      WHISPER__TTL: "-1"
-      WHISPER__VAD_FILTER: "false"
-      HF_HOME: /hf_cache
-      HF_HUB_CACHE: /hf_cache/hub
-    volumes:
-      - ./Subsystem/Models/hf:/hf_cache
-      - /etc/localtime:/etc/localtime:ro
 
   # Run NVIDIA Riva and nano_llm/VILA with their official Jetson setup flows,
   # then point ADAM_LLM_BASE_URL / Riva host / VLM URL at those services.

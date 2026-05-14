@@ -43,6 +43,9 @@ from adam.sound import play_local_sound
 from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
 from adam.tuning import TuningStore, get_store as _get_tuning_store
 from adam.ui import agent_page, dash_page, debug_page
+from adam.wake_word import create_engine as _create_wake_engine
+from adam.webrtc_vad import WebRtcVadWrapper
+
 
 
 settings = Settings.load()
@@ -210,12 +213,20 @@ class VoiceLoopController:
         self.channels = int(audio_config.get("channels", 1))
         self.frame_ms = int(audio_config.get("frame_ms", 20))
         self.vad_threshold = int(audio_config.get("vad_threshold", 650))
+        self._webrtc_vad = WebRtcVadWrapper(
+            aggressiveness=int(audio_config.get("webrtc_vad_aggressiveness", 2))
+        )
         self.normalize_factor = float(audio_config.get("normalize_factor", 8000))
         self.min_speech_ms = int(audio_config.get("min_speech_ms", 280))
-        self.endpointing_ms = int(settings.section("services").get("asr", {}).get("endpointing_ms", 450))
-        self.max_segment_ms = int(audio_config.get("max_segment_ms", 9000))
         self.asr_client = asr_client
         asr_cfg = settings.section("services").get("asr", {})
+        self._command_endpointing_ms = int(asr_cfg.get("command_endpointing_ms", 2500))
+        self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
+        self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
+        self._reply_absolute_deadline_sec: float = float(asr_cfg.get("reply_absolute_deadline_sec", 12.0))
+        self._reply_noise_gate: int = int(asr_cfg.get("reply_noise_gate", 0))
+        self._voice_state: str       = "standby"   # standby | listening | reply
+        self._reply_start: float     = 0.0
         self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
         wake_words = asr_cfg.get("wake_words", []) or []
         # Config may store wake_words as a comma-separated string (e.g. "адам") or a list.
@@ -226,7 +237,6 @@ class VoiceLoopController:
             re.compile(r"\b(?:" + "|".join(re.escape(w) for w in self.wake_words) + r")\b[\s,.:;!?\-]*", re.IGNORECASE)
             if self.wake_words else None
         )
-        self.barge_in_enabled = bool(asr_cfg.get("barge_in_enabled", False))
         self._task: asyncio.Task[None] | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self.running = False
@@ -236,9 +246,35 @@ class VoiceLoopController:
         self.last_asr_error = ""
         self.muted_by_tts = False
         self.last_wake_skip = ""
-        self._reply_window_active = False
-        self._reply_window_latched = False   # latched when speech starts inside the window
-        self._reply_window_task: asyncio.Task | None = None
+        # Local wake word engine (openWakeWord, CPU) — None → no wake word detection
+        ww_cfg = settings.section("wake_word") or {}
+        self._wake_engine = _create_wake_engine(ww_cfg)
+        if self._wake_engine is None and ww_cfg.get("engine", "none") != "none":
+            # Model file missing or engine init failed — log a visible warning so operator
+            # knows the system is deaf in exhibition mode (wake_word_required=true).
+            import logging as _logging
+            _logging.getLogger("adam.voice").warning(
+                "wake_word engine '%s' returned None — model file missing or init failed. "
+                "System will not respond to voice in exhibition mode.",
+                ww_cfg.get("engine", "?"),
+            )
+            event_log.append("wake_engine_missing", {
+                "engine": ww_cfg.get("engine"),
+                "model_path": ww_cfg.get("model_path"),
+                "wake_word_required": self.wake_word_required,
+            })
+        # 4 × 20ms frames = 80ms chunks for openWakeWord
+        self._ww_buf: list[bytes] = []
+        self._ww_frames_needed = 4
+        self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
+        self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
+        self._wake_detected_at: float = 0.0
+        self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
+
+    @property
+    def device_in_use(self) -> bool:
+        """True while the audio device is held — either running or in the process of stopping."""
+        return self.running or (self._task is not None and not self._task.done())
 
     def status(self) -> dict[str, Any]:
         return {
@@ -255,19 +291,36 @@ class VoiceLoopController:
             "wake_word_required": self.wake_word_required,
             "wake_words": self.wake_words,
             "last_wake_skip": self.last_wake_skip,
-            "reply_window_active": self._reply_window_active,
+            "voice_state": self._voice_state,
         }
+
+    def _set_voice_state(self, state: str, reason: str = "") -> None:
+        if state != self._voice_state:
+            event_log.append("voice_state_change", {
+                "from": self._voice_state, "to": state, "reason": reason,
+            })
+        self._voice_state = state
 
     async def start(self) -> dict[str, Any]:
         if self._task and not self._task.done():
             return {"ok": True, **self.status()}
         self.running = True
         self.last_asr_error = ""
+        self._standby_entry_time = time.perf_counter()  # arm OWW guard for first 0.5s after start
         self._task = asyncio.create_task(self._run(), name="adam_voice_loop")
         await asyncio.sleep(0.2)
         if self._task.done():
             self.running = False
             return {"ok": False, **self.status()}
+        if self._wake_engine is not None:
+            event_log.append("oww_ready", {
+                "model_name": getattr(self._wake_engine, "_model_name", None),
+                "threshold": getattr(self._wake_engine, "_threshold", None),
+                "debounce_hits": getattr(self._wake_engine, "_debounce_hits", None),
+                "vad_threshold": getattr(
+                    getattr(self._wake_engine, "_oww", None), "vad_threshold", None
+                ),
+            })
         event_log.append("voice_loop_started", self.status())
         return {"ok": True, **self.status()}
 
@@ -279,40 +332,15 @@ class VoiceLoopController:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        self._voice_state = "standby"
+        self._standby_entry_time = 0.0   # disarm guard so a fresh start never blocks OWW
+        self._ww_buf.clear()
+        if self._wake_engine is not None:
+            self._wake_engine.close()
         self._stop_process()
         self.vad_state = "idle"
         event_log.append("voice_loop_stopped", self.status())
         return {"ok": True, **self.status()}
-
-    def open_reply_window(self, timeout_sec: float = 4.0) -> None:
-        """Open a post-reply listen window after Adam's TTS finishes.
-
-        Wake word is bypassed for speech that starts within `timeout_sec` seconds.
-        If no speech begins before the deadline, the voice loop is stopped.
-        A new turn cancels the current window and schedules a fresh one after its TTS.
-        """
-        if self._reply_window_task and not self._reply_window_task.done():
-            self._reply_window_task.cancel()
-        self._reply_window_task = asyncio.create_task(
-            self._reply_window_coro(timeout_sec), name="reply_window"
-        )
-
-    async def _reply_window_coro(self, timeout_sec: float) -> None:
-        self._reply_window_active = True
-        self._reply_window_latched = False
-        event_log.append("reply_window_open", {"timeout_sec": timeout_sec})
-        try:
-            await asyncio.sleep(timeout_sec)
-            if self.running and runtime_state.get("mode") == "exhibition":
-                event_log.append("reply_window_expired", {"action": "voice_loop_stopped"})
-                await self.stop()
-            else:
-                event_log.append("reply_window_expired", {"action": "voice_loop_kept"})
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self._reply_window_active = False
-            self._reply_window_latched = False
 
     async def _run(self) -> None:
         frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
@@ -320,16 +348,7 @@ class VoiceLoopController:
         speech_ms = 0
         silence_ms = 0
         level_tick = 0
-        _prev_muted = False
-        _post_tts_cooldown = float(
-            settings.section("services").get("asr", {}).get("post_tts_cooldown_sec", 0.5)
-        )
-        # If TTS finished recently (e.g. voice loop restarted mid-cooldown), restore cooldown.
-        _last_finished = float(runtime_state.get("last_tts_finished_at", 0.0))
-        _elapsed = time.perf_counter() - _last_finished if _last_finished > 0 else float("inf")
-        _unmute_at = _last_finished if _elapsed < _post_tts_cooldown else 0.0
-        if _unmute_at:
-            _prev_muted = True
+        _oww_score_tick = 0   # log oww score every ~1s for diagnostics
         try:
             self._process = self._start_arecord()
             stdout = self._process.stdout
@@ -338,62 +357,126 @@ class VoiceLoopController:
             while self.running:
                 chunk = await asyncio.to_thread(stdout.read, frame_bytes)
                 if not chunk:
-                    raise RuntimeError(f"arecord ended: {self._read_process_stderr()}")
-                muted = bool(runtime_state.get("speaking")) and bool(settings.section("safety").get("half_duplex_mute", True))
-                self.muted_by_tts = muted
-                if _prev_muted and not muted:
-                    _unmute_at = time.perf_counter()
-                _prev_muted = muted
-
-                # Emit audio level for UI equalizer every 5 frames (~100 ms).
-                _rms = audioop.rms(chunk, 2)
-                raw_level = 0 if muted else _rms
-                voiced = _rms >= self.vad_threshold
-                level_tick += 1
-                if level_tick >= 5:
-                    level_tick = 0
-                    norm = round(min(1.0, (raw_level / self.normalize_factor) ** 0.5), 3)
-                    event_log.append("audio_level", {"level": norm, "state": self.vad_state if not muted else "muted"})
-
-                if muted:
-                    if not self.barge_in_enabled:
-                        speech_frames.clear()
-                        speech_ms = 0
-                        silence_ms = 0
-                        self.vad_state = "muted"
-                        continue
-                    # Barge-in path: run VAD during TTS playback to detect wake word.
-                    if voiced:
-                        speech_frames.append(chunk)
-                        speech_ms += self.frame_ms
-                        silence_ms = 0
-                    elif speech_frames:
-                        speech_frames.append(chunk)
-                        silence_ms += self.frame_ms
-                    if speech_frames and silence_ms >= self.endpointing_ms:
-                        pcm = b"".join(speech_frames)
-                        enough = speech_ms >= self.min_speech_ms
-                        speech_frames.clear()
-                        speech_ms = 0
-                        silence_ms = 0
-                        if enough:
-                            asyncio.create_task(self._check_barge_in(pcm))
-                    self.vad_state = "muted"
-                    continue
-
-                if _unmute_at and (time.perf_counter() - _unmute_at) < _post_tts_cooldown:
+                    # arecord exited unexpectedly — restart rather than kill the loop.
+                    err = self._read_process_stderr()
+                    event_log.append("arecord_restart", {"reason": "empty_read", "stderr": err})
+                    self._stop_process()
+                    await asyncio.sleep(0.5)
+                    self._process = self._start_arecord()
+                    stdout = self._process.stdout
+                    if stdout is None:
+                        raise RuntimeError("arecord restart failed")
                     speech_frames.clear()
                     speech_ms = 0
                     silence_ms = 0
-                    self.vad_state = "silence"
+                    self._ww_buf.clear()
                     continue
 
-                level = raw_level
-                if voiced:
+                _rms = audioop.rms(chunk, 2)
+                voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
+                level_tick += 1
+                if level_tick >= 5:
+                    level_tick = 0
+                    norm = round(min(1.0, (_rms / self.normalize_factor) ** 0.5), 3)
+                    event_log.append("audio_level", {"level": norm, "state": self._voice_state})
+
+                # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
+                if self._voice_state == "standby":
+                    if self._wake_engine is not None:
+                        # Guard window after reply→standby: skip OWW for _STANDBY_GUARD_SEC
+                        # so any in-flight ALSA drain or room transients don't trigger a false wake.
+                        if time.perf_counter() - self._standby_entry_time < self._STANDBY_GUARD_SEC:
+                            self.vad_state = "standby_guard"
+                            continue
+                        self._ww_buf.append(chunk)
+                        if len(self._ww_buf) >= self._ww_frames_needed:
+                            pcm_80ms = b"".join(self._ww_buf)
+                            self._ww_buf.clear()
+                            triggered = self._wake_engine.process_chunk(pcm_80ms)
+                            score = getattr(self._wake_engine, "last_score", None)
+                            _oww_score_tick += 1
+                            if score is not None and score >= 0.05 and _oww_score_tick >= 4:
+                                _oww_score_tick = 0
+                                event_log.append("oww_score", {
+                                    "score": round(score, 3),
+                                    "hits": getattr(self._wake_engine, "_consecutive_hits", None),
+                                })
+                            if triggered:
+                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None})
+                                self._set_voice_state("listening", "wake_word")
+                                self._webrtc_vad.reset_states()
+                                self._wake_detected_at = time.perf_counter()
+                                speech_frames.clear()
+                                speech_ms = 0
+                                silence_ms = 0
+                    self.vad_state = "standby"
+                    continue
+
+                # ── REPLY: check window timeout ──────────────────────────────────
+                if self._voice_state == "reply":
+                    elapsed = time.perf_counter() - self._reply_start
+                    absolute_deadline = self._reply_window_sec + self._reply_absolute_deadline_sec
+                    no_speech_expired = elapsed >= self._reply_window_sec and speech_ms < self.min_speech_ms
+                    hard_cutoff = elapsed >= absolute_deadline
+                    if no_speech_expired or hard_cutoff:
+                        event_log.append("reply_window_expired", {
+                            "action": "standby",
+                            "elapsed_sec": round(elapsed, 1),
+                            "reason": "absolute_deadline" if hard_cutoff else "no_speech",
+                        })
+                        self._set_voice_state("standby", "reply_expired")
+                        self._standby_entry_time = time.perf_counter()
+                        speech_frames.clear()
+                        speech_ms = 0
+                        silence_ms = 0
+                        self._ww_buf.clear()
+                        continue
+
+                # ── LISTENING: 3s silence timeout after wake word ────────────────
+                # If the user triggered the wake word but said nothing within the
+                # timeout window, return to standby rather than waiting indefinitely.
+                if self._voice_state == "listening" and speech_ms == 0:
+                    elapsed = time.perf_counter() - self._wake_detected_at
+                    if elapsed >= self._wake_silence_timeout_sec:
+                        event_log.append("wake_silence_timeout", {
+                            "action": "standby",
+                            "elapsed_sec": round(elapsed, 1),
+                        })
+                        self._set_voice_state("standby", "wake_silence_timeout")
+                        self._standby_entry_time = time.perf_counter()
+                        self._ww_buf.clear()
+                        continue
+
+                # ── LISTENING + REPLY: accumulation + endpointing ────────────────
+                # LISTENING: ALL frames are accumulated unconditionally — voiced
+                # controls only speech_ms/silence_ms counters and vad_state display.
+                # This ensures no leading syllables are clipped if they start below
+                # the RMS threshold.
+                # WebRTC VAD drives speech_ms/silence_ms counters in LISTENING and REPLY.
+                # In REPLY, also apply an RMS noise gate to prevent low-level room noise
+                # from inflating speech_ms when WebRTC VAD fires on ambient sound.
+                if self._voice_state == "reply" and self._reply_noise_gate > 0:
+                    effective_voiced = voiced and _rms >= self._reply_noise_gate
+                else:
+                    effective_voiced = voiced
+
+                if self._voice_state == "listening":
+                    # Always accumulate in listening — VAD only drives counters.
+                    if effective_voiced:
+                        if not speech_frames:
+                            event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
+                        speech_ms += self.frame_ms
+                        silence_ms = 0
+                        self.vad_state = "speech"
+                    elif speech_frames:
+                        silence_ms += self.frame_ms
+                        self.vad_state = "endpointing"
+                    else:
+                        self.vad_state = "silence"
+                    speech_frames.append(chunk)
+                elif effective_voiced:
                     if not speech_frames:
-                        event_log.append("asr_partial", {"state": "speech_started", "level": level})
-                        if self._reply_window_active:
-                            self._reply_window_latched = True
+                        event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
                     speech_frames.append(chunk)
                     speech_ms += self.frame_ms
                     silence_ms = 0
@@ -405,14 +488,47 @@ class VoiceLoopController:
                 else:
                     self.vad_state = "silence"
 
-                if speech_frames and (silence_ms >= self.endpointing_ms or speech_ms >= self.max_segment_ms):
+                if speech_frames and (
+                    silence_ms >= self._command_endpointing_ms
+                    or speech_ms >= self.max_segment_ms
+                ):
                     pcm = b"".join(speech_frames)
                     enough_speech = speech_ms >= self.min_speech_ms
                     speech_frames.clear()
                     speech_ms = 0
                     silence_ms = 0
                     if enough_speech:
-                        await self._transcribe_and_dispatch(pcm)
+                        # Stop mic — processing + TTS runs with mic off
+                        self.muted_by_tts = True
+                        self._stop_process()
+                        event_log.append("mic_muted", {"reason": "asr_transcribing"})
+                        self.vad_state = "transcribing"
+
+                        spoke = await self._transcribe_and_dispatch(pcm)
+
+                        # TTS done → restart mic; enter reply window only if agent spoke
+                        self._process = self._start_arecord()
+                        event_log.append("mic_unmuted", {"reason": "transcription_complete"})
+                        stdout = self._process.stdout
+                        if stdout is None:
+                            raise RuntimeError("arecord restart failed")
+                        self.muted_by_tts = False
+                        speech_frames.clear()
+                        speech_ms = 0
+                        silence_ms = 0
+                        self._ww_buf.clear()
+                        if spoke:
+                            self._set_voice_state("reply", "agent_spoke")
+                            self._reply_start = time.perf_counter()
+                            event_log.append("asr_reply_window_open", {
+                                "timeout_sec": self._reply_window_sec
+                            })
+                        else:
+                            self._set_voice_state("standby", "no_reply")
+                            self._standby_entry_time = time.perf_counter()
+                            event_log.append("asr_no_reply_standby", {
+                                "reason": "no_spoken_response"
+                            })
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -424,31 +540,6 @@ class VoiceLoopController:
         finally:
             self._stop_process()
             self.running = False
-
-    async def _check_barge_in(self, pcm: bytes) -> None:
-        """ASR the buffered audio; if wake word found → interrupt TTS and dispatch turn."""
-        try:
-            transcript = (await self.asr_client.transcribe_pcm(pcm)).strip().lower()
-        except Exception as exc:
-            event_log.append("barge_in_asr_error", {"error": str(exc)})
-            return
-        if not transcript or self._wake_re is None:
-            return
-        if not self._wake_re.search(transcript):
-            return
-        # Self-echo guard: if every content word appears in Adam's last spoken text, it's echo.
-        last_tts = runtime_state.get("last_tts_text", "").lower()
-        if last_tts:
-            content_words = [w.lower() for w in transcript.split() if len(w) > 2]
-            if content_words and all(w in last_tts for w in content_words):
-                event_log.append("barge_in_echo_filtered", {"transcript": transcript})
-                return
-        # Wake word confirmed → interrupt TTS.
-        tts.interrupt_playback()
-        runtime_state["interrupt_tts"] = True
-        runtime_state["speaking"] = False
-        event_log.append("barge_in", {"transcript": transcript})
-        await _run_dialogue_turn(transcript, "barge_in")
 
     def _start_arecord(self) -> subprocess.Popen[bytes]:
         command = [
@@ -491,59 +582,50 @@ class VoiceLoopController:
             return str(exc)
         return stderr.decode("utf-8", errors="replace").strip() or "no stderr"
 
-    async def _transcribe_and_dispatch(self, pcm: bytes) -> None:
+    async def _transcribe_and_dispatch(self, pcm: bytes) -> bool:
         self.vad_state = "transcribing"
+        pcm_ms = round(len(pcm) / max(1, self.sample_rate * 2) * 1000)
+        event_log.append("asr_request", {
+            "pcm_ms": pcm_ms,
+            "provider": self.asr_client.__class__.__name__,
+        })
         t_asr = time.perf_counter()
         try:
             transcript = (await self.asr_client.transcribe_pcm(pcm)).strip()
         except Exception as exc:
             self.last_asr_error = str(exc)
             event_log.append("voice_loop_error", {"stage": "asr", "error": str(exc)})
-            return
+            return False
         asr_ms = round((time.perf_counter() - t_asr) * 1000, 1)
         runtime_state["last_asr_ms"] = asr_ms
+        event_log.append("asr_result", {
+            "asr_ms": asr_ms,
+            "empty": not transcript,
+            "raw": transcript[:120] if transcript else "",
+        })
         if not transcript:
-            return
-
-        # Self-echo filter: skip transcript if it overlaps with recent TTS output.
-        _echo_window = 15.0
-        _now = time.perf_counter()
-        _content_words = [w.lower() for w in transcript.split() if len(w) > 2]
-        if _content_words:
-            for _entry in runtime_state.get("recent_tts_history", []):
-                if _now - _entry["finished_at"] > _echo_window:
-                    continue
-                _tts_text = _entry["text"]
-                _matches = sum(1 for w in _content_words if w in _tts_text)
-                if _matches / len(_content_words) >= 0.5:
-                    event_log.append("asr_echo_skip", {
-                        "transcript": transcript,
-                        "matched": _tts_text[:80],
-                        "overlap": round(_matches / len(_content_words), 2),
-                    })
-                    return
+            return False
 
         self.last_transcript = transcript
         self.last_transcript_at = utc_now()
         self.last_asr_error = ""
 
-        in_reply_window = self._reply_window_latched
-        self._reply_window_latched = False
+        # Strip wake word prefix (e.g. "адам, как дела?" → "как дела?")
+        cleaned = self._wake_re.sub("", transcript).strip() if self._wake_re else transcript
+        if not cleaned:
+            event_log.append("asr_wake_only", {"raw": transcript, "reason": "only_wake_word"})
+            return False
 
-        cleaned = transcript
-        if self.wake_word_required and not in_reply_window and self._wake_re is not None:
-            match = self._wake_re.search(transcript)
-            if not match:
-                self.last_wake_skip = transcript
-                event_log.append(
-                    "asr_wake_skip",
-                    {"text": transcript, "reason": "no_wake_word", "asr_ms": asr_ms},
-                )
-                return
-            cleaned = transcript
-
-        event_log.append("asr_final", {"text": cleaned, "raw": transcript, "source": "voice_loop", "asr_ms": asr_ms})
-        await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms)
+        event_log.append("asr_final", {
+            "text": cleaned, "raw": transcript, "source": "voice_loop", "asr_ms": asr_ms
+        })
+        try:
+            await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms)
+        except Exception as exc:
+            self.last_asr_error = str(exc)
+            event_log.append("voice_loop_error", {"stage": "dialogue_turn", "error": str(exc)})
+            return False
+        return True
 
 
 class SceneWorker:
@@ -604,7 +686,7 @@ class SceneWorker:
                 self._buf.push(summary)
                 updated = scene_cache.update(
                     summary,
-                    {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms},
+                    {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms, "last_error": ""},
                 )
                 self.last_error = ""
                 self._consecutive_errors = 0
@@ -719,7 +801,7 @@ async def _audio_level_monitor() -> None:
 
     while True:
         try:
-            if voice_loop.running:
+            if voice_loop.device_in_use:
                 await asyncio.sleep(0.3)
                 continue
 
@@ -730,7 +812,7 @@ async def _audio_level_monitor() -> None:
                 stderr=subprocess.DEVNULL,
             )
             try:
-                while not voice_loop.running:
+                while not voice_loop.device_in_use:
                     chunk = await asyncio.to_thread(proc.stdout.read, frame_bytes)  # type: ignore[union-attr]
                     if not chunk:
                         await asyncio.sleep(1.0)  # back off before retry when arecord exits early
@@ -751,6 +833,24 @@ async def _audio_level_monitor() -> None:
             await asyncio.sleep(2.0)
 
 
+async def _warmup_then_start_voice_loop() -> None:
+    """Boot sequence: play warmup monologue first, then activate the voice loop.
+
+    Keeps the mic physically off (arecord subprocess never started) during the
+    warmup monologue so OWW cannot fire on TTS audio or ALSA init noise.
+    """
+    event_log.append("voice_loop_boot_muted", {"reason": "warmup_in_progress"})
+    await _warmup_wakeup()
+    # Brief buffer after TTS finishes so ALSA drain noise decays before OWW starts.
+    await asyncio.sleep(0.5)
+    for _retry in range(5):
+        result = await voice_loop.start()
+        if result.get("ok"):
+            event_log.append("voice_loop_boot_ready", {"retry": _retry})
+            break
+        await asyncio.sleep(2.0)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     power = power_gate.check()
@@ -769,12 +869,8 @@ async def lifespan(_: FastAPI):
         _schedule_success_sound("startup_exhibition_gate_ok")
     else:
         asyncio.create_task(_startup_sound_when_ready(), name="startup_sound")
-    for _retry in range(5):
-        _vl_result = await voice_loop.start()
-        if _vl_result.get("ok"):
-            break
-        await asyncio.sleep(2.0)
-    asyncio.create_task(_warmup_wakeup(), name="warmup_wakeup")
+    asyncio.create_task(_warmup_then_start_voice_loop(), name="warmup_sequence")
+    asyncio.create_task(_warmup_asr(), name="warmup_asr")
     try:
         yield
     finally:
@@ -1258,16 +1354,15 @@ async def _run_dialogue_turn(transcript: str, source: str, asr_ms: float | None 
 
     async with turn_lock:
         runtime_state["thinking"] = True
+        event_log.append("llm_thinking_started", {})
         try:
             return await _run_dialogue_turn_locked(transcript, source, asr_ms)
         finally:
             runtime_state["thinking"] = False
+            event_log.append("llm_thinking_finished", {})
 
 
 async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float | None) -> dict[str, Any]:
-    if voice_loop._reply_window_task and not voice_loop._reply_window_task.done():
-        voice_loop._reply_window_task.cancel()
-
     t_total = time.perf_counter()
     tuning = tuning_store.current()
     sensors = await _sensor_payload()
@@ -1427,9 +1522,6 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     _hist.append({"text": reply.lower(), "finished_at": time.perf_counter()})
     if len(_hist) > 5:
         _hist.pop(0)
-    if voice_loop.running:
-        asr_cfg = settings.section("services").get("asr", {})
-        voice_loop.open_reply_window(float(asr_cfg.get("reply_window_sec", 4.0)))
     memory.add_dialogue("adam", reply)
     acc.note_turn("adam", reply)
     if echo_meta and not llm_error:
@@ -1519,7 +1611,7 @@ async def _stream_llm_and_speak(
     *,
     max_tokens: int | None = None,
     temperature: float | None = None,
-) -> tuple[str, float, float, dict[str, Any]]:
+) -> tuple[str, float, float, float, dict[str, Any]]:
     """Stream LLM tokens → sentence queue → TTS concurrently.
     Returns (reply, llm_ms, tts_ms, tts_result).
     """
@@ -1856,13 +1948,25 @@ async def _warmup_wakeup() -> None:
                 reply = await llm.generate(messages)
                 await _speak(reply)
             event_log.append("warmup_wakeup", {"reply": reply})
-            if voice_loop.running:
-                asr_cfg = settings.section("services").get("asr", {})
-                voice_loop.open_reply_window(float(asr_cfg.get("reply_window_sec", 4.0)))
         except Exception as exc:
             event_log.append("warmup_error", {"error": str(exc)})
         finally:
             runtime_state["thinking"] = False
+
+
+async def _warmup_asr() -> None:
+    """Fire one silent request to absorb WhisperX cold-start before any real user turn."""
+    try:
+        health = await asr.health()
+        event_log.append("asr_health_startup", health.as_dict())
+    except Exception as exc:
+        event_log.append("asr_health_startup", {"ok": False, "error": str(exc)})
+    silence = b"\x00" * 32000  # 1 s @ 16 kHz S16LE
+    try:
+        await asr.transcribe_pcm(silence)
+        event_log.append("warmup_asr", {"ok": True})
+    except Exception as exc:
+        event_log.append("warmup_asr", {"ok": False, "error": str(exc)})
 
 
 def _rebuild_clients(section_path: str) -> list[str]:
@@ -1888,6 +1992,12 @@ def _rebuild_clients(section_path: str) -> list[str]:
     if section_path.startswith("services.tts") or section_path == "services":
         tts = TTSClient(services.get("tts", {}))
         restarted.append("tts")
+    if section_path.startswith("wake_word"):
+        ww_cfg = settings.section("wake_word") or {}
+        voice_loop._wake_engine = _create_wake_engine(ww_cfg)
+        voice_loop._wake_silence_timeout_sec = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
+        voice_loop._ww_buf.clear()
+        restarted.append("voice_loop")
     if section_path.startswith("mcu"):
         mcu = MCUClient(settings.section("mcu"))
         action_layer = ActionLayer(settings.section("mcu"), settings.section("safety"))

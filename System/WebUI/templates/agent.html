@@ -51,5 +51,5 @@ async function listenStop(){await j('/api/agent/listen/stop',{method:'POST'}); r
 async function stopAgent(){await j('/api/agent/stop',{method:'POST'}); refresh()}
 async function testVoice(){await j('/api/agent/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'Проверка голоса Adam Chip.'})}); refresh()}
 async function turn(){const transcript=document.getElementById('text').value; await j('/api/agent/turn',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript})}); document.getElementById('text').value=''; refresh()}
-refresh(); setInterval(refresh,3000)
+refresh(); setInterval(refresh,3000);
 </script></body></html>

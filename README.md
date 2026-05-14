@@ -71,7 +71,7 @@ System/
     ui.py                  Web UI backend (agent / dash / debug pages)
     system.py              Systemd service control
   Speech/
-    ASR_Whisper.py         Whisper HTTP сервис (основной ASR)
+    ASR_WhisperX.py        WhisperX ASR HTTP сервис (CUDA, Docker)
     ASR.py                 NVIDIA Riva adapter (резерв)
     TTS.py                 Silero TTS HTTP сервис
   Interlayers/             Legacy модули
@@ -143,7 +143,7 @@ docker compose --profile speech-local up --build adam-asr-whisper
 
 sudo systemctl start adam-llm.service
 sudo systemctl start adam-tts-silero.service
-sudo systemctl start adam-asr-whisper.service
+docker compose up -d adam-asr-whisperx
 sudo systemctl start adam-orchestrator.service
 
 ./scripts/adam_service_status.sh

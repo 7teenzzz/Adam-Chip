@@ -59,7 +59,7 @@ stop_existing
 
 echo "Speech services:"
 probe_service adam-tts-silero.service
-probe_service adam-asr-whisper.service
+probe_service adam-asr-whisperx.service
 
 echo "Models dir: ${MODELS_DIR}"
 echo "Starting orchestrator (mode=${MODE}, port=${PORT})…"

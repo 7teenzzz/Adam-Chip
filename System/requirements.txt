@@ -1,10 +1,16 @@
 fastapi>=0.110
 uvicorn>=0.27
+httpx>=0.25
+pydantic>=2.0
+pyyaml>=6.0
 
-# Optional runtime packages for local TTS. Install on Jetson after CUDA/PyTorch
-# is confirmed for the active JetPack image.
-# silero>=0.5.0
-# torch
+# Wake word detection — openWakeWord (uses its own internal VAD)
+openwakeword>=0.6.0
+onnxruntime>=1.16.0
+numpy>=1.24.0
+
+# Voice activity detection — WebRTC VAD (CPU, no PyTorch)
+webrtcvad>=2.0.10
 
 # Optional Riva ASR client. Install only when Riva service is deployed.
 # nvidia-riva-client

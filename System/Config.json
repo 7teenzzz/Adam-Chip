@@ -37,9 +37,10 @@
       "sample_rate": 16000,
       "channels": 1,
       "frame_ms": 20,
-      "vad_threshold": 400,
-      "min_speech_ms": 404,
+      "webrtc_vad_aggressiveness": 3,
+      "min_speech_ms": 200,
       "max_segment_ms": 9000,
+      "max_command_segment_ms": 15000,
       "normalize_factor": 8000
     },
     "scene_worker_enabled": true,
@@ -50,9 +51,9 @@
   },
   "services": {
     "llm": {
-      "provider": "ollama",
+      "provider": "openai",
       "base_url": "http://127.0.0.1:8081/v1",
-      "model": "gemma3:4b",
+      "model": "gemma-4-E4B-it-UD-Q4_K_XL",
       "timeout_sec": 60,
       "temperature": 0.7,
       "max_tokens": 40,
@@ -66,19 +67,18 @@
       "prompt": "Briefly describe the scene in one sentence: people present, movement, notable objects."
     },
     "asr": {
-      "provider": "speaches",
-      "base_url": "http://127.0.0.1:8083",
-      "model": "Systran/faster-whisper-small",
+      "provider": "whisperx",
+      "base_url": "http://127.0.0.1:8095",
+      "model": "medium",
       "language": "ru",
-      "endpointing_ms": 200,
+      "command_endpointing_ms": 3000,
+      "reply_window_sec": 4.0,
+      "reply_absolute_deadline_sec": 12.0,
+      "reply_noise_gate": 1600,
       "sample_rate": 16000,
       "timeout_sec": 30,
-      "barge_in_enabled": false,
-      "post_tts_cooldown_sec": 2.0,
-      "wake_words": "адам,дохлый",
-      "wake_word_required": true,
-      "host": "127.0.0.1",
-      "port": 8083
+      "wake_words": "адам",
+      "wake_word_required": true
     },
     "tts": {
       "provider": "silero",
@@ -126,5 +126,13 @@
     "motor_max_duration_ms": 2500,
     "motor_cooldown_ms": 250,
     "half_duplex_mute": true
+  },
+  "wake_word": {
+    "engine": "openwakeword",
+    "model_path": "data/wake_word/adam.onnx",
+    "threshold": 0.35,
+    "debounce_hits": 3,
+    "vad_threshold": 0,
+    "wake_silence_timeout_sec": 6.0
   }
 }

@@ -11,7 +11,7 @@ COPY System/requirements.txt /app/System/requirements.txt
 RUN python -m pip install --no-cache-dir -r /app/System/requirements.txt
 
 COPY System /app/System
-COPY Agent\ Adam\ Chip /app/Agent Adam Chip
+COPY ["Agent Adam Chip", "/app/Agent Adam Chip/"]
 COPY README.md /app/README.md
 
 EXPOSE 8080
