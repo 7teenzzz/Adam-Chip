@@ -1,6 +1,7 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
 import { toast } from "../widgets/toast.js";
+import { createWakeMeter, createCalibrateButton } from "../widgets/wakeMeter.js";
 
 function el(tag, attrs, children = []) {
   const node = document.createElement(tag);
@@ -86,15 +87,12 @@ export function mount(target) {
   const cameraLabel = el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "камера");
   const sceneCaption = el("div", { style: "color:var(--muted); font-size:12px; white-space:pre-wrap; line-height:1.5" }, "Сцена не описана.");
 
-  // ---- Equalizer — driven by server-side audio_level SSE events ----
-  // Shows what Adam actually hears from the Jetson ALSA mic. No browser mic needed.
-  const eqCanvas = el("canvas", {
-    style: "width:100%; height:52px; border-radius:4px; display:block; background:var(--bg-2)",
-  });
-  const BAR_N = 28;
-  const eqPeaks = new Float32Array(BAR_N);
-  let eqServerLevel = 0;   // latest normalized level (0–1) from audio_level SSE event
-  let eqRafId = null;
+  // ---- Wake-word meter (read-only on chat panel) ----
+  // Shows what Adam hears: live audio_level bars + current OWW score (cyan
+  // line) + threshold marker (orange dashed). The slider/drag interaction
+  // lives on the Settings page; here we only visualise.
+  const wakeMeter = createWakeMeter({ draggable: false, height: 96 });
+  const eqCanvas = wakeMeter.canvas;
 
   const vuCanvas = el("canvas", {
     style: "width:44px; flex-shrink:0; height:52px; border-radius:4px; display:block; background:var(--bg-2)",
@@ -103,64 +101,6 @@ export function mount(target) {
   let vuLevelL = 0, vuLevelR = 0, vuLevelMono = 0;
   let vuPeakL = 0,  vuPeakR = 0,  vuPeakMono = 0;
   let vuRafId = null;
-
-  // Spectral shape: voice-like curve peaking around bar 6-10 (mid-low frequencies).
-  const EQ_SHAPE = Float32Array.from({ length: BAR_N }, (_, i) => {
-    const x = i / (BAR_N - 1);
-    const peak = Math.exp(-((x - 0.28) ** 2) / 0.06);        // main voice peak ~1kHz
-    const low  = Math.exp(-((x - 0.0)  ** 2) / 0.015) * 0.4; // sub-bass presence
-    return Math.max(0.06, Math.min(1.0, peak + low));
-  });
-
-  function drawEqualizer() {
-    const dpr = window.devicePixelRatio || 1;
-    const rect = eqCanvas.getBoundingClientRect();
-    if (rect.width > 0) {
-      const cw = Math.round(rect.width * dpr), ch = Math.round(rect.height * dpr);
-      if (eqCanvas.width !== cw || eqCanvas.height !== ch) {
-        eqCanvas.width = cw;
-        eqCanvas.height = ch;
-      }
-      const ctx = eqCanvas.getContext("2d");
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const w = rect.width, h = rect.height;
-      ctx.clearRect(0, 0, w, h);
-
-      const gap = 2;
-      const barW = (w - (BAR_N - 1) * gap) / BAR_N;
-      const t = Date.now() * 0.0015; // slow wobble clock
-
-      // Update peaks with spectral shaping + per-bar organic wobble.
-      const displayLevel = Math.min(1.0, eqServerLevel * 4.0); // boost idle signal for visibility
-      for (let i = 0; i < BAR_N; i++) {
-        const wobble = 1 + 0.12 * Math.sin(t + i * 0.85);
-        const target = displayLevel * EQ_SHAPE[i] * wobble;
-        eqPeaks[i] = Math.max(target, eqPeaks[i] * 0.87);
-      }
-
-      // Dim baseline — always rendered so canvas looks active.
-      ctx.fillStyle = "rgba(67,209,122,0.10)";
-      for (let i = 0; i < BAR_N; i++) {
-        ctx.fillRect(Math.round(i * (barW + gap)), h - 2, Math.max(1, Math.round(barW)), 2);
-      }
-
-      // Active bars.
-      for (let i = 0; i < BAR_N; i++) {
-        const v = eqPeaks[i];
-        if (v < 0.008) continue;
-        const bh = v * (h - 3);
-        ctx.fillStyle = `rgba(67,209,122,${0.35 + v * 0.65})`;
-        ctx.fillRect(
-          Math.round(i * (barW + gap)),
-          Math.round(h - 2 - bh),
-          Math.max(1, Math.round(barW)),
-          Math.max(1, Math.round(bh)),
-        );
-      }
-    }
-    eqRafId = requestAnimationFrame(drawEqualizer);
-  }
-  eqRafId = requestAnimationFrame(drawEqualizer);
 
   function drawVuMeter() {
     const dpr = window.devicePixelRatio || 1;
@@ -215,15 +155,25 @@ export function mount(target) {
     thinking:     "#22d3ee",       // cyan    — LLM generating
     tts:          "#60a5fa",       // blue    — Adam is speaking
   };
+  const HEARING_LABELS = {
+    loading:      "🎧 Инициализация",
+    standby:      "🎧 Ожидаю обращения",
+    listening:    "🎤 Слушаю",
+    reply:        "🎤 Слушаю",
+    transcribing: "⏳ Распознаю",
+    thinking:     "💭 Думаю",
+    tts:          "🔊 Говорю",
+  };
   let hearingState = "loading";
+  let dotsTick = 0;
+  const DOTS_PERIOD_MS = 400;
   const hearingDot = el("span", {
     style: `display:inline-block; width:8px; height:8px; border-radius:50%;
             background:${HEARING_COLORS.loading}; flex-shrink:0; transition:background 0.35s`,
   });
   const asrBox = el("div", {
     style: "min-height:28px; padding:6px 8px; border-radius:4px; background:var(--bg-2); font-size:12px; color:var(--muted); font-family:var(--font-mono); white-space:pre-wrap; word-break:break-word; line-height:1.4",
-  }, "OWW / ASR инициализация…");
-  let asrClearTimer = null;
+  }, HEARING_LABELS.loading);
 
   const countdownTrack = el("div", {
     style: "width:100%; height:3px; background:rgba(67,209,122,0.12); border-radius:2px; overflow:hidden; margin-top:2px",
@@ -234,20 +184,21 @@ export function mount(target) {
   countdownTrack.appendChild(countdownFill);
   let _cdTimer = null;
 
-  function standbyText() {
-    const vl = state.get("status")?.voice_loop;
-    if (!vl?.running) return "OWW / ASR инициализация…";
-    const words = vl.wake_words?.length ? vl.wake_words : null;
-    return words ? `ожидание «${words.join(" / ")}»` : "ожидание…";
+  function renderHearing() {
+    asrBox.textContent = (HEARING_LABELS[hearingState] || "—") + ".".repeat(dotsTick);
   }
+  function tickDots() {
+    dotsTick = (dotsTick + 1) % 4;   // 0,1,2,3 → "" "." ".." "..."
+    renderHearing();
+  }
+  const dotsTimer = setInterval(tickDots, DOTS_PERIOD_MS);
 
-  function updateHearing(newState, text) {
+  function updateHearing(newState) {
     hearingState = newState;
     hearingDot.style.background = HEARING_COLORS[newState] || "var(--muted)";
-    if (text !== undefined) {
-      asrBox.textContent = text;
-      asrBox.style.color = newState === "loading" ? "var(--muted)" : "var(--text)";
-    }
+    asrBox.style.color = newState === "loading" ? "var(--muted)" : "var(--text)";
+    dotsTick = 0;
+    renderHearing();
   }
 
   function startCountdown(durationMs) {
@@ -267,14 +218,18 @@ export function mount(target) {
     countdownFill.style.width = "0%";
   }
 
-  // Sync dot from current status snapshot on load
+  // Route to idle: standby if voice loop is up, loading otherwise.
+  // Called explicitly when an active SSE state ends.
+  function routeToIdle() {
+    const running = state.get("status")?.voice_loop?.running;
+    updateHearing(running ? "standby" : "loading");
+  }
+
+  // Polling-time sync — preserves active SSE-driven states so polling
+  // never overrides "слушаю / распознаю / думаю / говорю" mid-flow.
   function syncHearingFromStatus() {
-    const vl = state.get("status")?.voice_loop;
-    if (!vl?.running) { updateHearing("loading", standbyText()); return; }
-    // Don't override active states set by SSE events
     if (["listening", "reply", "transcribing", "thinking", "tts"].includes(hearingState)) return;
-    updateHearing("standby", standbyText());
-    asrBox.style.color = "var(--muted)";
+    routeToIdle();
   }
   syncHearingFromStatus();
   state.subscribe("status", syncHearingFromStatus);
@@ -343,6 +298,10 @@ export function mount(target) {
   const sendBtn = el("button", { class: "btn btn-primary", onclick: () => send() }, "Отправить ⏎");
   const clearBtn = el("button", { class: "btn btn-ghost", onclick: () => { input.value = ""; input.focus(); } }, "Очистить");
 
+  // ---- Wake-word noise calibration ----
+  // Shared widget — same button lives on the Settings page too.
+  const { btn: calibrateBtn, status: calibStatus } = createCalibrateButton();
+
   // ---- Layout ----
   const card = el("section", { class: "card", style: "flex:1; display:flex; flex-direction:column; min-height:0" }, [
     el("div", { class: "card-header" }, [
@@ -370,10 +329,20 @@ export function mount(target) {
         jetImg,
         el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Сцена"),
         sceneCaption,
-        el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Микрофон"),
+        el("div", { style: "display:flex; align-items:center; gap:8px; margin-top:4px" }, [
+          el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Микрофон · OWW"),
+          el("span", { class: "spacer" }),
+          calibrateBtn,
+        ]),
         el("div", { style: "display:flex; gap:6px; align-items:stretch" }, [
           el("div", { style: "flex:1; min-width:0" }, [eqCanvas]),
           vuCanvas,
+        ]),
+        el("div", { style: "display:flex; align-items:center; gap:8px" }, [
+          el("span", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.4" },
+            "Оранжевый — порог wake-word, циан — текущий OWW-score. Настройка порога — в разделе Настройки → OWW."),
+          el("span", { class: "spacer" }),
+          calibStatus,
         ]),
         el("div", { style: "display:flex; align-items:center; gap:6px; margin-top:4px" }, [
           hearingDot,
@@ -474,7 +443,6 @@ export function mount(target) {
       }
       scrollBottom();
     } else if (ev.type === "audio_level") {
-      eqServerLevel = typeof ev.payload?.level === "number" ? ev.payload.level : 0;
       if (ev.payload?.channels === 2) {
         vuChannels = 2;
         vuLevelL = ev.payload.level_l ?? 0;
@@ -494,67 +462,47 @@ export function mount(target) {
       pendingAdamBubble = null;
       stopCountdown();
     } else if (ev.type === "voice_loop_started") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
+      updateHearing("standby");
     } else if (ev.type === "voice_loop_stopped") {
-      updateHearing("loading", "OWW / ASR инициализация…");
+      updateHearing("loading");
       stopCountdown();
     } else if (ev.type === "wake_word_detected") {
-      if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
-      updateHearing("listening", "🎤 слушаю…");
+      updateHearing("listening");
       startCountdown((ev.payload?.silence_timeout_sec ?? 6) * 1000);
     } else if (ev.type === "endpointing_started") {
       startCountdown(ev.payload?.duration_ms ?? 3000);
     } else if (ev.type === "asr_partial") {
       if (ev.payload?.state === "speech_started") {
-        if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
-        updateHearing("listening", "🎤 слушаю…");
+        updateHearing("listening");
         stopCountdown();
       }
     } else if (ev.type === "asr_reply_window_open") {
-      updateHearing("reply", "🎤 слушаю…");
+      updateHearing("reply");
       startCountdown((ev.payload?.timeout_sec ?? 4) * 1000);
     } else if (ev.type === "mic_muted" && ev.payload?.reason === "asr_transcribing") {
-      updateHearing("transcribing", "⏳ распознаю…");
+      updateHearing("transcribing");
       stopCountdown();
     } else if (ev.type === "llm_thinking_started") {
-      updateHearing("thinking", "💭 думает…");
-    } else if (ev.type === "llm_thinking_finished") {
-      if (hearingState === "thinking") updateHearing("standby", standbyText());
+      updateHearing("thinking");
     } else if (ev.type === "tts_started") {
-      if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
-      updateHearing("tts", "🔊 говорит…");
+      updateHearing("tts");
       stopCountdown();
     } else if (ev.type === "tts_finished") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
-    } else if (ev.type === "wake_silence_timeout") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
-      stopCountdown();
-    } else if (ev.type === "asr_no_reply_standby") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
-      stopCountdown();
-    } else if (ev.type === "reply_window_expired") {
-      updateHearing("standby", standbyText());
-      asrBox.style.color = "var(--muted)";
-    } else if (ev.type === "asr_wake_only") {
-      updateHearing("standby", `«${ev.payload?.raw || "—"}» — только wake word`);
-      asrBox.style.color = "var(--muted)";
-      if (asrClearTimer) clearTimeout(asrClearTimer);
-      asrClearTimer = setTimeout(() => { updateHearing("standby", standbyText()); asrBox.style.color = "var(--muted)"; asrClearTimer = null; }, 5000);
-    } else if (ev.type === "asr_final") {
-      const text = ev.payload?.text || "";
-      updateHearing("listening", text || standbyText());
-      asrBox.style.color = text ? "var(--text)" : "var(--muted)";
-      if (asrClearTimer) clearTimeout(asrClearTimer);
-      asrClearTimer = setTimeout(() => {
-        if (hearingState !== "tts") updateHearing("standby", standbyText());
-        asrBox.style.color = "var(--muted)";
-        asrClearTimer = null;
-      }, 10000);
+      if (hearingState === "tts") routeToIdle();
+    } else if (
+      ev.type === "wake_silence_timeout" ||
+      ev.type === "asr_no_reply_standby" ||
+      ev.type === "reply_window_expired" ||
+      ev.type === "asr_wake_only"
+    ) {
+      if (["listening", "reply", "transcribing"].includes(hearingState)) {
+        routeToIdle();
+        stopCountdown();
+      }
+    } else if (ev.type === "llm_thinking_finished") {
+      if (hearingState === "thinking") routeToIdle();
     }
+    // asr_final: no label override — mic_muted set transcribing, llm_thinking_started follows.
   });
 
   input.focus();
@@ -562,9 +510,9 @@ export function mount(target) {
     unsubscribe();
     unsubScene();
     stopJetTimer();
-    if (eqRafId) { cancelAnimationFrame(eqRafId); eqRafId = null; }
+    if (wakeMeter && typeof wakeMeter.dispose === "function") wakeMeter.dispose();
     if (vuRafId) { cancelAnimationFrame(vuRafId); vuRafId = null; }
-    if (asrClearTimer) { clearTimeout(asrClearTimer); asrClearTimer = null; }
+    if (dotsTimer) clearInterval(dotsTimer);
     stopCountdown();
   };
 }

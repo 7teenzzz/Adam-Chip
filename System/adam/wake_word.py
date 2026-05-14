@@ -64,6 +64,27 @@ class OpenWakeWordEngine(WakeWordEngine):
             return True
         return False
 
+    # Live tuning — invoked by /api/wake_word/sensitivity PATCH. Clamp to safe
+    # ranges and reset the debounce counter so the new threshold cannot "ride"
+    # an already-accumulated hit streak from the previous setting.
+    def set_threshold(self, threshold: float) -> None:
+        self._threshold = max(0.0, min(1.0, float(threshold)))
+        self._consecutive_hits = 0
+
+    def set_debounce_hits(self, hits: int) -> None:
+        self._debounce_hits = max(1, int(hits))
+        self._consecutive_hits = 0
+
+    @property
+    def sensitivity(self) -> dict[str, Any]:
+        return {
+            "threshold": self._threshold,
+            "debounce_hits": self._debounce_hits,
+            "vad_threshold": getattr(self._oww, "vad_threshold", 0),
+            "last_score": self.last_score,
+            "consecutive_hits": self._consecutive_hits,
+        }
+
     def close(self) -> None:
         pass
 

@@ -1,6 +1,7 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
 import { toast } from "../widgets/toast.js";
+import { createWakeMeter, createCalibrateButton } from "../widgets/wakeMeter.js";
 
 function el(tag, attrs, children = []) {
   const node = document.createElement(tag);
@@ -130,47 +131,45 @@ const SCHEMA = [
     source: "config", section: "wake_word", title: "OWW · Wake word",
     fields: [
       { key: "threshold",     label: "Порог срабатывания (OWW score)", type: "number",
-        hint: "0–1 · 0.35 рекомендуется · чем ниже — тем чувствительнее",
+        hint: "0–1 · 0.25 рекомендуется · можно настроить ползунком ниже или калибровкой",
         min: 0, max: 1, step: 0.05 },
       { key: "debounce_hits", label: "Подтверждений подряд", type: "number",
-        hint: "3 рекомендуется · больше = меньше ложных срабатываний",
+        hint: "2 рекомендуется · больше = меньше ложных срабатываний",
         min: 1, max: 20, step: 1 },
       { key: "vad_threshold", label: "VAD порог (Silero внутри OWW)", type: "number",
-        hint: "0–1 · 0.4 рекомендуется · выше = строже фильтрует тишину",
+        hint: "0–1 · 0 — выключено · выше = строже фильтрует тишину",
         min: 0, max: 1, step: 0.05 },
       { key: "wake_silence_timeout_sec", label: "Тишина после wake word (с)", type: "number",
-        hint: "3.0 рекомендуется · после истечения — обратно в standby",
+        hint: "5 рекомендуется · после истечения — обратно в standby",
         min: 0.5, max: 10, step: 0.5 },
     ],
+    extras: () => buildWakeWordExtras(),
   },
 
   // ── ASR · WhisperX ───────────────────────────────────────────────────────────
   {
     source: "config", section: "services.asr", title: "ASR · WhisperX",
     fields: [
-      { key: "base_url",  label: "Адрес службы ASR",    type: "text",
-        hint: "http://127.0.0.1:8095" },
-      { key: "model",     label: "Модель WhisperX",     type: "text",
-        hint: "medium · large-v3 (требует 12+ ГБ VRAM)" },
-      { key: "language",  label: "Язык распознавания",  type: "select",
-        choices: ["ru", "en", "auto"] },
-      { key: "wake_words",         label: "Wake words (список)",        type: "text",
-        hint: "через запятую: адам,дохлый · используется для стрипа из транскрипта" },
-      { key: "wake_word_required", label: "Wake word обязателен",       type: "bool",
-        hint: "включать в exhibition mode" },
-      { key: "command_endpointing_ms", label: "Endpointing — тишина для отправки (мс)", type: "number",
-        hint: "3000 рекомендуется · после этой тишины фраза уходит в ASR",
+      { key: "model", label: "Модель WhisperX", type: "select",
+        choices: ["tiny", "base", "small", "medium", "large-v2", "large-v3"],
+        hint: "tiny/base — быстро, точность низкая · small — баланс · medium — рекомендуется · large-v2/v3 — максимум точности, 10+ ГБ VRAM" },
+      { key: "command_endpointing_ms", label: "Endpointing — пауза перед отправкой (мс)", type: "number",
+        hint: "3000 рекомендуется · VAD ждёт такую паузу тишины, затем отправляет фразу в распознавание",
         min: 200, max: 5000, step: 100 },
-      { key: "reply_window_sec",           label: "Reply window (с)",           type: "number",
-        hint: "4.0 · окно ожидания ответной реплики зрителя",
+      { key: "reply_window_sec", label: "Reply window — ожидание ответа (с)", type: "number",
+        hint: "4.0 · после ответа Адама открывается окно, в котором зритель может говорить без wake word",
         min: 1, max: 30, step: 0.5 },
-      { key: "reply_absolute_deadline_sec", label: "Абсолютный дедлайн reply (с)", type: "number",
-        hint: "12.0 · принудительный выход из reply-окна",
+      { key: "reply_absolute_deadline_sec", label: "Reply window — жёсткий дедлайн (с)", type: "number",
+        hint: "12.0 · принудительное закрытие reply window даже при наличии звука",
         min: 5, max: 60, step: 1 },
-      { key: "reply_noise_gate",   label: "Noise gate в reply (RMS)",   type: "number",
-        hint: "1600 рекомендуется · фильтрует фоновый шум в reply-окне · ставить выше фактического уровня шума в комнате",
-        min: 0, max: 10000, step: 50 },
-      { key: "timeout_sec",        label: "Таймаут HTTP-запроса (с)",   type: "number",
+      { key: "reply_window_expired_action", label: "Reply window — действие по истечении", type: "select",
+        choices: ["standby", "stop"],
+        hint: "standby — остаётся в ожидании wake word · stop — отключает микрофон (принудительно, как в exhibition)" },
+      { key: "webrtc_vad_aggressiveness", label: "WebRTC VAD — агрессивность", type: "number",
+        sourceSection: "media.audio",
+        hint: "0–3 · 2 = баланс, 3 = строго · выше = меньше ложных срабатываний на фоновый шум, но возможны пропуски тихой речи",
+        min: 0, max: 3, step: 1 },
+      { key: "timeout_sec", label: "Таймаут HTTP-запроса к ASR (с)", type: "number",
         hint: "30 рекомендуется" },
     ],
   },
@@ -228,9 +227,6 @@ const SCHEMA = [
         choices: ["8000", "16000", "22050", "44100"],
         hint: "рекомендуется 16000",
         toValue: Number, fromValue: String },
-      { key: "webrtc_vad_aggressiveness", label: "WebRTC VAD — агрессивность", type: "number",
-        hint: "0–3 · 3 рекомендуется · выше = строже фильтрует тишину и шум",
-        min: 0, max: 3, step: 1 },
       { key: "min_speech_ms", label: "Мин. длина реплики (мс)", type: "number",
         hint: "250–404 рекомендуется" },
       { key: "max_segment_ms", label: "Макс. длина сегмента (мс)", type: "number",
@@ -553,6 +549,30 @@ async function saveTuningField(tuningSectionPath, key, value, status) {
   }
 }
 
+// ── OWW extras ────────────────────────────────────────────────────────────────
+// Adds a draggable wake-word meter + calibration button to the OWW card.
+// The meter widget subscribes to SSE on its own; both the meter and the
+// number-field above it stay in sync via the `wake_sensitivity_updated`
+// event that the orchestrator emits on every PATCH.
+function buildWakeWordExtras() {
+  const meter = createWakeMeter({ draggable: true, height: 96 });
+  const { btn: calibrateBtn, status: calibStatus } = createCalibrateButton();
+  return el("div", { style: "display:flex; flex-direction:column; gap:6px; margin-top:10px" }, [
+    el("div", { style: "display:flex; align-items:center; gap:8px" }, [
+      el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Уровень микрофона · порог OWW"),
+      el("span", { class: "spacer" }),
+      calibrateBtn,
+    ]),
+    meter.canvas,
+    el("div", { style: "display:flex; align-items:center; gap:8px" }, [
+      el("span", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.3" },
+        "Перетащи оранжевую линию — порог wake-word. Циан — текущий OWW-score. Изменение сохраняется автоматически."),
+      el("span", { class: "spacer" }),
+      calibStatus,
+    ]),
+  ]);
+}
+
 // ── Render helpers ────────────────────────────────────────────────────────────
 
 function renderFieldRow(field, value, buildInput) {
@@ -671,14 +691,21 @@ export function mount(target) {
       const grid = el("div", { class: "field-grid" });
 
       group.fields.forEach((field) => {
-        const value = sectionData[field.key];
+        // sourceSection on a field overrides the group section for both load and save.
+        const effectiveSection = (group.source === "config" && field.sourceSection)
+          ? field.sourceSection
+          : group.section;
+        const fieldSectionData = (group.source === "config" && field.sourceSection)
+          ? (getNested(config, field.sourceSection) || {})
+          : sectionData;
+        const value = fieldSectionData[field.key];
         const isWide = field.type === "textarea" || field.type === "csv_array" ||
           (field.type === "string" && String(value ?? "").length > 30) ||
           (field.type === "text"   && String(value ?? "").length > 40);
 
         const row = renderFieldRow(field, value, (f, st) => {
           if (group.source === "config") {
-            return fieldInput(f, value, (v) => saveConfigField(group.section, field.key, v, st), ctx);
+            return fieldInput(f, value, (v) => saveConfigField(effectiveSection, field.key, v, st), ctx);
           } else {
             return fieldInput(f, value, (v) => saveTuningField(group.tuningSectionPath, field.key, v, st), ctx);
           }
@@ -691,12 +718,18 @@ export function mount(target) {
         ? el("span", { class: "caps mono dim" }, group.section)
         : el("span", { class: "caps mono", style: "color:var(--accent-dim, var(--accent)); opacity:0.55" }, `tuning:${group.tuningSectionPath}`);
 
+      const bodyChildren = [grid];
+      if (typeof group.extras === "function") {
+        const extra = group.extras(ctx, sectionData);
+        if (extra) bodyChildren.push(extra);
+      }
+
       const card = el("section", { class: "card" }, [
         el("div", { class: "card-header" }, [
           el("span", { class: "card-title" }, group.title),
           badge,
         ]),
-        el("div", { class: "card-body" }, [grid]),
+        el("div", { class: "card-body" }, bodyChildren),
       ]);
       const hasTextarea = group.fields.some((f) => f.type === "textarea");
       if (hasTextarea) card.classList.add("card-full");

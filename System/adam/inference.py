@@ -354,7 +354,19 @@ def create_asr_client(config: dict[str, Any]) -> WhisperXASRClient | WhisperASRC
 
 
 _VLM_DEFAULT_PROMPT = (
-    "Briefly describe the scene in one sentence: people present, movement, notable objects."
+    "Отвечай только по-русски. Не используй китайские иероглифы. "
+    "Кратко опиши сцену в одном предложении: люди, движения, заметные объекты."
+)
+
+# CJK Unified Ideographs (U+4E00..U+9FFF) — VILA 1.5-3b sometimes outputs Chinese
+# despite Russian prompt; we count these to detect and reject such replies.
+_CJK_RE = re.compile(r"[一-鿿]")
+_CJK_REJECT_THRESHOLD = 3  # 3+ Chinese ideographs → reject and retry
+
+_VLM_RUSSIAN_RETRY_PROMPT = (
+    "ВНИМАНИЕ: отвечай только по-русски кириллицей. Не используй китайские иероглифы. "
+    "Опиши сцену одним коротким предложением на русском языке: "
+    "люди, движения, заметные объекты."
 )
 
 
@@ -400,13 +412,30 @@ class VLMClient:
         if not jpeg_bytes:
             raise RuntimeError("empty scene snapshot")
         image_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+        # Try with default prompt first; if reply has too many CJK ideographs,
+        # retry with a stronger Russian-only directive.
+        for attempt_prompt in (self.prompt, _VLM_RUSSIAN_RETRY_PROMPT):
+            text = self._call_vlm(image_b64, attempt_prompt)
+            if text and not self._is_chinese_dominant(text):
+                return text
+            if text and self._is_chinese_dominant(text) and attempt_prompt is self.prompt:
+                # First attempt produced Chinese — fall through to retry
+                continue
+            if text:
+                # Retry also produced Chinese — reject (caller will keep stale scene)
+                raise RuntimeError(
+                    f"vlm returned non-russian output (cjk count >= {_CJK_REJECT_THRESHOLD})"
+                )
+        raise RuntimeError("vlm returned no scene description")
+
+    def _call_vlm(self, image_b64: str, prompt_text: str) -> str:
         payload = {
             "model": self.model,
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": self.prompt},
+                        {"type": "text", "text": prompt_text},
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
                     ],
                 }
@@ -423,7 +452,13 @@ class VLMClient:
                     return text
             except (HTTPError, URLError, OSError, json.JSONDecodeError, RuntimeError) as exc:
                 errors.append(str(exc))
-        raise RuntimeError("; ".join(errors) or "vlm returned no scene description")
+        if errors:
+            raise RuntimeError("; ".join(errors))
+        return ""
+
+    @staticmethod
+    def _is_chinese_dominant(text: str) -> bool:
+        return len(_CJK_RE.findall(text)) >= _CJK_REJECT_THRESHOLD
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:

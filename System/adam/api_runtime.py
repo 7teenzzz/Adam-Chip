@@ -29,6 +29,7 @@ from .config import Settings, PROJECT_ROOT
 from .events import EventLog
 from .memory import MemoryStore
 from .metrics import MetricsLog
+from .wake_calibration import collect_noise_profile, persist_noise_profile
 
 
 WHISPER_SIZES = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
@@ -61,6 +62,7 @@ class RuntimeDeps:
     rebuild_clients: Callable[[str], list[str]]
     capture_snapshot: Callable[[], bytes]
     run_dialogue_turn: Callable[..., Awaitable[dict[str, Any]]]
+    get_voice_loop: Callable[[], Any] | None = None
 
 
 def build_router(deps: RuntimeDeps) -> APIRouter:
@@ -86,6 +88,85 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         restarted = deps.rebuild_clients(section)
         deps.event_log.append("config_patched", {"section": section, "patch": patch, "restarted": restarted, "saved_to": str(target)})
         return {"ok": True, "section": section, "applied": applied, "restarted": restarted, "saved_to": str(target)}
+
+    # ── Wake-word sensitivity ─────────────────────────────────────────────
+    # Live tuning of OpenWakeWord threshold/debounce. Does NOT rebuild the
+    # engine (engine init is expensive — ONNX load + 20× silence warmup).
+    # Setters live on OpenWakeWordEngine and just mutate state.
+    def _wake_engine() -> Any:
+        if deps.get_voice_loop is None:
+            return None
+        loop = deps.get_voice_loop()
+        return getattr(loop, "_wake_engine", None)
+
+    @router.get("/api/wake_word/sensitivity")
+    async def get_wake_sensitivity() -> dict[str, Any]:
+        engine = _wake_engine()
+        if engine is None:
+            return {"ok": False, "engine": None, "reason": "no_engine"}
+        if not hasattr(engine, "sensitivity"):
+            return {"ok": False, "engine": type(engine).__name__, "reason": "engine_read_only"}
+        return {"ok": True, **engine.sensitivity}
+
+    @router.patch("/api/wake_word/sensitivity")
+    async def patch_wake_sensitivity(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        engine = _wake_engine()
+        if engine is None or not hasattr(engine, "set_threshold"):
+            raise HTTPException(status_code=409, detail="wake word engine not active or read-only")
+        changes: dict[str, Any] = {}
+        if "threshold" in payload:
+            engine.set_threshold(float(payload["threshold"]))
+            changes["threshold"] = engine._threshold
+        if "debounce_hits" in payload:
+            engine.set_debounce_hits(int(payload["debounce_hits"]))
+            changes["debounce_hits"] = engine._debounce_hits
+        persisted = False
+        if payload.get("persist") and changes:
+            deps.settings.apply_patch("wake_word", changes)
+            deps.settings.save()
+            persisted = True
+        deps.event_log.append(
+            "wake_sensitivity_updated",
+            {"changes": changes, "persisted": persisted, **engine.sensitivity},
+        )
+        return {"ok": True, "persisted": persisted, "changes": changes, **engine.sensitivity}
+
+    @router.post("/api/wake_word/calibrate/noise")
+    async def calibrate_noise(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """Record ambient noise for N seconds, return recommended OWW threshold.
+
+        Caller is expected to keep the room quiet for `duration_sec`. The
+        endpoint subscribes to live `oww_score` events from the voice loop;
+        if the voice loop is not running, the queue stays empty and we
+        return a `no_samples` warning instead of failing.
+        """
+        engine = _wake_engine()
+        if engine is None:
+            raise HTTPException(status_code=409, detail="wake word engine not active")
+        duration_sec = float(payload.get("duration_sec", 20.0))
+        margin = float(payload.get("margin", 0.08))
+        deps.event_log.append(
+            "wake_calibrate_started", {"duration_sec": duration_sec, "margin": margin}
+        )
+        result = await collect_noise_profile(
+            deps.event_log, duration_sec=duration_sec, margin=margin
+        )
+        # Archive for later diffing across sessions / rooms.
+        record = {
+            **result,
+            "engine": {
+                "model": getattr(engine, "_model_name", None),
+                "vad_threshold": getattr(engine, "_oww", None) and getattr(engine._oww, "vad_threshold", 0),
+                "threshold_before": getattr(engine, "_threshold", None),
+                "debounce_hits": getattr(engine, "_debounce_hits", None),
+            },
+        }
+        try:
+            persist_noise_profile(deps.settings.data_dir, record)
+        except Exception as exc:  # pragma: no cover — best-effort archive
+            deps.event_log.append("wake_calibrate_archive_error", {"error": str(exc)})
+        deps.event_log.append("wake_calibrate_finished", record)
+        return result
 
     @router.get("/api/models/llm")
     async def models_llm() -> dict[str, Any]:

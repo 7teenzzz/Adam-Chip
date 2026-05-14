@@ -26,6 +26,9 @@
       "gstreamer_pipeline": "v4l2src device=/dev/video0 ! image/jpeg,framerate=30/1 ! jpegdec ! videoconvert ! video/x-raw,format=RGB ! appsink name=adam_frames drop=true max-buffers=1 sync=false",
       "remote_rtsp_url": "",
       "preview_enabled": true,
+      "esp_mjpeg_url": "",
+      "esp_fail_threshold": 3,
+      "esp_retry_interval_sec": 30.0,
       "video_device": "/dev/video0",
       "camera_width": 640,
       "camera_height": 480,
@@ -38,11 +41,9 @@
       "sample_rate": 16000,
       "channels": 1,
       "frame_ms": 20,
-      "webrtc_vad_aggressiveness": 3,
+      "vad_threshold": 650,
       "min_speech_ms": 200,
       "max_segment_ms": 9000,
-      "max_command_segment_ms": 15000,
-      "normalize_factor": 8000,
       "mic_source": "esp32",
       "esp32_mic_profile": "inmp441_philips32_stereo",
       "esp_health": {
@@ -51,7 +52,10 @@
         "ratio_threshold": 6.0,
         "clip_burst_threshold": 20,
         "restore_threshold_polls": 5
-      }
+      },
+      "webrtc_vad_aggressiveness": 2,
+      "max_command_segment_ms": 15000,
+      "normalize_factor": 8000
     },
     "scene_worker_enabled": true,
     "scene_interval_sec": 4,
@@ -74,21 +78,21 @@
       "model": "Efficient-Large-Model/VILA1.5-3b",
       "timeout_sec": 20,
       "max_new_tokens": 48,
-      "prompt": "Отвечай только по-русски. Кратко опиши сцену в одном предложении: люди, движения, заметные объекты."
+      "prompt": "Отвечай только по-русски. Не используй китайские иероглифы. Кратко опиши сцену в одном предложении: люди, движения, заметные объекты."
     },
     "asr": {
       "provider": "whisperx",
       "base_url": "http://127.0.0.1:8095",
       "model": "medium",
       "language": "ru",
-      "command_endpointing_ms": 3000,
-      "reply_window_sec": 4.0,
-      "reply_absolute_deadline_sec": 12.0,
-      "reply_noise_gate": 1600,
+      "command_endpointing_ms": 3500,
+      "reply_window_sec": 5,
+      "reply_absolute_deadline_sec": 10,
       "sample_rate": 16000,
       "timeout_sec": 30,
       "wake_words": "адам",
-      "wake_word_required": true
+      "wake_word_required": true,
+      "reply_window_expired_action": "standby"
     },
     "tts": {
       "provider": "silero",
@@ -129,7 +133,8 @@
     "enabled": true,
     "success_path": "data/sounds/success.wav",
     "local_output_device": "default",
-    "esp_boot_note": "ESP boot sound is embedded in ESP firmware and played by ESP after speaker init"
+    "esp_boot_note": "ESP boot sound is embedded in ESP firmware and played by ESP after speaker init",
+    "error_path": "data/sounds/boot.wav"
   },
   "safety": {
     "motor_default_duration_ms": 900,
@@ -140,9 +145,9 @@
   "wake_word": {
     "engine": "openwakeword",
     "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.35,
-    "debounce_hits": 3,
+    "threshold": 0.15,
+    "debounce_hits": 2,
     "vad_threshold": 0,
-    "wake_silence_timeout_sec": 6.0
+    "wake_silence_timeout_sec": 5
   }
 }
