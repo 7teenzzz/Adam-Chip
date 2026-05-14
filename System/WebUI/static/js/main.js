@@ -245,16 +245,29 @@ function paintScene(status) {
 }
 
 const SIDE_EVENTS = new Set([
-  "adam_reply",
-  "wake_word_detected",
-  "asr_final",
-  "asr_wake_only",
-  "voice_loop_error",
+  // ── Система ─────────────────────────────
+  "orchestrator_started",
   "voice_loop_started",
   "voice_loop_stopped",
-  "tts_finished",
-  "barge_in",
-  "scene_updated",
+  "voice_loop_error",
+  "mode_changed",
+  "startup_services_timeout",
+  // ── ESP32 / MCU ──────────────────────────
+  "esp32_health_error",
+  "esp32_health_poll_failed",
+  "esp32_audio_health",
+  "esp32_audio_health_auto_switch",
+  // ── Pipeline nodes ───────────────────────
+  "wake_word_detected",     // 1. wake word
+  "asr_final",              // 2. ASR
+  "asr_wake_only",          // 2. ASR (только wake word)
+  "llm_thinking_started",   // 3. LLM
+  "llm_thinking_finished",  // 3. LLM
+  "llm_error",              // 3. LLM error
+  "tts_started",            // 4. TTS
+  "tts_finished",           // 4. TTS
+  "adam_reply",             // 5. ответ
+  // ── Исключения пайплайна ─────────────────
   "wake_silence_timeout",
   "reply_window_expired",
   "asr_no_reply_standby",
