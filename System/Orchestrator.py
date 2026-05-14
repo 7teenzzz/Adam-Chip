@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import audioop
 import json
-import numpy as np
+import torch as _torch
 import os
 import re
 import shutil
@@ -45,7 +45,7 @@ from adam.system import docker_health, gate_summary, all_services_status, servic
 from adam.tuning import TuningStore, get_store as _get_tuning_store
 from adam.ui import agent_page, dash_page, debug_page
 from adam.wake_word import create_engine as _create_wake_engine
-from openwakeword.vad import VAD as _SileroVAD
+
 
 
 settings = Settings.load()
@@ -213,9 +213,20 @@ class VoiceLoopController:
         self.channels = int(audio_config.get("channels", 1))
         self.frame_ms = int(audio_config.get("frame_ms", 20))
         self.vad_threshold = int(audio_config.get("vad_threshold", 650))
-        self._silero_vad = _SileroVAD()
         self._silero_vad_threshold = float(audio_config.get("silero_vad_threshold", 0.5))
-        self._vad_frame_size = int(self.sample_rate * self.frame_ms / 1000)  # 320 samples at 16kHz/20ms
+        try:
+            _m, _ = _torch.hub.load(
+                "snakers4/silero-vad", "silero_vad",
+                trust_repo=True, verbose=False,
+            )
+            _m.eval()
+            self._silero_vad: "_torch.nn.Module | None" = _m
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger("adam.voice").warning(
+                "silero-vad load failed: %s — falling back to RMS vad_threshold=%d", _e, self.vad_threshold
+            )
+            self._silero_vad = None
         self.normalize_factor = float(audio_config.get("normalize_factor", 8000))
         self.min_speech_ms = int(audio_config.get("min_speech_ms", 280))
         self.asr_client = asr_client
@@ -373,11 +384,16 @@ class VoiceLoopController:
                     continue
 
                 _rms = audioop.rms(chunk, 2)
-                _audio_f32 = np.frombuffer(chunk, np.int16).astype(np.float32) / 32768.0
-                voiced = bool(
-                    self._silero_vad.predict(_audio_f32, frame_size=self._vad_frame_size)
-                    >= self._silero_vad_threshold
-                )
+                if self._silero_vad is not None:
+                    _f32 = _torch.frombuffer(chunk, dtype=_torch.int16).float() / 32768.0
+                    if _f32.shape[0] < 512:
+                        _f32 = _torch.nn.functional.pad(_f32, (0, 512 - _f32.shape[0]))
+                    voiced = bool(
+                        self._silero_vad(_f32.unsqueeze(0), 16000).item()
+                        >= self._silero_vad_threshold
+                    )
+                else:
+                    voiced = bool(_rms >= self.vad_threshold)
                 level_tick += 1
                 if level_tick >= 5:
                     level_tick = 0
@@ -408,7 +424,8 @@ class VoiceLoopController:
                             if triggered:
                                 event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None})
                                 self._set_voice_state("listening", "wake_word")
-                                self._silero_vad.reset_states()
+                                if self._silero_vad is not None:
+                                    self._silero_vad.reset_states()
                                 self._wake_detected_at = time.perf_counter()
                                 speech_frames.clear()
                                 speech_ms = 0

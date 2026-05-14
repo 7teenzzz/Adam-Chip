@@ -183,6 +183,8 @@ export function mount(target) {
   function syncHearingFromStatus() {
     const vl = state.get("status")?.voice_loop;
     if (!vl?.running) { updateHearing("loading", standbyText()); return; }
+    // Don't override active states set by SSE events
+    if (["listening", "reply", "transcribing", "thinking", "tts"].includes(hearingState)) return;
     updateHearing("standby", standbyText());
     asrBox.style.color = "var(--muted)";
   }
