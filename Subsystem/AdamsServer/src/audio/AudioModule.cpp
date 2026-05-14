@@ -607,6 +607,7 @@ void speakerPlaybackTask(void *parameter) {
     size_t producedSamples = 0;
 
     portENTER_CRITICAL(&sSpeakerMux);
+    const bool clientActive = sSpeakerClientActive;
     const size_t availableBytes = sSpeakerFillCount;
     const size_t wantedBytes = kSpeakerTxChunkSamples * sizeof(int16_t);
     const size_t bytesToRead = min(availableBytes, wantedBytes);
@@ -626,7 +627,7 @@ void speakerPlaybackTask(void *parameter) {
       monoSamples[i] = 0;
     }
 
-    if (bytesToRead < wantedBytes) {
+    if (clientActive && bytesToRead < wantedBytes) {
       portENTER_CRITICAL(&gRuntimeStateMux);
       gRuntimeState.speakerUnderruns = gRuntimeState.speakerUnderruns + 1;
       portEXIT_CRITICAL(&gRuntimeStateMux);
@@ -712,11 +713,17 @@ bool initAudioCapture() {
 
 bool initSpeakerPlayback() {
   if (sSpeakerRing == nullptr) {
-    sSpeakerRing = allocateRingBuffer("speaker", kSpeakerRingBufferBytes);
+    // Force DRAM — ring is accessed under a spinlock, and PSRAM latency (~25µs/512 B)
+    // would hold interrupts disabled long enough to starve the I2S DMA callback.
+    sSpeakerRing = static_cast<uint8_t *>(
+      heap_caps_malloc(kSpeakerRingBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     if (sSpeakerRing == nullptr) {
       bootLog("speaker", "failed to allocate speaker ring buffer");
       return false;
     }
+    memset(sSpeakerRing, 0, kSpeakerRingBufferBytes);
+    bootLogf("speaker", "buffer allocated: %lu bytes in dram",
+      static_cast<unsigned long>(kSpeakerRingBufferBytes));
   }
 
   if (!initSpeakerStdTxChannel()) {
@@ -961,7 +968,7 @@ bool beginSpeakerStream() {
 
   bool acquired = false;
   portENTER_CRITICAL(&sSpeakerMux);
-  if (!sSpeakerClientActive && sSpeakerFillCount == 0) {
+  if (!sSpeakerClientActive) {
     sSpeakerClientActive = true;
     sSpeakerWriteIndex = 0;
     sSpeakerReadIndex = 0;
@@ -977,6 +984,10 @@ bool beginSpeakerStream() {
 void endSpeakerStream() {
   portENTER_CRITICAL(&sSpeakerMux);
   sSpeakerClientActive = false;
+  // Do NOT flush — the ring may hold up to kSpeakerRingBufferBytes of unplayed
+  // audio. Flushing here would cut the tail of every TTS clip. The playback
+  // task drains the ring on its own. beginSpeakerStream discards stale samples
+  // when the next stream acquires the channel.
   portEXIT_CRITICAL(&sSpeakerMux);
 
   updateSpeakerFillRuntime();

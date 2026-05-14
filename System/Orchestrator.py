@@ -12,7 +12,8 @@ import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+import urllib.request
+from typing import Any, Callable
 
 try:
     from fastapi import Body, FastAPI, HTTPException, Query, Request
@@ -63,7 +64,13 @@ vlm = VLMClient(settings.section("services").get("vlm", {}))
 tts = TTSClient(settings.section("services").get("tts", {}))
 scene_cache = SceneCache()
 _media_cfg = settings.section("media")
-camera_reader = CameraReader(_media_cfg.get("video", {}))
+_video_cfg = dict(_media_cfg.get("video", {}))
+if not _video_cfg.get("esp_mjpeg_url"):
+    from urllib.parse import urlparse as _urlparse
+    _mcu_base = settings.section("mcu").get("base_url", "http://192.168.0.171").rstrip("/")
+    _parsed = _urlparse(_mcu_base)
+    _video_cfg["esp_mjpeg_url"] = f"{_parsed.scheme}://{_parsed.hostname}:81/stream"
+camera_reader = CameraReader(_video_cfg)
 scene_buffer = SceneDescriptionBuffer(int(_media_cfg.get("scene_buffer_maxlen", 8)))
 prompt_builder = PromptBuilder(
     settings.persona_paths,
@@ -206,7 +213,10 @@ async def _commit_session_locked(reason: str) -> None:
 
 
 class VoiceLoopController:
-    def __init__(self, audio_config: dict[str, Any], asr_client: WhisperASRClient) -> None:
+    def __init__(self, audio_config: dict[str, Any], asr_client: WhisperASRClient, mcu: Any = None) -> None:
+        self.mic_source = str(audio_config.get("mic_source", "local"))
+        self.esp32_mic_profile = str(audio_config.get("esp32_mic_profile", "inmp441_philips32_left"))
+        self._mcu = mcu
         self.audio_device = str(audio_config.get("input_device", "hw:0,0"))
         self.capture_device = self._capture_device_for(self.audio_device)
         self.sample_rate = int(audio_config.get("sample_rate", 16000))
@@ -279,6 +289,8 @@ class VoiceLoopController:
     def status(self) -> dict[str, Any]:
         return {
             "running": self.running,
+            "mic_source": self.mic_source,
+            "esp32_mic_profile": self.esp32_mic_profile,
             "vad_state": self.vad_state,
             "last_transcript": self.last_transcript,
             "last_transcript_at": self.last_transcript_at,
@@ -342,35 +354,121 @@ class VoiceLoopController:
         event_log.append("voice_loop_stopped", self.status())
         return {"ok": True, **self.status()}
 
+    async def restart(self) -> None:
+        await self.stop()
+        await self.start()
+
+    def open_reply_window(self, timeout_sec: float = 4.0) -> None:
+        """Open a post-reply listen window after Adam's TTS finishes.
+
+        Wake word is bypassed for speech that starts within `timeout_sec` seconds.
+        If no speech begins before the deadline, the voice loop is stopped.
+        A new turn cancels the current window and schedules a fresh one after its TTS.
+        """
+        if self._reply_window_task and not self._reply_window_task.done():
+            self._reply_window_task.cancel()
+        self._reply_window_task = asyncio.create_task(
+            self._reply_window_coro(timeout_sec), name="reply_window"
+        )
+
+    async def _reply_window_coro(self, timeout_sec: float) -> None:
+        self._reply_window_active = True
+        self._reply_window_latched = False
+        event_log.append("reply_window_open", {"timeout_sec": timeout_sec})
+        try:
+            await asyncio.sleep(timeout_sec)
+            if self.running and runtime_state.get("mode") == "exhibition":
+                event_log.append("reply_window_expired", {"action": "voice_loop_stopped"})
+                await self.stop()
+            else:
+                event_log.append("reply_window_expired", {"action": "voice_loop_kept"})
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._reply_window_active = False
+            self._reply_window_latched = False
+
     async def _run(self) -> None:
-        frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
-        speech_frames: list[bytes] = []
-        speech_ms = 0
-        silence_ms = 0
-        level_tick = 0
-        _oww_score_tick = 0   # log oww score every ~1s for diagnostics
+        if self.mic_source == "esp32":
+            # ESP32 stream always produces mono 16-bit output (downmix handled in _run_esp32).
+            frame_bytes = max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
+            await self._run_esp32(frame_bytes)
+        else:
+            frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
+            await self._run_local(frame_bytes)
+
+    async def _run_local(self, frame_bytes: int) -> None:
         try:
             self._process = self._start_arecord()
             stdout = self._process.stdout
             if stdout is None:
                 raise RuntimeError("arecord stdout unavailable")
+            await self._vad_loop(stdout.read, frame_bytes)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.running = False
+            self.vad_state = "error"
+            self.last_asr_error = str(exc)
+            runtime_state["last_error"] = f"voice_loop:{exc}"
+            event_log.append("voice_loop_error", {"error": str(exc)})
+        finally:
+            self._stop_process()
+            self.running = False
+
+    async def _run_esp32(self, frame_bytes: int) -> None:
+        if self._mcu is None:
+            raise RuntimeError("mic_source=esp32 requires mcu client — not configured")
+        url = self._mcu.mic_stream_url()
+        while self.running:
+            profile = self.esp32_mic_profile
+            is_stereo = profile.endswith("stereo")
+            await self._mcu.request("POST", "/api/audio", {"profile": profile})
+            try:
+                resp = await asyncio.to_thread(urllib.request.urlopen, url, timeout=10)
+                await asyncio.to_thread(resp.read, 44)  # skip WAV header
+                read_fn = self._stereo_to_mono_reader(resp.read) if is_stereo else resp.read
+                await self._vad_loop(read_fn, frame_bytes)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.vad_state = "error"
+                self.last_asr_error = str(exc)
+                event_log.append("voice_loop_error", {"stage": "esp32_mic", "error": str(exc)})
+                if self.running:
+                    await asyncio.sleep(2.0)
+        self.running = False
+        self.vad_state = "idle"
+
+    @staticmethod
+    def _stereo_to_mono_reader(read_fn: Callable[[int], bytes]) -> Callable[[int], bytes]:
+        """Wraps a stereo PCM read_fn to return downmixed mono (L+R)/2.
+
+        read_fn is expected to produce interleaved 16-bit stereo (2× the mono byte count).
+        Partial reads return empty bytes to trigger reconnect in _run_esp32.
+        """
+        def _read(n: int) -> bytes:
+            raw = read_fn(n * 2)
+            if not raw:
+                return b""
+            if len(raw) < n * 2:
+                return b""
+            return audioop.tomono(raw, 2, 0.5, 0.5)
+        return _read
+
+    async def _vad_loop(self, read_fn: Callable[[int], bytes], frame_bytes: int) -> None:
+        """VAD + endpointing + ASR dispatch. read_fn is a blocking callable, always called via to_thread."""
+        speech_frames: list[bytes] = []
+        speech_ms = 0
+        silence_ms = 0
+        level_tick = 0
+        _oww_score_tick = 0   # log oww score every ~1s for diagnostics
+        _reader = [read_fn]  # mutable ref — updated when arecord restarts during transcription
+        try:
             while self.running:
-                chunk = await asyncio.to_thread(stdout.read, frame_bytes)
+                chunk = await asyncio.to_thread(_reader[0], frame_bytes)
                 if not chunk:
-                    # arecord exited unexpectedly — restart rather than kill the loop.
-                    err = self._read_process_stderr()
-                    event_log.append("arecord_restart", {"reason": "empty_read", "stderr": err})
-                    self._stop_process()
-                    await asyncio.sleep(0.5)
-                    self._process = self._start_arecord()
-                    stdout = self._process.stdout
-                    if stdout is None:
-                        raise RuntimeError("arecord restart failed")
-                    speech_frames.clear()
-                    speech_ms = 0
-                    silence_ms = 0
-                    self._ww_buf.clear()
-                    continue
+                    raise RuntimeError("audio source ended unexpectedly")
 
                 _rms = audioop.rms(chunk, 2)
                 voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
@@ -480,7 +578,6 @@ class VoiceLoopController:
                     speech_frames.append(chunk)
                     speech_ms += self.frame_ms
                     silence_ms = 0
-                    self.vad_state = "speech"
                 elif speech_frames:
                     speech_frames.append(chunk)
                     silence_ms += self.frame_ms
@@ -493,7 +590,7 @@ class VoiceLoopController:
                     or speech_ms >= self.max_segment_ms
                 ):
                     pcm = b"".join(speech_frames)
-                    enough_speech = speech_ms >= self.min_speech_ms
+                    enough = speech_ms >= self.min_speech_ms
                     speech_frames.clear()
                     speech_ms = 0
                     silence_ms = 0
@@ -506,12 +603,13 @@ class VoiceLoopController:
 
                         spoke = await self._transcribe_and_dispatch(pcm)
 
-                        # TTS done → restart mic; enter reply window only if agent spoke
+                        # TTS done → restart mic; update _reader so next reads go to the new process
                         self._process = self._start_arecord()
                         event_log.append("mic_unmuted", {"reason": "transcription_complete"})
                         stdout = self._process.stdout
                         if stdout is None:
                             raise RuntimeError("arecord restart failed")
+                        _reader[0] = stdout.read
                         self.muted_by_tts = False
                         speech_frames.clear()
                         speech_ms = 0
@@ -678,7 +776,8 @@ class SceneWorker:
             try:
                 jpeg = self._cam.get_latest()
                 if not jpeg:
-                    raise RuntimeError("camera has no frame yet")
+                    await asyncio.sleep(0.2)
+                    continue
                 t_vlm = time.perf_counter()
                 summary = (await self.vlm_client.describe_jpeg(jpeg)).strip()
                 vlm_ms = round((time.perf_counter() - t_vlm) * 1000, 1)
@@ -707,7 +806,7 @@ class SceneWorker:
             await asyncio.sleep(sleep_sec)
 
 
-voice_loop = VoiceLoopController(settings.section("media").get("audio", {}), asr)
+voice_loop = VoiceLoopController(settings.section("media").get("audio", {}), asr, mcu=mcu)
 scene_worker = SceneWorker(settings.section("media"), vlm, camera_reader, scene_buffer)
 
 
@@ -788,6 +887,248 @@ class SessionWatcher:
 session_watcher = SessionWatcher()
 
 
+class EspAudioHealthMonitor:
+    """Polls ESP32 /api/audio periodically and auto-switches mic profile when a channel degrades.
+
+    Runs only while voice_loop.mic_source == "esp32". Logs every decision to events.jsonl so
+    the operator can understand why a specific profile was chosen or changed.
+
+    Health criteria (per-channel, evaluated from left_peak / right_peak / clip_count):
+      - Channel silent:  peak < SILENCE_THRESHOLD while the other is active  → switch to other mono
+      - Peak imbalance:  max(L,R)/min(L,R) > RATIO_THRESHOLD                → switch to louder channel
+      - Clipping burst:  clip_count delta > CLIP_BURST_THRESHOLD             → log warning (no switch,
+                         clipping may be momentary — sustained shows up as signal_state=="clipped")
+      - Sustained clip:  signal_state == "clipped"                           → log warning
+
+    Profile selection always stays within the philips32 family to match the hardware wiring.
+    """
+
+    INITIAL_DELAY_S = 30
+    _MONO_L = "inmp441_philips32_left"
+    _MONO_R = "inmp441_philips32_right"
+    _STEREO = "inmp441_philips32_stereo"
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task | None = None
+        self._last_clip_count: int = 0
+        self._last_result: dict[str, Any] = {}
+        self._healthy_mono_polls: int = 0
+        self.apply_config(settings.section("media").get("audio", {}).get("esp_health", {}))
+
+    def apply_config(self, cfg: dict[str, Any]) -> None:
+        self.poll_interval_s = int(cfg.get("poll_interval_s", 60))
+        self.silence_threshold = int(cfg.get("silence_threshold", 24))
+        self.ratio_threshold = float(cfg.get("ratio_threshold", 6.0))
+        self.clip_burst_threshold = int(cfg.get("clip_burst_threshold", 20))
+        self.restore_threshold_polls = int(cfg.get("restore_threshold_polls", 5))
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "running": self._task is not None and not self._task.done(),
+            "poll_interval_s": self.poll_interval_s,
+            "silence_threshold": self.silence_threshold,
+            "ratio_threshold": self.ratio_threshold,
+            "clip_burst_threshold": self.clip_burst_threshold,
+            "restore_threshold_polls": self.restore_threshold_polls,
+            "healthy_mono_polls": self._healthy_mono_polls,
+            "last_result": self._last_result,
+        }
+
+    async def start(self) -> None:
+        if self._task and not self._task.done():
+            return
+        self._task = asyncio.create_task(self._run(), name="esp_audio_health")
+
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._task = None
+
+    async def _run(self) -> None:
+        await asyncio.sleep(self.INITIAL_DELAY_S)
+        while True:
+            try:
+                if voice_loop.running and voice_loop.mic_source == "esp32":
+                    await self._check()
+            except Exception as exc:
+                event_log.append("esp32_health_error", {"error": str(exc)})
+            await asyncio.sleep(self.poll_interval_s)
+
+    async def _check(self) -> None:
+        result = await mcu.request("GET", "/api/audio")
+        if not result.ok:
+            event_log.append("esp32_health_poll_failed", {"status": result.status, "error": result.error})
+            return
+
+        cap = result.data.get("capture", {})
+        L = int(cap.get("left_peak", 0))
+        R = int(cap.get("right_peak", 0))
+        clip_count = int(cap.get("clip_count", 0))
+        signal_state = str(cap.get("signal_state", ""))
+        dc_offset = int(cap.get("dc_offset", 0))
+        detected = int(cap.get("detected_channels", 0))
+
+        clip_delta = max(0, clip_count - self._last_clip_count)
+        self._last_clip_count = clip_count
+
+        metrics = {
+            "profile": cap.get("profile"),
+            "left_peak": L,
+            "right_peak": R,
+            "signal_state": signal_state,
+            "clip_delta": clip_delta,
+            "clip_count_total": clip_count,
+            "dc_offset": dc_offset,
+            "detected_channels": detected,
+        }
+
+        warn_reasons: list[str] = []
+        if signal_state == "clipped":
+            warn_reasons.append("signal_state_clipped")
+        if clip_delta >= self.clip_burst_threshold:
+            warn_reasons.append(f"clip_burst:{clip_delta}")
+
+        current = voice_loop.esp32_mic_profile
+
+        # ── Stereo mode: detect bad channel → fallback to best mono ──
+        if current.endswith("stereo"):
+            left_ok = True
+            right_ok = True
+            bad_reasons: list[str] = []
+
+            if L < self.silence_threshold and R >= self.silence_threshold:
+                left_ok = False
+                bad_reasons.append("left_channel_silent")
+            elif R < self.silence_threshold and L >= self.silence_threshold:
+                right_ok = False
+                bad_reasons.append("right_channel_silent")
+            elif L < self.silence_threshold and R < self.silence_threshold:
+                left_ok = False
+                right_ok = False
+                bad_reasons.append("both_channels_below_threshold")
+
+            if left_ok and right_ok and L > 0 and R > 0:
+                ratio = max(L, R) / min(L, R)
+                if ratio >= self.ratio_threshold:
+                    if L > R:
+                        right_ok = False
+                        bad_reasons.append(f"right_peak_weak:ratio={ratio:.1f}")
+                    else:
+                        left_ok = False
+                        bad_reasons.append(f"left_peak_weak:ratio={ratio:.1f}")
+
+            if not bad_reasons:
+                entry: dict[str, Any] = {"status": "ok", **metrics}
+                if warn_reasons:
+                    entry = {"status": "warning", "reason": "|".join(warn_reasons), "action": "no_switch", **metrics}
+                event_log.append("esp32_audio_health", entry)
+                self._last_result = entry
+                return
+
+            all_reasons = bad_reasons + warn_reasons
+            if left_ok and not right_ok:
+                target = self._MONO_L
+                channel_verdict = "left_healthy_right_bad"
+            elif right_ok and not left_ok:
+                target = self._MONO_R
+                channel_verdict = "right_healthy_left_bad"
+            else:
+                entry = {"status": "warning", "reason": "|".join(all_reasons), "action": "no_switch", **metrics}
+                event_log.append("esp32_audio_health", entry)
+                self._last_result = entry
+                return
+
+            self._healthy_mono_polls = 0
+            entry = {
+                "status": "auto_switch",
+                "from_profile": current,
+                "to_profile": target,
+                "reason": "|".join(all_reasons),
+                "channel_verdict": channel_verdict,
+                **metrics,
+            }
+            event_log.append("esp32_audio_health_auto_switch", entry)
+            self._last_result = entry
+            voice_loop.esp32_mic_profile = target
+            asyncio.ensure_future(voice_loop.restart())
+            return
+
+        # ── Mono mode: restore to stereo when both channels recover ──
+        both_ok = L >= self.silence_threshold and R >= self.silence_threshold
+
+        if both_ok:
+            self._healthy_mono_polls += 1
+            if self._healthy_mono_polls >= self.restore_threshold_polls:
+                self._healthy_mono_polls = 0
+                entry = {
+                    "status": "auto_switch",
+                    "from_profile": current,
+                    "to_profile": self._STEREO,
+                    "reason": f"both_channels_recovered:{self.restore_threshold_polls}_consecutive_polls",
+                    **metrics,
+                }
+                event_log.append("esp32_audio_health_auto_switch", entry)
+                self._last_result = entry
+                voice_loop.esp32_mic_profile = self._STEREO
+                asyncio.ensure_future(voice_loop.restart())
+            else:
+                entry = {
+                    "status": "ok",
+                    "action": f"waiting_restore:{self._healthy_mono_polls}/{self.restore_threshold_polls}",
+                    **metrics,
+                }
+                event_log.append("esp32_audio_health", entry)
+                self._last_result = entry
+            return
+
+        # Not both OK — reset counter, check active channel health
+        self._healthy_mono_polls = 0
+        if current == self._MONO_L:
+            active_ok = L >= self.silence_threshold
+            fallback: str | None = self._MONO_R if R >= self.silence_threshold else None
+            bad_ch_reason = "left_channel_silent_while_in_mono_L"
+        else:
+            active_ok = R >= self.silence_threshold
+            fallback = self._MONO_L if L >= self.silence_threshold else None
+            bad_ch_reason = "right_channel_silent_while_in_mono_R"
+
+        if active_ok:
+            # Inactive channel silent — expected in mono mode, not an error
+            entry = {"status": "ok", **metrics}
+            if warn_reasons:
+                entry = {"status": "warning", "reason": "|".join(warn_reasons), "action": "no_switch", **metrics}
+            event_log.append("esp32_audio_health", entry)
+            self._last_result = entry
+            return
+
+        if fallback is None:
+            entry = {
+                "status": "degraded",
+                "reason": bad_ch_reason,
+                "action": "no_fallback_both_channels_silent",
+                **metrics,
+            }
+            event_log.append("esp32_audio_health", entry)
+            self._last_result = entry
+            return
+
+        entry = {
+            "status": "auto_switch",
+            "from_profile": current,
+            "to_profile": fallback,
+            "reason": bad_ch_reason,
+            **metrics,
+        }
+        event_log.append("esp32_audio_health_auto_switch", entry)
+        self._last_result = entry
+        voice_loop.esp32_mic_profile = fallback
+        asyncio.ensure_future(voice_loop.restart())
+
+
+esp_audio_health = EspAudioHealthMonitor()
+
+
 async def _audio_level_monitor() -> None:
     """Read Jetson ALSA mic and emit audio_level SSE events for the UI equalizer.
     Yields the device automatically when the voice loop is active (to avoid conflict).
@@ -858,6 +1199,7 @@ async def lifespan(_: FastAPI):
     camera_reader.start()
     await scene_worker.start()
     await session_watcher.start()
+    await esp_audio_health.start()
     level_monitor = asyncio.create_task(_audio_level_monitor(), name="audio_level_monitor")
     if runtime_state["mode"] == "exhibition" and settings.section("power").get("enforce_in_exhibition", True):
         status_payload = await _status_payload()
@@ -877,6 +1219,7 @@ async def lifespan(_: FastAPI):
         level_monitor.cancel()
         await asyncio.gather(level_monitor, return_exceptions=True)
         await voice_loop.stop()
+        await esp_audio_health.stop()
         await session_watcher.stop()
         # финальный коммит, если сессия осталась открытой
         async with session_lock:
@@ -1068,6 +1411,8 @@ async def _ui_status_payload() -> dict[str, Any]:
         },
         "modules": modules,
         "errors": errors,
+        "voice_loop": voice_loop.status(),
+        "esp_audio_health": esp_audio_health.status(),
         **data,
     }
 
@@ -1159,6 +1504,8 @@ async def _status_payload() -> dict[str, Any]:
         },
         "exhibition_gate": gate,
         "voice_loop": voice_loop.status(),
+        "esp_audio_health": esp_audio_health.status(),
+        "camera": camera_reader.status(),
         "scene_cache": scene_cache.as_dict(),
         "scene_worker": scene_worker.status(),
         "mcu": mcu_public,
@@ -2002,6 +2349,16 @@ def _rebuild_clients(section_path: str) -> list[str]:
         mcu = MCUClient(settings.section("mcu"))
         action_layer = ActionLayer(settings.section("mcu"), settings.section("safety"))
         restarted.append("mcu")
+    if section_path.startswith("media.audio") or section_path == "media":
+        audio_cfg = settings.section("media").get("audio", {})
+        voice_loop.mic_source = str(audio_cfg.get("mic_source", "local"))
+        voice_loop.esp32_mic_profile = str(audio_cfg.get("esp32_mic_profile", "inmp441_philips32_left"))
+        voice_loop.vad_threshold = int(audio_cfg.get("vad_threshold", 650))
+        if voice_loop.running:
+            asyncio.ensure_future(voice_loop.restart())
+        restarted.append("voice_loop")
+        esp_audio_health.apply_config(audio_cfg.get("esp_health", {}))
+        restarted.append("esp_audio_health")
     if section_path.startswith("agent"):
         prompt_builder = PromptBuilder(
             settings.persona_paths,

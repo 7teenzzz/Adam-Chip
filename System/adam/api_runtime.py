@@ -237,6 +237,8 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             data = await asyncio.to_thread(deps.capture_snapshot)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if not data:
+            raise HTTPException(status_code=503, detail="camera not ready")
         return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @router.get("/api/live_vlm/status")
