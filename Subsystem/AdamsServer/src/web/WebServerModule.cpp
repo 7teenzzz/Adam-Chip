@@ -2484,14 +2484,37 @@ esp_err_t speakerHandler(httpd_req_t *req) {
     size_t payloadLen = received;
     if (!wavHeaderHandled) {
       wavHeaderHandled = true;
-      if (received >= static_cast<int>(sizeof(WavHeader)) && memcmp(buffer, "RIFF", 4) == 0 && memcmp(buffer + 8, "WAVE", 4) == 0) {
+      if (memcmp(buffer, "RIFF", 4) == 0 && memcmp(buffer + 8, "WAVE", 4) == 0) {
+        if (received < static_cast<int>(sizeof(WavHeader))) {
+          // Header fragmented across TCP chunks — reject to avoid playing header bytes as audio.
+          endSpeakerStream();
+          return sendError(req, "400 Bad Request", "{\"error\":\"speaker_wav_header_incomplete\"}");
+        }
+        const WavHeader *hdr = reinterpret_cast<const WavHeader *>(buffer);
+        if (hdr->audioFormat != 1
+            || hdr->numChannels != 1
+            || hdr->sampleRate != kSpeakerSampleRate
+            || hdr->bitsPerSample != 16) {
+          endSpeakerStream();
+          return sendError(req, "400 Bad Request", "{\"error\":\"speaker_wav_format_mismatch\"}");
+        }
         payload = buffer + sizeof(WavHeader);
         payloadLen = received - sizeof(WavHeader);
       }
     }
 
     if (payloadLen > 0) {
-      writeSpeakerData(payload, payloadLen);
+      // Pace writes to I2S drain rate — if the ring is full, yield CPU so
+      // speakerPlaybackTask can drain it rather than silently dropping data.
+      // Ring drains at kSpeakerSampleRate × 2 B/s ≈ 88 KB/s; a 4 ms yield
+      // frees ~353 bytes, so a 1024 B chunk needs at most ~3 retries.
+      size_t offset = 0;
+      while (offset < payloadLen) {
+        offset += writeSpeakerData(payload + offset, payloadLen - offset);
+        if (offset < payloadLen) {
+          vTaskDelay(pdMS_TO_TICKS(4));
+        }
+      }
     }
   }
 
