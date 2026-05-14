@@ -1,16 +1,24 @@
 [Unit]
-Description=Adam Chip WhisperX ASR Service
+# NOTE: Production setup runs WhisperX in Docker via compose.yaml
+# (the canonical path — see `docker compose up -d adam-asr-whisperx`).
+# This native systemd unit is a fallback; it requires the i17jet user to be
+# in `video` and `render` groups so Tegra nvmap permits CUDA initialization
+# (without those groups, faster-whisper crashes with
+# `NvRmMemInitNvmap failed: Operation not permitted`).
+Description=Adam Chip WhisperX ASR Service (native fallback; prefer Docker)
 After=network.target
 Wants=network.target
 
 [Service]
 Type=simple
 User=i17jet
+Group=i17jet
+SupplementaryGroups=render video
 WorkingDirectory=/home/i17jet/Agents/Adam-Chip
 Environment=PYTHONPATH=System
 Environment=PATH=/home/i17jet/Agents/Adam-Chip/.venv/bin
 Environment=ADAM_ASR_PORT=8095
-Environment=ADAM_ASR_WHISPERX_MODEL=medium
+Environment=ADAM_ASR_WHISPERX_MODEL=small
 Environment=ADAM_ASR_LANGUAGE=ru
 Environment=ADAM_ASR_DEVICE=cuda
 Environment=ADAM_ASR_COMPUTE_TYPE=float16

@@ -52,6 +52,7 @@ class OpenAIChatClient:
             "temperature": temperature if temperature is not None else self.temperature,
             "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
             "stream": True,
+            "cache_prompt": True,  # llama-server: reuse KV cache across requests with same prefix
         }
         if self.disable_thinking:
             payload["thinking"] = {"type": "disabled"}
@@ -86,6 +87,7 @@ class OpenAIChatClient:
             "messages": messages,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "cache_prompt": True,
         }
         if self.disable_thinking:
             # Disable chain-of-thought for Gemma 4 and similar thinking models.
