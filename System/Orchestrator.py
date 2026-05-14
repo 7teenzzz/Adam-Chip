@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import urllib.request
 from typing import Any, Callable
+from uuid import uuid4
 
 try:
     from fastapi import Body, FastAPI, HTTPException, Query, Request
@@ -675,16 +676,17 @@ class VoiceLoopController:
     async def _transcribe_and_dispatch(self, pcm: bytes) -> bool:
         self.vad_state = "transcribing"
         pcm_ms = round(len(pcm) / max(1, self.sample_rate * 2) * 1000)
+        turn_id = str(uuid4())[:8]
         event_log.append("asr_request", {
             "pcm_ms": pcm_ms,
             "provider": self.asr_client.__class__.__name__,
-        })
+        }, turn_id=turn_id)
         t_asr = time.perf_counter()
         try:
             transcript = (await self.asr_client.transcribe_pcm(pcm)).strip()
         except Exception as exc:
             self.last_asr_error = str(exc)
-            event_log.append("voice_loop_error", {"stage": "asr", "error": str(exc)})
+            event_log.append("voice_loop_error", {"stage": "asr", "error": str(exc)}, turn_id=turn_id)
             return False
         asr_ms = round((time.perf_counter() - t_asr) * 1000, 1)
         runtime_state["last_asr_ms"] = asr_ms
@@ -692,7 +694,7 @@ class VoiceLoopController:
             "asr_ms": asr_ms,
             "empty": not transcript,
             "raw": transcript[:120] if transcript else "",
-        })
+        }, turn_id=turn_id)
         if not transcript:
             return False
 
@@ -703,17 +705,17 @@ class VoiceLoopController:
         # Strip wake word prefix (e.g. "адам, как дела?" → "как дела?")
         cleaned = self._wake_re.sub("", transcript).strip() if self._wake_re else transcript
         if not cleaned:
-            event_log.append("asr_wake_only", {"raw": transcript, "reason": "only_wake_word"})
+            event_log.append("asr_wake_only", {"raw": transcript, "reason": "only_wake_word"}, turn_id=turn_id)
             return False
 
         event_log.append("asr_final", {
             "text": cleaned, "raw": transcript, "source": "voice_loop", "asr_ms": asr_ms
-        })
+        }, turn_id=turn_id)
         try:
-            await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms)
+            await _run_dialogue_turn(cleaned, "voice_loop", asr_ms=asr_ms, turn_id=turn_id)
         except Exception as exc:
             self.last_asr_error = str(exc)
-            event_log.append("voice_loop_error", {"stage": "dialogue_turn", "error": str(exc)})
+            event_log.append("voice_loop_error", {"stage": "dialogue_turn", "error": str(exc)}, turn_id=turn_id)
             return False
         return True
 
@@ -1540,8 +1542,49 @@ async def gate() -> dict[str, Any]:
 
 
 @app.get("/api/agent/events")
-async def events(limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
-    return {"events": event_log.tail(limit)}
+async def events(
+    limit: int = Query(100, ge=1, le=500),
+    types: str | None = Query(None, description="Comma-separated event types, e.g. asr_result,adam_reply"),
+    turn_id: str | None = Query(None),
+    since: float | None = Query(None, description="Unix timestamp in milliseconds"),
+) -> dict[str, Any]:
+    type_list = [t.strip() for t in types.split(",")] if types else None
+    return {"events": event_log.tail(limit, types=type_list, turn_id=turn_id, since_ms=since)}
+
+
+@app.get("/api/agent/turns")
+async def agent_turns(limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
+    """Return recent completed dialogue turns with per-stage latencies and linked events."""
+    recent_metrics = metrics_log.tail(limit)
+    result = []
+    for m in recent_metrics:
+        tid = m.get("turn_id")
+        linked_events: list[dict[str, Any]] = []
+        if tid:
+            linked_events = event_log.tail(500, turn_id=tid)
+        result.append({
+            "turn_id": tid,
+            "ts": m.get("ts"),
+            "transcript": m.get("transcript", ""),
+            "reply": m.get("reply", ""),
+            "stages": {
+                "asr_ms": m.get("asr_ms"),
+                "llm_ms": m.get("llm_ms"),
+                "ttfv_ms": m.get("ttfv_ms"),
+                "tts_ms": m.get("tts_ms"),
+                "vlm_ms": m.get("vlm_ms"),
+                "total_ms": m.get("total_ms"),
+            },
+            "meta": {
+                "source": m.get("source"),
+                "action": m.get("action"),
+                "llm_model": m.get("llm_model"),
+                "voice_degraded": m.get("voice_degraded"),
+                "llm_error": m.get("llm_error"),
+            },
+            "events": linked_events,
+        })
+    return {"turns": result}
 
 
 # ---------- Tuning (runtime persona config) ----------
@@ -1714,22 +1757,24 @@ async def restart_service(name: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=result.detail)
     return {"ok": True, "service": name, "unit": unit, "detail": result.detail}
 
-async def _run_dialogue_turn(transcript: str, source: str, asr_ms: float | None = None) -> dict[str, Any]:
+async def _run_dialogue_turn(transcript: str, source: str, asr_ms: float | None = None, turn_id: str | None = None) -> dict[str, Any]:
+    if turn_id is None:
+        turn_id = str(uuid4())[:8]
     if turn_lock.locked() and source == "voice_loop":
-        event_log.append("voice_loop_error", {"stage": "turn", "error": "turn_already_in_progress", "text": transcript})
+        event_log.append("voice_loop_error", {"stage": "turn", "error": "turn_already_in_progress", "text": transcript}, turn_id=turn_id)
         return {"ok": False, "error": "turn_already_in_progress"}
 
     async with turn_lock:
         runtime_state["thinking"] = True
-        event_log.append("llm_thinking_started", {})
+        event_log.append("llm_thinking_started", {}, turn_id=turn_id)
         try:
-            return await _run_dialogue_turn_locked(transcript, source, asr_ms)
+            return await _run_dialogue_turn_locked(transcript, source, asr_ms, turn_id)
         finally:
             runtime_state["thinking"] = False
-            event_log.append("llm_thinking_finished", {})
+            event_log.append("llm_thinking_finished", {}, turn_id=turn_id)
 
 
-async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float | None) -> dict[str, Any]:
+async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float | None, turn_id: str | None = None) -> dict[str, Any]:
     t_total = time.perf_counter()
     tuning = tuning_store.current()
     sensors = await _sensor_payload()
@@ -1825,6 +1870,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             "visitor_name": visitor_name,
             "echo": echo_meta,
         },
+        turn_id=turn_id,
     )
 
     # Trace для UI: всегда метаданные, system_prompt только при trace_prompts=true.
@@ -1856,16 +1902,17 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
                 messages,
                 max_tokens=tuning.llm.max_tokens,
                 temperature=tuning.llm.temperature,
+                turn_id=turn_id,
             )
         except Exception as exc:
             llm_error = str(exc)
             runtime_state["last_error"] = llm_error
-            event_log.append("llm_error", {"error": llm_error})
+            event_log.append("llm_error", {"error": llm_error}, turn_id=turn_id)
             reply = "Я слышу тебя, но мой речевой контур сейчас нестабилен. Дай мне несколько секунд."
             llm_ms = round((time.perf_counter() - t_llm) * 1000, 1)
             ttfv_ms = llm_ms
             t_tts = time.perf_counter()
-            tts_result = await _speak(reply)
+            tts_result = await _speak(reply, turn_id=turn_id)
             tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
     else:
         try:
@@ -1875,16 +1922,17 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
                 event_log.append(
                     "reply_sanitized",
                     {"dropped": dropped, "raw_len": len(reply_raw)},
+                    turn_id=turn_id,
                 )
         except Exception as exc:
             llm_error = str(exc)
             runtime_state["last_error"] = llm_error
             reply = "Я слышу тебя, но мой речевой контур сейчас нестабилен. Дай мне несколько секунд."
-            event_log.append("llm_error", {"error": llm_error})
+            event_log.append("llm_error", {"error": llm_error}, turn_id=turn_id)
         llm_ms = round((time.perf_counter() - t_llm) * 1000, 1)
         ttfv_ms = llm_ms  # non-streaming: voice starts only after full generation
         t_tts = time.perf_counter()
-        tts_result = await _speak(reply)
+        tts_result = await _speak(reply, turn_id=turn_id)
         tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
     runtime_state["last_llm_ms"] = llm_ms
     runtime_state["last_tts_ms"] = tts_ms
@@ -1915,6 +1963,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     llm_cfg = settings.section("services").get("llm", {})
     tts_cfg = settings.section("services").get("tts", {})
     metrics_log.append({
+        "turn_id": turn_id,
         "source": source,
         "transcript": transcript,
         "reply": reply,
@@ -1966,9 +2015,11 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             "mcu": mcu_result,
             "timings": timings,
         },
+        turn_id=turn_id,
     )
     return {
         "ok": True,
+        "turn_id": turn_id,
         "reply": reply,
         "source": source,
         "voice_degraded": bool(tts_result.get("degraded")),
@@ -1984,6 +2035,7 @@ async def _stream_llm_and_speak(
     *,
     max_tokens: int | None = None,
     temperature: float | None = None,
+    turn_id: str | None = None,
 ) -> tuple[str, float, float, float, dict[str, Any]]:
     """Stream LLM tokens → sentence queue → TTS concurrently.
     Returns (reply, llm_ms, tts_ms, tts_result).
@@ -2050,7 +2102,7 @@ async def _stream_llm_and_speak(
             return
         speaking_started[0] = True
         runtime_state["speaking"] = True
-        event_log.append("tts_started", {"text": "(streaming)"})
+        event_log.append("tts_started", {"text": "(streaming)"}, turn_id=turn_id)
 
     async def _consumer() -> None:
         """Pipeline: synthesize chunk N+1 while playing chunk N.
@@ -2144,19 +2196,19 @@ async def _stream_llm_and_speak(
     # Эмитим tts_finished только если ранее реально начинали говорить.
     # Иначе UI может застрять в "Говорю" из-за событий-призраков.
     if speaking_started[0]:
-        event_log.append("tts_finished", {"ok": ok, "degraded": not ok})
+        event_log.append("tts_finished", {"ok": ok, "degraded": not ok}, turn_id=turn_id)
     return reply, llm_ms, ttfv_ms, tts_ms, tts_result
 
 
-async def _speak(text: str) -> dict[str, Any]:
+async def _speak(text: str, *, turn_id: str | None = None) -> dict[str, Any]:
     runtime_state["speaking"] = True
-    event_log.append("tts_started", {"text": text})
+    event_log.append("tts_started", {"text": text}, turn_id=turn_id)
     try:
         result = await tts.speak(text)
-        event_log.append("tts_finished", {"ok": bool(result.get("ok")), "degraded": bool(result.get("degraded"))})
+        event_log.append("tts_finished", {"ok": bool(result.get("ok")), "degraded": bool(result.get("degraded"))}, turn_id=turn_id)
         return result
     except Exception as exc:
-        event_log.append("tts_finished", {"ok": False, "error": str(exc)})
+        event_log.append("tts_finished", {"ok": False, "error": str(exc)}, turn_id=turn_id)
         raise
     finally:
         runtime_state["speaking"] = False

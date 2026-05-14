@@ -29,13 +29,15 @@ class EventLog:
         with self._lock:
             return self._dropped_count
 
-    def append(self, event_type: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        event = {
+    def append(self, event_type: str, payload: dict[str, Any] | None = None, *, turn_id: str | None = None) -> dict[str, Any]:
+        event: dict[str, Any] = {
             "id": str(uuid4()),
             "ts": utc_now(),
             "type": event_type,
             "payload": payload or {},
         }
+        if turn_id:
+            event["turn_id"] = turn_id
         encoded = json.dumps(event, ensure_ascii=False, sort_keys=True)
         with self._lock:
             with self.path.open("a", encoding="utf-8") as handle:
@@ -45,23 +47,35 @@ class EventLog:
         self._broadcast(subscribers, event)
         return event
 
-    def tail(self, limit: int = 100) -> list[dict[str, Any]]:
+    def tail(
+        self,
+        limit: int = 100,
+        *,
+        types: list[str] | None = None,
+        turn_id: str | None = None,
+        since_ms: float | None = None,
+    ) -> list[dict[str, Any]]:
         limit = max(1, min(limit, 500))
         with self._lock:
-            if len(self._recent) >= limit:
-                return list(self._recent)[-limit:]
+            source = list(self._recent)
 
-        if not self.path.exists():
-            return []
+        if not source and self.path.exists():
+            lines = self.path.read_text(encoding="utf-8").splitlines()[-(limit * 10):]
+            for line in lines:
+                try:
+                    source.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
 
-        lines = self.path.read_text(encoding="utf-8").splitlines()[-limit:]
-        events: list[dict[str, Any]] = []
-        for line in lines:
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        return events
+        if types:
+            type_set = set(types)
+            source = [e for e in source if e.get("type") in type_set]
+        if turn_id:
+            source = [e for e in source if e.get("turn_id") == turn_id]
+        if since_ms is not None:
+            source = [e for e in source if _ts_to_ms(e.get("ts", "")) >= since_ms]
+
+        return source[-limit:]
 
     def subscribe(self, max_queue: int = 200) -> asyncio.Queue[dict[str, Any]]:
         loop = asyncio.get_running_loop()
@@ -95,3 +109,13 @@ class EventLog:
             except asyncio.QueueFull:
                 with self._lock:
                     self._dropped_count += 1
+
+
+def _ts_to_ms(ts: str) -> float:
+    """Convert ISO-8601 timestamp string to Unix milliseconds, or 0.0 on error."""
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.timestamp() * 1000
+    except Exception:
+        return 0.0
