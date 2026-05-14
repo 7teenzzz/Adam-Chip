@@ -38,7 +38,7 @@ from adam.media import MediaHealth
 from adam.memory import EpisodicMemory, MemoryStore
 from adam.metrics import MetricsLog
 from adam.power import PowerGate
-from adam.prompt import PromptBuilder
+from adam.prompt import PromptBuilder, LeadingNoiseFilter, sanitize_reply
 from adam.config import PROJECT_ROOT
 from adam.sound import play_local_sound
 from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
@@ -1867,7 +1867,13 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
     else:
         try:
-            reply = await llm.generate(messages)
+            reply_raw = await llm.generate(messages)
+            reply, dropped = sanitize_reply(reply_raw)
+            if dropped:
+                event_log.append(
+                    "reply_sanitized",
+                    {"dropped": dropped, "raw_len": len(reply_raw)},
+                )
         except Exception as exc:
             llm_error = str(exc)
             runtime_state["last_error"] = llm_error
@@ -1982,6 +1988,8 @@ async def _stream_llm_and_speak(
     """
     queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=4)
     parts: list[str] = []
+    dropped_leading: list[str] = []
+    noise_filter = LeadingNoiseFilter()
     t_llm = time.perf_counter()
     llm_done_at: list[float] = [0.0]
     tts_chunks: list[dict[str, Any]] = []
@@ -1998,16 +2006,36 @@ async def _stream_llm_and_speak(
                     sentence = buf[: m.start()].strip()
                     buf = buf[m.end() :]
                     if sentence:
-                        parts.append(sentence)
-                        await queue.put(sentence)
-                        event_log.append("llm_partial", {"text": sentence, "index": len(parts) - 1})
+                        cleaned = noise_filter.accept(sentence)
+                        if cleaned is None:
+                            dropped_leading.append(sentence)
+                            event_log.append(
+                                "llm_partial_dropped",
+                                {"text": sentence, "reason": "leading_noise"},
+                            )
+                        else:
+                            parts.append(cleaned)
+                            await queue.put(cleaned)
+                            event_log.append(
+                                "llm_partial", {"text": cleaned, "index": len(parts) - 1}
+                            )
                     m = _SENTENCE_BOUNDARY_RE.search(buf)
         finally:
             remainder = buf.strip()
             if remainder:
-                parts.append(remainder)
-                await queue.put(remainder)
-                event_log.append("llm_partial", {"text": remainder, "index": len(parts) - 1})
+                cleaned = noise_filter.accept(remainder)
+                if cleaned is None:
+                    dropped_leading.append(remainder)
+                    event_log.append(
+                        "llm_partial_dropped",
+                        {"text": remainder, "reason": "leading_noise"},
+                    )
+                else:
+                    parts.append(cleaned)
+                    await queue.put(cleaned)
+                    event_log.append(
+                        "llm_partial", {"text": cleaned, "index": len(parts) - 1}
+                    )
             llm_done_at[0] = time.perf_counter()
             await queue.put(None)  # sentinel
 
@@ -2085,6 +2113,11 @@ async def _stream_llm_and_speak(
             raise _exc
 
     reply = " ".join(parts)
+    if dropped_leading:
+        event_log.append(
+            "reply_sanitized",
+            {"dropped": dropped_leading, "kept_sentences": len(parts)},
+        )
     llm_ms = round((llm_done_at[0] - t_llm) * 1000, 1)
     tts_start = t_tts_start[0] or time.perf_counter()
     ttfv_ms = round((tts_start - t_llm) * 1000, 1)
@@ -2283,7 +2316,8 @@ async def _warmup_wakeup() -> None:
                     messages, max_tokens=60, temperature=1.0
                 )
             else:
-                reply = await llm.generate(messages)
+                reply_raw = await llm.generate(messages)
+                reply, _ = sanitize_reply(reply_raw)
                 await _speak(reply)
             event_log.append("warmup_wakeup", {"reply": reply})
         except Exception as exc:
