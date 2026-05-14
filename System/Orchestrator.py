@@ -122,6 +122,31 @@ prompt_trace: deque[dict[str, Any]] = deque(maxlen=_PROMPT_TRACE_MAX)
 # Matches .!?。！？ and em-dash (—, common in Russian) followed by whitespace.
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？—])\s+")
 
+
+def _apply_wav_speed(wav: bytes, speed: float) -> bytes:
+    """Rewrite WAV header to play `speed`x faster. Pitch shifts up proportionally
+    (sample-rate trick — no resampling, near-zero CPU). For Russian male voice
+    at 1.25x the pitch shift is mild and still natural; at 1.5x it gets chipmunky.
+    """
+    if not wav or len(wav) < 44 or speed is None:
+        return wav
+    if abs(speed - 1.0) < 0.01:
+        return wav
+    if wav[0:4] != b"RIFF" or wav[8:12] != b"WAVE":
+        return wav
+    import struct
+    try:
+        orig_sr = struct.unpack("<I", wav[24:28])[0]
+        orig_br = struct.unpack("<I", wav[28:32])[0]
+        new_sr = max(8000, min(192000, int(round(orig_sr * speed))))
+        new_br = int(round(orig_br * speed))
+        out = bytearray(wav)
+        out[24:28] = struct.pack("<I", new_sr)
+        out[28:32] = struct.pack("<I", new_br)
+        return bytes(out)
+    except Exception:
+        return wav
+
 _NAME_INTRO_RE = re.compile(
     r"\b(?:меня\s+зовут|я\s+(?:это\s+)?|зовут\s+меня)\s+"
     r"([А-ЯЁA-Z][а-яёa-z\-]{1,30}(?:\s+[А-ЯЁA-Z][а-яёa-z\-]{1,30})?)\b",
@@ -2000,6 +2025,13 @@ async def _stream_llm_and_speak(
     t_llm = time.perf_counter()
     llm_done_at: list[float] = [0.0]
     tts_chunks: list[dict[str, Any]] = []
+    # Snapshot playback speed once per turn — changes mid-stream would create
+    # uneven audio between chunks. 1.0 = natural, 1.25 ≈ slightly faster
+    # (pitch shifts up ~25% but Eugene voice stays intelligible).
+    try:
+        _playback_speed = float(tuning_store.current().voice.speed_multiplier)
+    except Exception:
+        _playback_speed = 1.0
 
     async def _producer() -> None:
         buf = ""
@@ -2077,6 +2109,8 @@ async def _stream_llm_and_speak(
         try:
             # Synthesize WAV upfront (cheap on Silero, ~100–300ms).
             wav = await asyncio.to_thread(tts._get_wav_bytes_sync, phrase)
+            if wav is not None:
+                wav = _apply_wav_speed(wav, _playback_speed)
             # Wait until either delay elapses OR real TTS has already started.
             try:
                 await asyncio.wait_for(asyncio.sleep(delay_s), timeout=delay_s + 0.1)
@@ -2125,6 +2159,8 @@ async def _stream_llm_and_speak(
 
             # Synthesize this chunk in a thread (returns WAV bytes quickly).
             wav = await asyncio.to_thread(tts._get_wav_bytes_sync, chunk)
+            if wav is not None:
+                wav = _apply_wav_speed(wav, _playback_speed)
 
             if wav is None:
                 # /wav endpoint failed — fall back to /speak (blocks for synth+play).
