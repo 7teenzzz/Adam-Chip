@@ -1227,15 +1227,18 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
             await _play_error_sound("startup_services_failed")
 
     event_log.append("voice_loop_boot_muted", {"reason": "warmup_in_progress"})
+    # N6: pre-synthesize filler WAV BEFORE warmup_wakeup. If we ran it after,
+    # the streaming pipeline inside _warmup_wakeup would itself trigger
+    # _filler_task → on-demand synth → cache populated. Then _prewarm_filler
+    # would see cache-hit and exit silently with no event. Running it first
+    # ensures explicit prewarm logging and a true cache-hit on the warmup turn.
+    await _prewarm_filler()
     await _warmup_wakeup()
     # Prime llama.cpp prompt cache with the canonical real-turn system message
     # (wakeup monologue uses a modified system prompt → does not warm the prefix
     # that real voice turns actually hit). Without this, Turn 1 pays ~8s of
     # extra LLM TTFT for full prefill of the ~2800-token persona prefix.
     await _warmup_llm_prefix()
-    # N6: pre-synthesize filler WAV once so per-turn playback skips the
-    # synthesis round-trip. Saves ~100-300ms on each filler-triggering turn.
-    await _prewarm_filler()
     # Brief buffer after TTS finishes so ALSA drain noise decays before OWW starts.
     await asyncio.sleep(0.5)
     for _retry in range(5):
@@ -2523,6 +2526,7 @@ async def _prewarm_filler() -> None:
         speed = 1.0
     cache_key = (phrase, speed)
     if cache_key in _FILLER_WAV_CACHE:
+        event_log.append("prewarm_filler", {"ok": True, "cached": True, "phrase": phrase, "speed": speed})
         return
     try:
         wav = await asyncio.to_thread(tts._get_wav_bytes_sync, phrase)
