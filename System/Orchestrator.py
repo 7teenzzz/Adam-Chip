@@ -235,7 +235,6 @@ class VoiceLoopController:
         self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
         self._reply_absolute_deadline_sec: float = float(asr_cfg.get("reply_absolute_deadline_sec", 12.0))
         self._reply_window_expired_action: str = str(asr_cfg.get("reply_window_expired_action", "standby"))
-        self._reply_noise_gate: int = int(asr_cfg.get("reply_noise_gate", 0))
         self._voice_state: str       = "standby"   # standby | listening | reply
         self._reply_start: float     = 0.0
         self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
@@ -552,45 +551,28 @@ class VoiceLoopController:
                         self._ww_buf.clear()
                         continue
 
-                # ── LISTENING + REPLY: accumulation + endpointing ────────────────
-                # LISTENING: ALL frames are accumulated unconditionally — voiced
-                # controls only speech_ms/silence_ms counters and vad_state display.
-                # This ensures no leading syllables are clipped if they start below
-                # the RMS threshold.
-                # WebRTC VAD drives speech_ms/silence_ms counters in LISTENING and REPLY.
-                # In REPLY, also apply an RMS noise gate to prevent low-level room noise
-                # from inflating speech_ms when WebRTC VAD fires on ambient sound.
-                if self._voice_state == "reply" and self._reply_noise_gate > 0:
-                    effective_voiced = voiced and _rms >= self._reply_noise_gate
-                else:
-                    effective_voiced = voiced
-
-                if self._voice_state == "listening":
-                    # Always accumulate in listening — VAD only drives counters.
-                    if effective_voiced:
-                        if not speech_frames:
-                            event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
-                        speech_ms += self.frame_ms
-                        silence_ms = 0
-                        self.vad_state = "speech"
-                    elif speech_frames:
-                        silence_ms += self.frame_ms
-                        self.vad_state = "endpointing"
-                    else:
-                        self.vad_state = "silence"
-                    speech_frames.append(chunk)
-                elif effective_voiced:
-                    if not speech_frames:
+                # ── LISTENING + REPLY: unified accumulation + endpointing ────────
+                # Every frame is appended unconditionally; WebRTC VAD only drives
+                # speech_ms / silence_ms counters and vad_state display. This keeps
+                # leading syllables intact and treats reply identically to listening,
+                # so the visitor can speak naturally after Adam finishes without an
+                # RMS gate filtering quieter voices.
+                if voiced:
+                    # speech_started fires on the first voiced frame after state
+                    # entry or after a silent endpointing recovery (speech_ms == 0).
+                    # We can't use `not speech_frames` because ambient frames are
+                    # always appended.
+                    if speech_ms == 0:
                         event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
-                    speech_frames.append(chunk)
                     speech_ms += self.frame_ms
                     silence_ms = 0
+                    self.vad_state = "speech"
                 elif speech_frames:
-                    speech_frames.append(chunk)
                     silence_ms += self.frame_ms
                     self.vad_state = "endpointing"
                 else:
                     self.vad_state = "silence"
+                speech_frames.append(chunk)
 
                 if speech_frames and (
                     silence_ms >= self._command_endpointing_ms
