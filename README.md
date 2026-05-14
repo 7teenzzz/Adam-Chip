@@ -179,6 +179,45 @@ PyTorch для Silero ставится только Jetson-compatible спосо
 ./.venv/bin/python -m pip install --no-deps "silero>=0.5.0"
 ```
 
+## Логи Pipeline (удалённо с Windows)
+
+Каждый диалоговый turn получает `turn_id` — короткий UUID, который связывает все события ASR → LLM → TTS → Action в один trace.
+
+```powershell
+# Установить один раз
+$env:JETSON_URL = "http://192.168.0.X:8080"
+
+# Последние 5 turn-ов, все этапы
+python scripts/adam_pull_logs.py --last 5
+
+# Только ASR
+python scripts/adam_pull_logs.py --last 10 --stage asr
+
+# Live tail событий (Ctrl+C для остановки)
+python scripts/adam_pull_logs.py --follow
+
+# Live tail только TTS
+python scripts/adam_pull_logs.py --follow --stage tts
+
+# JSON для офлайн анализа
+python scripts/adam_pull_logs.py --last 20 --out json > turns.json
+```
+
+Доступные `--stage`: `oww`, `vad`, `asr`, `llm`, `tts`, `action`, `vlm`, `all`
+
+API-эндпоинты для curl/Postman:
+
+```bash
+# Сгруппированные turn-ы с латентностями и событиями
+curl -fsS 'http://JETSON:8080/api/agent/turns?limit=5' | python3 -m json.tool
+
+# Все события одного turn
+curl -fsS 'http://JETSON:8080/api/agent/events?turn_id=abc12345' | python3 -m json.tool
+
+# Фильтрация по типу события
+curl -fsS 'http://JETSON:8080/api/agent/events?types=asr_result,adam_reply&limit=20' | python3 -m json.tool
+```
+
 ## Firmware: сборка и прошивка (с Windows dev-машины)
 
 ```powershell
