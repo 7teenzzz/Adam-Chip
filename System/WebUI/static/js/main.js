@@ -248,7 +248,24 @@ function paintScene(status) {
   root.appendChild(el("div", { class: "caps" }, sc.stale ? "устарело" : "актуально"));
 }
 
+const SIDE_EVENTS = new Set([
+  "adam_reply",
+  "wake_word_detected",
+  "asr_final",
+  "asr_wake_only",
+  "voice_loop_error",
+  "voice_loop_started",
+  "voice_loop_stopped",
+  "tts_finished",
+  "barge_in",
+  "scene_updated",
+  "wake_silence_timeout",
+  "reply_window_expired",
+  "asr_no_reply_standby",
+]);
+
 function appendEventToSide(ev) {
+  if (!SIDE_EVENTS.has(ev.type)) return;
   const root = document.getElementById("side-events");
   if (!root) return;
   const ts = (ev.ts || "").slice(11, 19);

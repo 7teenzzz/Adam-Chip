@@ -345,7 +345,7 @@ async function load() {
   const [h, s, e, m] = await Promise.all([
     fetch('/health').then(r => r.json()).catch(() => ({})),
     fetch('/services').then(r => r.json()).catch(() => ({})),
-    fetch('/events?tail=60').then(r => r.json()).catch(() => []),
+    fetch('/events?tail=171').then(r => r.json()).catch(() => []),
     fetch('/metrics?tail=20').then(r => r.json()).catch(() => ({ source: 'file', turns: [] })),
   ]);
 
@@ -373,7 +373,7 @@ async function load() {
 
   // events
   let eb = '';
-  for (const ev of [...e].reverse().slice(0, 60)) {
+  for (const ev of [...e].reverse().slice(0, 171)) {
     eb += `<tr>
       <td class="col-ts">${esc((ev.ts || '').slice(11, 23))}</td>
       <td class="col-type">${esc(ev.type || '')}</td>
