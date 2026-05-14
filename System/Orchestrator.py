@@ -227,6 +227,9 @@ class VoiceLoopController:
                 "silero-vad load failed: %s — falling back to RMS vad_threshold=%d", _e, self.vad_threshold
             )
             self._silero_vad = None
+        # Silero requires ≥512 samples (32ms@16kHz); accumulate across 20ms frames.
+        self._vad_buf = bytearray()
+        self._voiced = False
         self.normalize_factor = float(audio_config.get("normalize_factor", 8000))
         self.min_speech_ms = int(audio_config.get("min_speech_ms", 280))
         self.asr_client = asr_client
@@ -385,13 +388,17 @@ class VoiceLoopController:
 
                 _rms = audioop.rms(chunk, 2)
                 if self._silero_vad is not None:
-                    _f32 = _torch.frombuffer(chunk, dtype=_torch.int16).float() / 32768.0
-                    if _f32.shape[0] < 512:
-                        _f32 = _torch.nn.functional.pad(_f32, (0, 512 - _f32.shape[0]))
-                    voiced = bool(
-                        self._silero_vad(_f32.unsqueeze(0), 16000).item()
-                        >= self._silero_vad_threshold
-                    )
+                    # Silero requires ≥512 samples; accumulate 20ms frames into 32ms chunks.
+                    self._vad_buf.extend(chunk)
+                    if len(self._vad_buf) >= 1024:  # 512 samples × 2 bytes
+                        _vad_chunk = bytes(self._vad_buf[:1024])
+                        del self._vad_buf[:1024]
+                        _f32 = _torch.frombuffer(_vad_chunk, dtype=_torch.int16).float() / 32768.0
+                        self._voiced = bool(
+                            self._silero_vad(_f32.unsqueeze(0), 16000).item()
+                            >= self._silero_vad_threshold
+                        )
+                    voiced = self._voiced
                 else:
                     voiced = bool(_rms >= self.vad_threshold)
                 level_tick += 1
@@ -426,6 +433,8 @@ class VoiceLoopController:
                                 self._set_voice_state("listening", "wake_word")
                                 if self._silero_vad is not None:
                                     self._silero_vad.reset_states()
+                                    self._vad_buf.clear()
+                                    self._voiced = False
                                 self._wake_detected_at = time.perf_counter()
                                 speech_frames.clear()
                                 speech_ms = 0
