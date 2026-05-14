@@ -1203,6 +1203,11 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
 
     event_log.append("voice_loop_boot_muted", {"reason": "warmup_in_progress"})
     await _warmup_wakeup()
+    # Prime llama.cpp prompt cache with the canonical real-turn system message
+    # (wakeup monologue uses a modified system prompt → does not warm the prefix
+    # that real voice turns actually hit). Without this, Turn 1 pays ~8s of
+    # extra LLM TTFT for full prefill of the ~2800-token persona prefix.
+    await _warmup_llm_prefix()
     # Brief buffer after TTS finishes so ALSA drain noise decays before OWW starts.
     await asyncio.sleep(0.5)
     for _retry in range(5):
@@ -2043,6 +2048,8 @@ async def _stream_llm_and_speak(
 
     t_tts_start: list[float] = [0.0]
     speaking_started: list[bool] = [False]
+    filler_playing: list[bool] = [False]
+    filler_done_event = asyncio.Event()
 
     def _mark_speaking_started() -> None:
         # Switch UI from "Думаю" → "Говорю" exactly when first WAV starts playing.
@@ -2051,6 +2058,44 @@ async def _stream_llm_and_speak(
         speaking_started[0] = True
         runtime_state["speaking"] = True
         event_log.append("tts_started", {"text": "(streaming)"})
+
+    async def _filler_task() -> None:
+        """Play a short filler phrase if LLM TTFT exceeds filler_delay_ms.
+        Synthesis runs in parallel with LLM streaming. Playback only happens
+        if the real reply hasn't started yet, so the user hears continuous
+        audio ("Хм... [real reply]") instead of a silent gap.
+        """
+        tts_cfg = settings.section("services").get("tts", {}) or {}
+        if not tts_cfg.get("filler_enabled", False):
+            filler_done_event.set()
+            return
+        delay_s = float(tts_cfg.get("filler_delay_ms", 1500)) / 1000.0
+        phrase = str(tts_cfg.get("filler_phrase", "Хм...")).strip()
+        if not phrase:
+            filler_done_event.set()
+            return
+        try:
+            # Synthesize WAV upfront (cheap on Silero, ~100–300ms).
+            wav = await asyncio.to_thread(tts._get_wav_bytes_sync, phrase)
+            # Wait until either delay elapses OR real TTS has already started.
+            try:
+                await asyncio.wait_for(asyncio.sleep(delay_s), timeout=delay_s + 0.1)
+            except asyncio.TimeoutError:
+                pass
+            if speaking_started[0] or t_tts_start[0] > 0 or runtime_state.get("interrupt_tts"):
+                # Real reply already in flight → skip filler.
+                return
+            if wav is None:
+                return
+            filler_playing[0] = True
+            _mark_speaking_started()
+            event_log.append("tts_filler", {"phrase": phrase})
+            await asyncio.to_thread(tts._play_wav_bytes_sync, wav)
+        except Exception as exc:
+            event_log.append("tts_filler_error", {"error": str(exc)})
+        finally:
+            filler_playing[0] = False
+            filler_done_event.set()
 
     async def _consumer() -> None:
         """Pipeline: synthesize chunk N+1 while playing chunk N.
@@ -2066,6 +2111,8 @@ async def _stream_llm_and_speak(
             if chunk is None:
                 # No more chunks — play the last pending wav if any.
                 if pending_wav is not None and not runtime_state.get("interrupt_tts"):
+                    if filler_playing[0]:
+                        await filler_done_event.wait()
                     _mark_speaking_started()
                     result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                     tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
@@ -2083,10 +2130,14 @@ async def _stream_llm_and_speak(
                 # /wav endpoint failed — fall back to /speak (blocks for synth+play).
                 # First play any pending chunk, then play this one synchronously.
                 if pending_wav is not None:
+                    if filler_playing[0]:
+                        await filler_done_event.wait()
                     _mark_speaking_started()
                     result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                     tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
                     pending_wav = None
+                if filler_playing[0]:
+                    await filler_done_event.wait()
                 _mark_speaking_started()
                 result = await asyncio.to_thread(tts._synthesize_sync, chunk)
                 tts_chunks.append(result)
@@ -2097,6 +2148,10 @@ async def _stream_llm_and_speak(
                 if runtime_state.get("interrupt_tts"):
                     runtime_state["interrupt_tts"] = False
                     break
+                # If a filler chunk is currently playing, wait for it to finish
+                # before starting the real reply so the audio stream is continuous.
+                if filler_playing[0]:
+                    await filler_done_event.wait()
                 _mark_speaking_started()
                 result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                 tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
@@ -2110,21 +2165,30 @@ async def _stream_llm_and_speak(
     # а не на стадии генерации LLM-токенов (статус "Думаю").
     producer_task = asyncio.create_task(_producer(), name="llm_producer")
     consumer_task = asyncio.create_task(_consumer(), name="tts_consumer")
+    filler_task = asyncio.create_task(_filler_task(), name="tts_filler")
     try:
-        # Wait for BOTH tasks — if producer fails, we still wait for consumer
+        # Wait for ALL three tasks — if producer fails, we still wait for consumer
         # so that aplay finishes before speaking=False (prevents self-echo).
+        # Filler is best-effort; it should always finish quickly.
         try:
-            await asyncio.wait({producer_task, consumer_task}, return_when=asyncio.ALL_COMPLETED)
+            await asyncio.wait(
+                {producer_task, consumer_task, filler_task},
+                return_when=asyncio.ALL_COMPLETED,
+            )
         except asyncio.CancelledError:
             tts.interrupt_playback()
             producer_task.cancel()
             consumer_task.cancel()
-            await asyncio.gather(producer_task, consumer_task, return_exceptions=True)
+            filler_task.cancel()
+            await asyncio.gather(
+                producer_task, consumer_task, filler_task, return_exceptions=True
+            )
             raise
     finally:
         runtime_state["speaking"] = False
         runtime_state["last_tts_finished_at"] = time.perf_counter()
     # Re-raise exceptions from child tasks (producer error → caller handles gracefully).
+    # Filler errors are non-fatal — already logged inside _filler_task.
     for _task in (producer_task, consumer_task):
         if not _task.cancelled() and (_exc := _task.exception()):
             raise _exc
@@ -2344,6 +2408,51 @@ async def _warmup_wakeup() -> None:
             event_log.append("warmup_error", {"error": str(exc)})
         finally:
             runtime_state["thinking"] = False
+
+
+async def _warmup_llm_prefix() -> None:
+    """Prime llama.cpp KV cache with the exact system prefix real voice turns use.
+
+    `_warmup_wakeup` appends a `[ВНУТРЕННИЙ СИГНАЛ]` directive to the system
+    message → the first real turn sees a different system string and pays full
+    prefill (~8s for ~2800 tokens). Here we issue one tiny request with the
+    canonical structure (include_scene/include_sensors True, sensors={},
+    scene_cache=""), `max_tokens=1`, response discarded — only the prefix
+    matters. Real turns reuse the cached prefix.
+    """
+    try:
+        scene_text = ""
+        try:
+            cached = scene_worker.cache()
+            scene_text = getattr(cached, "text", "") or ""
+        except Exception:
+            scene_text = ""
+        messages = prompt_builder.build_messages(
+            transcript="(прогрев)",
+            dialogue_history=[],
+            scene_cache=scene_text,
+            sensors={},
+            semantic_text="",
+            recent_episodic=[],
+            recent_scenes=[],
+            echo_hint=None,
+            history_turns=0,
+            include_scene=True,
+            include_sensors=True,
+            response_word_target=5,
+        )
+        t0 = time.monotonic()
+        # Use streaming to get explicit max_tokens=1 — prefill primes the cache,
+        # decode of a single token finishes the request quickly.
+        if hasattr(llm, "generate_streaming"):
+            async for _chunk in llm.generate_streaming(messages, max_tokens=1, temperature=0.0):
+                break
+        else:
+            await llm.generate(messages)
+        latency_ms = (time.monotonic() - t0) * 1000.0
+        event_log.append("warmup_llm_prefix", {"ok": True, "latency_ms": round(latency_ms, 1)})
+    except Exception as exc:
+        event_log.append("warmup_llm_prefix", {"ok": False, "error": str(exc)})
 
 
 async def _warmup_asr() -> None:

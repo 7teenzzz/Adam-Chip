@@ -82,9 +82,9 @@
     "asr": {
       "provider": "whisperx",
       "base_url": "http://127.0.0.1:8095",
-      "model": "medium",
+      "model": "small",
       "language": "ru",
-      "command_endpointing_ms": 3500,
+      "command_endpointing_ms": 2000,
       "reply_window_sec": 5,
       "reply_absolute_deadline_sec": 10,
       "sample_rate": 16000,
@@ -108,7 +108,10 @@
         "eugene",
         "random"
       ],
-      "output_device": "plughw:1,3"
+      "output_device": "plughw:1,3",
+      "filler_enabled": true,
+      "filler_phrase": "Хм...",
+      "filler_delay_ms": 1500
     }
   },
   "mcu": {
@@ -147,6 +150,6 @@
     "threshold": 0.15,
     "debounce_hits": 2,
     "vad_threshold": 0,
-    "wake_silence_timeout_sec": 5
+    "wake_silence_timeout_sec": 3
   }
 }
