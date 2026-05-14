@@ -5,10 +5,12 @@ Port: ADAM_LOG_VIEWER_PORT (default 8083).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
 import time
+import urllib.request
 from collections import deque
 from pathlib import Path
 from typing import Optional
@@ -34,10 +36,11 @@ else:
     except Exception:
         DATA_DIR = PROJECT_ROOT / "data" / "adam"
 
-EVENTS_FILE = DATA_DIR / "events.jsonl"
+EVENTS_FILE  = DATA_DIR / "events.jsonl"
 METRICS_FILE = DATA_DIR / "inference_metrics.jsonl"
-PORT = int(os.environ.get("ADAM_LOG_VIEWER_PORT", "8083"))
-_START_TIME = time.monotonic()
+PORT         = int(os.environ.get("ADAM_LOG_VIEWER_PORT", "8083"))
+_ORCH_PORT   = int(os.environ.get("ADAM_ORCHESTRATOR_PORT", "8080"))
+_START_TIME  = time.monotonic()
 
 _ADAM_UNITS = [
     "adam-orchestrator.service",
@@ -96,6 +99,16 @@ def _run(args: list[str]) -> tuple[str, str]:
         return "", str(exc)
 
 
+def _try_orch(path: str) -> dict | None:
+    """Try fetching from orchestrator; return parsed JSON or None on any error."""
+    try:
+        url = f"http://127.0.0.1:{_ORCH_PORT}{path}"
+        with urllib.request.urlopen(url, timeout=1) as r:  # noqa: S310
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
@@ -109,17 +122,24 @@ def health():
 
 
 @app.get("/events")
-def events(
+async def events(
     tail: int = Query(200, ge=1, le=2000),
     type: Optional[str] = Query(None),
     since: Optional[str] = Query(None),
 ):
+    path = f"/api/events?limit={tail}" + (f"&type={type}" if type else "")
+    data = await asyncio.to_thread(_try_orch, path)
+    if data is not None:
+        return data.get("events", [])
     return tail_jsonl(EVENTS_FILE, tail, type_filter=type, since=since)
 
 
 @app.get("/metrics")
-def metrics(tail: int = Query(50, ge=1, le=500)):
-    return tail_jsonl(METRICS_FILE, tail)
+async def metrics(tail: int = Query(50, ge=1, le=500)):
+    data = await asyncio.to_thread(_try_orch, f"/api/metrics/turns?limit={tail}")
+    if data is not None:
+        return {"source": "orchestrator", "turns": data.get("turns", [])}
+    return {"source": "file", "turns": tail_jsonl(METRICS_FILE, tail)}
 
 
 @app.get("/journal")
@@ -166,71 +186,247 @@ _DASHBOARD_HTML = """\
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="5">
-<title>Adam Log Viewer</title>
+<title>Adam · Logs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
-  body{font-family:ui-monospace,monospace;font-size:12px;background:#0d1117;color:#c9d1d9;margin:0;padding:16px}
-  h2{color:#58a6ff;margin:16px 0 6px}
-  table{border-collapse:collapse;width:100%;margin-bottom:16px}
-  th,td{border:1px solid #30363d;padding:4px 8px;text-align:left;white-space:pre-wrap;word-break:break-all}
-  th{background:#161b22;color:#8b949e}
-  .active{color:#3fb950}.inactive{color:#f85149}.unknown{color:#8b949e}
-  .etype{color:#d2a8ff}.ts{color:#8b949e}
-  a{color:#58a6ff;text-decoration:none}
+  :root{
+    --bg-0:#070708;--bg-1:#0d0d10;--bg-2:#15151a;--bg-3:#1d1d24;
+    --line:#262630;--line-strong:#3a3a48;
+    --text:#f2f2f5;--muted:#8a8a96;--dim:#5a5a66;
+    --accent:#43d17a;--accent-glow:#6effa8;
+    --cyan:#64c8ff;--warn:#f0b84a;--bad:#ff6363;
+    --radius-s:6px;--radius-m:10px;
+    --shadow-card:0 1px 0 rgba(255,255,255,.03) inset,0 12px 30px -20px rgba(0,0,0,.7);
+    --font-sans:"Inter",system-ui,sans-serif;
+    --font-mono:"JetBrains Mono","SF Mono",Consolas,monospace;
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg-0);color:var(--text);
+    font-family:var(--font-sans);font-size:13px;line-height:1.45;
+    -webkit-font-smoothing:antialiased;min-height:100vh}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{color:var(--accent-glow)}
+  ::-webkit-scrollbar{width:8px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--bg-3);border-radius:4px;border:2px solid var(--bg-0)}
+
+  /* topbar */
+  .topbar{height:52px;background:var(--bg-1);border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:12px;padding:0 20px;position:sticky;top:0;z-index:10}
+  .topbar-title{font-size:13px;font-weight:500;color:var(--text);letter-spacing:.02em}
+  .topbar-sub{font-size:11px;color:var(--muted);font-family:var(--font-mono)}
+  .spacer{flex:1}
+  .pulse{width:7px;height:7px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 8px var(--accent);animation:blink 2s infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* layout */
+  .page{padding:20px;max-width:1400px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+
+  /* card */
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-m);
+    box-shadow:var(--shadow-card);overflow:hidden;position:relative}
+  .card::before{content:"";position:absolute;inset:0;
+    background:linear-gradient(180deg,rgba(255,255,255,.025),transparent 60%);pointer-events:none}
+  .card-header{padding:10px 16px;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:8px}
+  .card-title{font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+    color:var(--muted);font-weight:500}
+  .card-body{padding:0}
+
+  /* badge */
+  .badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;
+    border-radius:999px;border:1px solid var(--line-strong);background:var(--bg-2);
+    font-size:11px;font-family:var(--font-mono);color:var(--muted)}
+  .badge.ok{border-color:var(--accent);color:var(--accent)}
+  .badge.bad{border-color:var(--bad);color:var(--bad)}
+  .badge.warn{border-color:var(--warn);color:var(--warn)}
+  .dot{width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block}
+
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;
+    letter-spacing:.07em;color:var(--muted);font-weight:500;border-bottom:1px solid var(--line);
+    background:var(--bg-2);white-space:nowrap}
+  td{padding:7px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:rgba(255,255,255,.018)}
+  .col-ts{font-family:var(--font-mono);color:var(--dim);white-space:nowrap;width:90px}
+  .col-type{font-family:var(--font-mono);color:var(--cyan);white-space:nowrap}
+  .col-ms{font-family:var(--font-mono);text-align:right;width:70px}
+  .col-payload{font-family:var(--font-mono);font-size:11px;color:var(--muted);
+    word-break:break-all;max-width:600px}
+
+  /* kv row */
+  .kv-row{display:flex;gap:24px;padding:12px 16px;flex-wrap:wrap}
+  .kv-item{display:flex;flex-direction:column;gap:2px}
+  .kv-label{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+  .kv-value{font-family:var(--font-mono);font-size:12px;color:var(--text)}
 </style>
 </head>
 <body>
-<h1 style="color:#58a6ff;margin-top:0">
-  Adam Log Viewer
-  <span style="font-size:12px;color:#8b949e">auto-refresh 5s</span>
-</h1>
-<p style="color:#8b949e">
-  data_dir: <code id="dd">…</code> &nbsp;|&nbsp; uptime: <code id="up">…</code>
-</p>
 
-<h2>Сервисы</h2>
-<div id="svc">загрузка…</div>
+<div class="topbar">
+  <div class="pulse"></div>
+  <span class="topbar-title">Adam Chip</span>
+  <span class="topbar-sub">log viewer · :8083</span>
+  <span class="spacer"></span>
+  <span class="topbar-sub" id="uptime">—</span>
+  <a id="dash-btn" href="#" target="_blank" rel="noopener"
+     style="font-size:11px;font-family:var(--font-mono);color:var(--muted);opacity:0.35;pointer-events:none;text-decoration:none;border:1px solid var(--line);padding:3px 10px;border-radius:var(--radius-s)"
+     title="Оркестратор недоступен">Dashboard ↗</a>
+</div>
 
-<h2>Последние события <a href="/events?tail=200">[все →]</a></h2>
-<div id="ev">загрузка…</div>
+<div class="page">
 
-<h2>Метрики (последние 20 turn'ов) <a href="/metrics?tail=50">[все →]</a></h2>
-<div id="mt">загрузка…</div>
+  <!-- health -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Система</span></div>
+    <div class="kv-row" id="health-kv">
+      <div class="kv-item"><span class="kv-label">data_dir</span><span class="kv-value" id="h-datadir">…</span></div>
+      <div class="kv-item"><span class="kv-label">events</span><span class="kv-value" id="h-events">…</span></div>
+      <div class="kv-item"><span class="kv-label">metrics</span><span class="kv-value" id="h-metrics">…</span></div>
+    </div>
+  </div>
+
+  <!-- services -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Сервисы</span>
+    </div>
+    <div class="card-body"><table>
+      <thead><tr><th>Юнит</th><th>Статус</th><th>Sub</th><th>Запущен</th></tr></thead>
+      <tbody id="svc-body"></tbody>
+    </table></div>
+  </div>
+
+  <!-- events -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">События</span>
+      <span class="spacer"></span>
+      <a href="/events?tail=500" style="font-size:11px">все →</a>
+    </div>
+    <div class="card-body"><table>
+      <thead><tr><th>Время</th><th>Тип</th><th>Payload</th></tr></thead>
+      <tbody id="ev-body"></tbody>
+    </table></div>
+  </div>
+
+  <!-- metrics -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Метрики pipeline</span>
+      <span id="mt-src" style="font-size:10px;font-family:var(--font-mono);color:var(--dim)"></span>
+      <span class="spacer"></span>
+      <a href="/metrics?tail=100" style="font-size:11px">все →</a>
+    </div>
+    <div class="card-body"><table>
+      <thead><tr><th>Время</th><th>ASR</th><th>LLM</th><th>TTS</th><th>Итого</th></tr></thead>
+      <tbody id="mt-body"></tbody>
+    </table></div>
+  </div>
+
+</div>
 
 <script>
+const fmtMs = v => v != null ? Math.round(v) + 'ms' : '—';
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+function msColor(v) {
+  if (v == null) return '';
+  if (v > 5000) return 'color:var(--bad)';
+  if (v > 2000) return 'color:var(--warn)';
+  return 'color:var(--accent)';
+}
+
 async function load() {
   const [h, s, e, m] = await Promise.all([
     fetch('/health').then(r => r.json()).catch(() => ({})),
     fetch('/services').then(r => r.json()).catch(() => ({})),
-    fetch('/events?tail=50').then(r => r.json()).catch(() => []),
-    fetch('/metrics?tail=20').then(r => r.json()).catch(() => []),
+    fetch('/events?tail=60').then(r => r.json()).catch(() => []),
+    fetch('/metrics?tail=20').then(r => r.json()).catch(() => ({ source: 'file', turns: [] })),
   ]);
 
-  document.getElementById('dd').textContent = h.data_dir || '?';
-  document.getElementById('up').textContent = (h.uptime_sec || 0) + 's';
+  // health
+  document.getElementById('uptime').textContent = 'uptime ' + (h.uptime_sec || 0) + 's';
+  document.getElementById('h-datadir').textContent = h.data_dir || '?';
+  document.getElementById('h-events').textContent = h.events_file_exists ? '✓' : '✗';
+  document.getElementById('h-metrics').textContent = h.metrics_file_exists ? '✓' : '✗';
 
-  let st = '<table><tr><th>Юнит</th><th>Состояние</th><th>SubState</th><th>С</th></tr>';
+  // services
+  let sb = '';
   for (const [u, v] of Object.entries(s)) {
-    const cls = v.active_state === 'active' ? 'active' : v.active_state === 'inactive' ? 'inactive' : 'unknown';
-    st += `<tr><td>${u}</td><td class="${cls}">${v.active_state}</td><td>${v.sub_state}</td><td class="ts">${v.since}</td></tr>`;
+    const ok = v.active_state === 'active';
+    const bad = v.active_state === 'inactive' || v.active_state === 'failed';
+    const cls = ok ? 'ok' : bad ? 'bad' : 'warn';
+    const since = v.since ? v.since.replace('MSK','').trim() : '—';
+    sb += `<tr>
+      <td style="font-family:var(--font-mono);font-size:11px">${esc(u)}</td>
+      <td><span class="badge ${cls}"><span class="dot"></span>${esc(v.active_state)}</span></td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">${esc(v.sub_state)}</td>
+      <td class="col-ts" style="font-size:11px">${esc(since)}</td>
+    </tr>`;
   }
-  document.getElementById('svc').innerHTML = st + '</table>';
+  document.getElementById('svc-body').innerHTML = sb;
 
-  let et = '<table><tr><th>Время</th><th>Тип</th><th>Payload</th></tr>';
-  for (const ev of [...e].reverse().slice(0, 50)) {
-    et += `<tr><td class="ts">${(ev.ts || '').slice(11, 23)}</td><td class="etype">${ev.type || ''}</td><td>${JSON.stringify(ev.payload || {})}</td></tr>`;
+  // events
+  let eb = '';
+  for (const ev of [...e].reverse().slice(0, 60)) {
+    eb += `<tr>
+      <td class="col-ts">${esc((ev.ts || '').slice(11, 23))}</td>
+      <td class="col-type">${esc(ev.type || '')}</td>
+      <td class="col-payload">${esc(JSON.stringify(ev.payload || {}))}</td>
+    </tr>`;
   }
-  document.getElementById('ev').innerHTML = et + '</table>';
+  document.getElementById('ev-body').innerHTML = eb || '<tr><td colspan="3" style="color:var(--dim);text-align:center;padding:20px">нет данных</td></tr>';
 
-  let mt = '<table><tr><th>Время</th><th>ASR</th><th>LLM</th><th>TTS</th><th>Итого</th></tr>';
-  const fmt = v => v != null ? Math.round(v) + 'ms' : '—';
-  for (const r of [...m].reverse().slice(0, 20)) {
-    mt += `<tr><td class="ts">${(r.ts || '').slice(11, 19)}</td><td>${fmt(r.asr_ms)}</td><td>${fmt(r.llm_ms)}</td><td>${fmt(r.tts_ms)}</td><td>${fmt(r.total_ms)}</td></tr>`;
+  // metrics — m may be {source, turns} (orchestrator) or {source, turns} (file)
+  const mRows = m && m.turns ? m.turns : [];
+  const mSrc  = m && m.source ? m.source : '?';
+  let mb = '';
+  for (const r of [...mRows].reverse().slice(0, 20)) {
+    mb += `<tr>
+      <td class="col-ts">${esc((r.ts || '').slice(11, 19))}</td>
+      <td class="col-ms" style="${msColor(r.asr_ms)}">${fmtMs(r.asr_ms)}</td>
+      <td class="col-ms" style="${msColor(r.llm_ms)}">${fmtMs(r.llm_ms)}</td>
+      <td class="col-ms" style="${msColor(r.tts_ms)}">${fmtMs(r.tts_ms)}</td>
+      <td class="col-ms" style="${msColor(r.total_ms)}">${fmtMs(r.total_ms)}</td>
+    </tr>`;
   }
-  document.getElementById('mt').innerHTML = mt + '</table>';
+  document.getElementById('mt-src').textContent  = mSrc;
+  document.getElementById('mt-body').innerHTML = mb || '<tr><td colspan="5" style="color:var(--dim);text-align:center;padding:20px">нет данных</td></tr>';
 }
 
 load();
+setInterval(load, 5000);
+
+// Dashboard cross-link: activate when orchestrator is reachable
+(function checkOrch() {
+  const btn  = document.getElementById('dash-btn');
+  const base = 'http://' + location.hostname + ':8080';
+  function probe() {
+    fetch(base + '/api/agent/status', { signal: AbortSignal.timeout(1000) })
+      .then(r => {
+        if (r.ok) {
+          btn.href              = base;
+          btn.style.opacity     = '1';
+          btn.style.pointerEvents = '';
+          btn.style.color       = 'var(--accent)';
+          btn.title             = 'Открыть Dashboard';
+        }
+      })
+      .catch(() => {
+        btn.style.opacity       = '0.35';
+        btn.style.pointerEvents = 'none';
+        btn.style.color         = 'var(--muted)';
+        btn.title               = 'Оркестратор недоступен';
+      });
+  }
+  probe();
+  setInterval(probe, 15000);
+})();
 </script>
 </body>
 </html>

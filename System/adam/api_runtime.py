@@ -416,6 +416,14 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         }
         return StreamingResponse(generator(), media_type="text/event-stream", headers=headers)
 
+    @router.get("/api/events")
+    async def events_history(
+        limit: int = Query(100, ge=1, le=500),
+        type: str | None = Query(None),
+    ) -> dict[str, Any]:
+        types = [type] if type else None
+        return {"events": deps.event_log.tail(limit, types=types)}
+
     return router
 
 

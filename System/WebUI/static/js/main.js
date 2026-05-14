@@ -84,6 +84,7 @@ const NAV_STRUCTURE = [
     ],
   },
   { key: "metrics", label: "Метрики" },
+  { key: "logs",    label: "Логи" },
 ];
 
 function navLink(key, label, indent = false) {
