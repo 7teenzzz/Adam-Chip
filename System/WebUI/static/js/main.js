@@ -158,10 +158,6 @@ function buildSide() {
       el("div", { class: "card-header" }, el("span", { class: "card-title" }, "Live events")),
       el("div", { class: "card-body", id: "side-events", style: "max-height:48vh; overflow-y:auto; padding:8px 12px" }),
     ]),
-    el("div", { class: "card" }, [
-      el("div", { class: "card-header" }, el("span", { class: "card-title" }, "Сцена")),
-      el("div", { class: "card-body", id: "side-scene", style: "font-size:13px; color:var(--muted)" }, "—"),
-    ]),
   ]);
 }
 
