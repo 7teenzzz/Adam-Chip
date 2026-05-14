@@ -280,6 +280,11 @@ class VoiceLoopController:
         self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
         self._wake_detected_at: float = 0.0
         self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
+        self.esp_mic_fail_threshold: int = int(audio_config.get("esp_mic_fail_threshold", 3))
+        self.esp_mic_retry_interval_sec: float = float(audio_config.get("esp_mic_retry_interval_sec", 30.0))
+        self._esp_mic_fallback: bool = False
+        self._esp_mic_fail_count: int = 0
+        self._esp_mic_last_retry: float = 0.0
 
     @property
     def device_in_use(self) -> bool:
@@ -304,6 +309,8 @@ class VoiceLoopController:
             "wake_words": self.wake_words,
             "last_wake_skip": self.last_wake_skip,
             "voice_state": self._voice_state,
+            "esp_mic_fallback": self._esp_mic_fallback,
+            "mic_active_source": "local_fallback" if (self.mic_source == "esp32" and self._esp_mic_fallback) else self.mic_source,
         }
 
     def _set_voice_state(self, state: str, reason: str = "") -> None:
@@ -420,6 +427,7 @@ class VoiceLoopController:
         if self._mcu is None:
             raise RuntimeError("mic_source=esp32 requires mcu client — not configured")
         url = self._mcu.mic_stream_url()
+        _session_fail_count = 0
         while self.running:
             profile = self.esp32_mic_profile
             is_stereo = profile.endswith("stereo")
@@ -428,6 +436,8 @@ class VoiceLoopController:
                 resp = await asyncio.to_thread(urllib.request.urlopen, url, timeout=10)
                 await asyncio.to_thread(resp.read, 44)  # skip WAV header
                 read_fn = self._stereo_to_mono_reader(resp.read) if is_stereo else resp.read
+                _session_fail_count = 0
+                self._esp_mic_fail_count = 0
                 await self._vad_loop(read_fn, frame_bytes)
             except asyncio.CancelledError:
                 raise
@@ -435,8 +445,20 @@ class VoiceLoopController:
                 self.vad_state = "error"
                 self.last_asr_error = str(exc)
                 event_log.append("voice_loop_error", {"stage": "esp32_mic", "error": str(exc)})
+                _session_fail_count += 1
+                self._esp_mic_fail_count += 1
+                if _session_fail_count >= self.esp_mic_fail_threshold:
+                    self._esp_mic_fallback = True
+                    self._esp_mic_last_retry = time.perf_counter()
+                    event_log.append("esp32_mic_fallback_start", {
+                        "fail_count": _session_fail_count, "error": str(exc),
+                    })
+                    break
                 if self.running:
                     await asyncio.sleep(2.0)
+        if self._esp_mic_fallback and self.running:
+            fb_frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
+            await self._run_local(fb_frame_bytes)
         self.running = False
         self.vad_state = "idle"
 
@@ -956,9 +978,23 @@ class EspAudioHealthMonitor:
             await asyncio.sleep(self.poll_interval_s)
 
     async def _check(self) -> None:
+        if voice_loop._esp_mic_fallback:
+            elapsed = time.perf_counter() - voice_loop._esp_mic_last_retry
+            if elapsed < voice_loop.esp_mic_retry_interval_sec:
+                return
+
         result = await mcu.request("GET", "/api/audio")
         if not result.ok:
             event_log.append("esp32_health_poll_failed", {"status": result.status, "error": result.error})
+            return
+
+        if voice_loop._esp_mic_fallback:
+            voice_loop._esp_mic_fallback = False
+            voice_loop._esp_mic_fail_count = 0
+            voice_loop._esp_mic_last_retry = 0.0
+            event_log.append("esp32_mic_restored", {})
+            if voice_loop.running:
+                asyncio.ensure_future(voice_loop.restart())
             return
 
         cap = result.data.get("capture", {})
@@ -2351,7 +2387,11 @@ def _rebuild_clients(section_path: str) -> list[str]:
         restarted.append("mcu")
     if section_path.startswith("media.audio") or section_path == "media":
         audio_cfg = settings.section("media").get("audio", {})
-        voice_loop.mic_source = str(audio_cfg.get("mic_source", "local"))
+        new_mic_source = str(audio_cfg.get("mic_source", "local"))
+        if new_mic_source != voice_loop.mic_source:
+            voice_loop._esp_mic_fallback = False
+            voice_loop._esp_mic_fail_count = 0
+        voice_loop.mic_source = new_mic_source
         voice_loop.esp32_mic_profile = str(audio_cfg.get("esp32_mic_profile", "inmp441_philips32_left"))
         voice_loop.vad_threshold = int(audio_cfg.get("vad_threshold", 650))
         if voice_loop.running:

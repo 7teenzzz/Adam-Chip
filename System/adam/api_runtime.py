@@ -206,6 +206,10 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
     async def audio_devices() -> dict[str, Any]:
         return await asyncio.to_thread(_aplay_devices)
 
+    @router.get("/api/audio/input_devices")
+    async def audio_input_devices() -> dict[str, Any]:
+        return await asyncio.to_thread(_arecord_devices)
+
     @router.get("/api/persona")
     async def get_persona() -> dict[str, Any]:
         paths = deps.settings.section("agent").get("persona_paths", [])
@@ -364,12 +368,20 @@ def _docker_inspect(name: str) -> dict[str, Any]:
     }
 
 
-def _aplay_devices() -> dict[str, Any]:
-    aplay = shutil.which("aplay")
-    if aplay is None:
-        return {"devices": [], "error": "aplay not installed"}
+_USEFUL_OUTPUT_PREFIXES = ("pulse", "default", "hw:", "plughw:", "sysdefault:", "dmix:", "hdmi:", "iec958:", "front:", "rear:", "surround")
+_USEFUL_INPUT_PREFIXES  = ("pulse", "default", "hw:", "plughw:", "sysdefault:", "dsnoop:")
+
+
+def _filter_alsa_devices(devices: list[dict[str, str]], prefixes: tuple[str, ...]) -> list[dict[str, str]]:
+    return [d for d in devices if any(d["name"] == p or d["name"].startswith(p) for p in prefixes)]
+
+
+def _run_alsa_list(cmd: str) -> dict[str, Any]:
+    binary = shutil.which(cmd)
+    if binary is None:
+        return {"devices": [], "error": f"{cmd} not installed"}
     try:
-        proc = subprocess.run([aplay, "-L"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
+        proc = subprocess.run([binary, "-L"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"devices": [], "error": str(exc)}
     if proc.returncode != 0:
@@ -391,6 +403,18 @@ def _aplay_devices() -> dict[str, Any]:
     if name is not None:
         devices.append({"name": name, "description": "\n".join(description_parts).strip()})
     return {"devices": devices}
+
+
+def _aplay_devices() -> dict[str, Any]:
+    result = _run_alsa_list("aplay")
+    result["devices"] = _filter_alsa_devices(result.get("devices", []), _USEFUL_OUTPUT_PREFIXES)
+    return result
+
+
+def _arecord_devices() -> dict[str, Any]:
+    result = _run_alsa_list("arecord")
+    result["devices"] = _filter_alsa_devices(result.get("devices", []), _USEFUL_INPUT_PREFIXES)
+    return result
 
 
 def _decode_to_pcm(body: bytes, content_type: str) -> tuple[bytes, int]:

@@ -66,13 +66,24 @@ function bubble(turn) {
   return wrap;
 }
 
+const CAMERA_LABELS = {
+  esp_mjpeg:        "ESP32 CAM",
+  jetson_gstreamer: "Jetson",
+  remote_rtsp:      "RTSP",
+};
+
+function cameraSourceLabel(primary) {
+  return CAMERA_LABELS[primary] || (primary ? primary : "камера");
+}
+
 export function mount(target) {
   // ---- Vision (right panel) ----
   const jetImg = el("img", {
-    alt: "Jetson snapshot",
+    alt: "camera snapshot",
     style: "width:100%; max-height:240px; object-fit:contain; border-radius:var(--radius-s); border:1px solid var(--line); background:var(--bg-2); display:block",
   });
   const jetStatus = el("span", { style: "font-size:10px; color:var(--muted); font-family:var(--font-mono)" }, "—");
+  const cameraLabel = el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "камера");
   const sceneCaption = el("div", { style: "color:var(--muted); font-size:12px; white-space:pre-wrap; line-height:1.5" }, "Сцена не описана.");
 
   // ---- Equalizer — driven by server-side audio_level SSE events ----
@@ -225,8 +236,13 @@ export function mount(target) {
     if (!sc?.text) { sceneCaption.textContent = "Сцена не описана."; return; }
     sceneCaption.textContent = sc.text + (sc.stale ? " (устарело)" : "");
   }
-  const unsubScene = state.subscribe("status", () => { paintScene(); });
+  function paintCameraLabel() {
+    const primary = state.get("status")?.media?.video?.primary;
+    cameraLabel.textContent = cameraSourceLabel(primary);
+  }
+  const unsubScene = state.subscribe("status", () => { paintScene(); paintCameraLabel(); });
   paintScene();
+  paintCameraLabel();
   startJetTimer();
 
   // ---- Transcript ----
@@ -271,7 +287,7 @@ export function mount(target) {
       // Right: vision + mic + asr
       el("div", { style: "display:flex; flex-direction:column; gap:8px; padding:12px; overflow-y:auto; min-width:0" }, [
         el("div", { style: "display:flex; gap:8px; align-items:center" }, [
-          el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Jetson"),
+          cameraLabel,
           jetStatus,
         ]),
         jetImg,
