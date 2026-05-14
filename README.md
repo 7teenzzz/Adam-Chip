@@ -179,28 +179,43 @@ PyTorch для Silero ставится только Jetson-compatible спосо
 ./.venv/bin/python -m pip install --no-deps "silero>=0.5.0"
 ```
 
-## Логи Pipeline (удалённо с Windows)
+## Логи Pipeline (удалённо с Windows / macOS)
 
 Каждый диалоговый turn получает `turn_id` — короткий UUID, который связывает все события ASR → LLM → TTS → Action в один trace.
 
-```powershell
-# Установить один раз
-$env:JETSON_URL = "http://192.168.0.X:8080"
+Скрипт написан на чистом Python 3, без внешних зависимостей — работает на Windows и macOS одинаково.
 
-# Последние 5 turn-ов, все этапы
+**Windows (PowerShell):**
+
+```powershell
+$env:JETSON_URL = "http://192.168.0.X:8080"
 python scripts/adam_pull_logs.py --last 5
+```
+
+**macOS / Linux:**
+
+```bash
+export JETSON_URL="http://192.168.0.X:8080"
+python3 scripts/adam_pull_logs.py --last 5
+```
+
+**Примеры:**
+
+```bash
+# Последние 5 turn-ов, все этапы
+python3 scripts/adam_pull_logs.py --last 5
 
 # Только ASR
-python scripts/adam_pull_logs.py --last 10 --stage asr
+python3 scripts/adam_pull_logs.py --last 10 --stage asr
 
 # Live tail событий (Ctrl+C для остановки)
-python scripts/adam_pull_logs.py --follow
+python3 scripts/adam_pull_logs.py --follow
 
 # Live tail только TTS
-python scripts/adam_pull_logs.py --follow --stage tts
+python3 scripts/adam_pull_logs.py --follow --stage tts
 
 # JSON для офлайн анализа
-python scripts/adam_pull_logs.py --last 20 --out json > turns.json
+python3 scripts/adam_pull_logs.py --last 20 --out json > turns.json
 ```
 
 Доступные `--stage`: `oww`, `vad`, `asr`, `llm`, `tts`, `action`, `vlm`, `all`
