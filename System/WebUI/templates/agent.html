@@ -11,18 +11,9 @@ body{margin:0;background:#070707;color:#f4f4f4;font:14px/1.4 system-ui,Segoe UI,
 button,input{font:inherit}button{padding:8px 10px;background:#1d7f43;color:white;border:0;border-radius:6px;cursor:pointer}
 button.secondary{background:#333}.row{display:flex;gap:8px;flex-wrap:wrap}.turn{display:flex;gap:8px;margin-top:12px}
 input{flex:1;min-width:220px;padding:9px;background:#050505;color:#fff;border:1px solid #333;border-radius:6px}
-#vstatus{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600;letter-spacing:.05em;border:1px solid #333;background:#111;transition:background .15s,color .15s,border-color .15s}
-#vstatus .vdot{width:10px;height:10px;border-radius:50%;background:currentColor;flex-shrink:0}
-#vstatus.vs-standby{color:#666;border-color:#2a2a2a}
-#vstatus.vs-listening{color:#a855f7;border-color:#6b21a8;background:#1a0d2e;box-shadow:0 0 8px #a855f740}
-#vstatus.vs-thinking{color:#22d3ee;border-color:#0e7490;background:#0a1f24;box-shadow:0 0 8px #22d3ee40}
-#vstatus.vs-speaking{color:#43d17a;border-color:#166534;background:#071a0e}
-#vstatus.vs-reply{color:#6366f1;border-color:#3730a3;background:#0e0e2a}
-#vstatus.vs-transcribing{color:#f0b84a;border-color:#92400e;background:#1a1200}
 @media(max-width:980px){.grid{grid-template-columns:1fr}.kv{grid-template-columns:96px 1fr}.turn{flex-direction:column}}
 </style></head><body><div class="wrap">
-<div class="top"><div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap"><div><h1 style="margin:0">Adam Chip</h1><div class="muted" id="mode">mode</div></div>
-<div id="vstatus" class="vs-standby"><span class="vdot"></span><span id="vstatus-label">ОЖИДАНИЕ</span></div></div>
+<div class="top"><div><h1 style="margin:0">Adam Chip</h1><div class="muted" id="mode">mode</div></div>
 <div class="row"><a href="/dash" style="color:#55d17a">/dash</a><a href="/debug" style="color:#55d17a">/debug</a><button onclick="setMode('maintenance')" class="secondary">maintenance</button><button onclick="setMode('exhibition')">exhibition</button><button onclick="listenStart()">listen start</button><button onclick="listenStop()" class="secondary">listen stop</button><button onclick="stopAgent()" class="secondary">stop/idle</button><button onclick="testVoice()" class="secondary">test voice</button></div></div>
 <div class="turn"><input id="text" placeholder="Тестовая реплика зрителя"><button onclick="turn()">test turn</button></div>
 <div class="grid">
@@ -60,36 +51,5 @@ async function listenStop(){await j('/api/agent/listen/stop',{method:'POST'}); r
 async function stopAgent(){await j('/api/agent/stop',{method:'POST'}); refresh()}
 async function testVoice(){await j('/api/agent/say',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'Проверка голоса Adam Chip.'})}); refresh()}
 async function turn(){const transcript=document.getElementById('text').value; await j('/api/agent/turn',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript})}); document.getElementById('text').value=''; refresh()}
-refresh(); setInterval(refresh,3000)
-
-// ── Voice state indicator (fast poll 300ms) ───────────────────────────────
-const vstatus = document.getElementById('vstatus');
-const vstatusLabel = document.getElementById('vstatus-label');
-let _thinking = false;
-let _speaking = false;
-
-function setVStatus(cls, label) {
-  vstatus.className = 'vs-' + cls;
-  vstatusLabel.textContent = label;
-}
-
-async function refreshVoice() {
-  try {
-    const [vl, ag] = await Promise.all([
-      j('/api/agent/listen/status'),
-      j('/api/agent/status').then(s => s.agent).catch(() => ({}))
-    ]);
-    _thinking = !!ag.thinking;
-    _speaking = !!ag.speaking;
-    const vs = vl.voice_state || 'standby';
-    const vad = vl.vad_state || 'idle';
-    if (_thinking) { setVStatus('thinking', 'ДУМАЕТ'); return; }
-    if (_speaking) { setVStatus('speaking', 'ГОВОРИТ'); return; }
-    if (vs === 'listening') { setVStatus('listening', 'СЛУШАЕТ'); return; }
-    if (vs === 'reply')     { setVStatus('reply',     'РЕЖИМ ОТВЕТА'); return; }
-    if (vad === 'transcribing') { setVStatus('transcribing', 'ТРАНСКРИБИРУЕТ'); return; }
-    setVStatus('standby', 'ОЖИДАНИЕ');
-  } catch (_) {}
-}
-refreshVoice(); setInterval(refreshVoice, 300);
+refresh(); setInterval(refresh,3000);
 </script></body></html>
