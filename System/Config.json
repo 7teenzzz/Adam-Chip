@@ -98,7 +98,7 @@
       "base_url": "http://127.0.0.1:8082",
       "model": "v5_5_ru",
       "speaker": "eugene",
-      "sample_rate": 48000,
+      "sample_rate": 24000,
       "timeout_sec": 20,
       "available_speakers": [
         "aidar",
