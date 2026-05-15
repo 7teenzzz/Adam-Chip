@@ -602,7 +602,10 @@ class VoiceLoopController:
                 _rms = audioop.rms(chunk, 2)
                 voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
                 level_tick += 1
-                if level_tick >= 5:
+                # T15 UI-lag fix: emit at 5 Hz instead of 10 Hz. With 20 ms
+                # frames, tick=10 → one event per 200 ms — enough for a
+                # smooth equalizer without saturating the SSE stream.
+                if level_tick >= 10:
                     level_tick = 0
                     norm = round(min(1.0, (_rms / self.normalize_factor) ** 0.5), 3)
                     payload: dict[str, Any] = {"level": norm, "state": self._voice_state}
@@ -1319,7 +1322,8 @@ async def _audio_level_monitor() -> None:
     raw_dev = str(audio_cfg.get("input_device", "hw:1,0"))
     device = f"plughw:{raw_dev[3:]}" if raw_dev.startswith("hw:") else raw_dev
     sample_rate = int(audio_cfg.get("sample_rate", 16000))
-    frame_bytes = sample_rate * 2 // 10  # 100 ms of 16-bit mono
+    # T15 UI-lag fix: 200 ms chunks → 5 Hz emit rate (matches in-loop emitter).
+    frame_bytes = sample_rate * 2 // 5  # 200 ms of 16-bit mono
     normalize_factor = float(audio_cfg.get("normalize_factor", 8000))
 
     while True:
