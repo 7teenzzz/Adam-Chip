@@ -2991,7 +2991,7 @@ esp_err_t systemStreamRestartHandler(httpd_req_t *req) {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port   = kHttpPort + 1 + 1;  // avoid collision with control ctrl_port
   streamConfig.max_uri_handlers  = 6;
-  streamConfig.max_open_sockets  = 6;  // T17 fix: headroom for zombie cleanup window
+  streamConfig.max_open_sockets  = 4;  // T17 GSD: revert from 6 — peek-probe handles zombies, +16 KB stack risked OOM on Wi-Fi boot
   streamConfig.lru_purge_enable  = true;
   streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size        = 8192;
@@ -3071,7 +3071,7 @@ bool startWebServer() {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port = controlConfig.ctrl_port + 1;
   streamConfig.max_uri_handlers = 6;
-  streamConfig.max_open_sockets = 6;  // T17 fix: headroom for zombie cleanup window
+  streamConfig.max_open_sockets = 4;  // T17 GSD: revert from 6 — peek-probe handles zombies, +16 KB stack risked OOM on Wi-Fi boot
   streamConfig.lru_purge_enable = true;
   streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size = 8192;
