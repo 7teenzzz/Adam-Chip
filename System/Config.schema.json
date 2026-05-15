@@ -364,13 +364,13 @@
             },
             "max_new_tokens": {
               "type": "integer",
-              "description": "Maximum new tokens in VLM scene description. Keep short — descriptions are injected into the LLM prompt.",
-              "default": 48
+              "description": "Maximum new tokens in VLM scene description. 80 recommended for two-part Scene+Engagement format. Higher values increase inference latency on Jetson.",
+              "default": 80
             },
             "prompt": {
               "type": "string",
-              "description": "Scene analysis prompt sent to the VLM with each frame. Must be in English — VILA 1.5-3b loops on Russian input.",
-              "default": "Describe the scene in one brief sentence: people, movements, notable objects. No Chinese characters."
+              "description": "Scene analysis prompt sent to the VLM with each frame. English only — VILA 1.5-3b produces better output in English. Supports exhibition-aware two-part format: 'Scene: [count+position]. Engagement: [level].' When a previous scene exists, Python appends 'Previous observation:' for delta context automatically.",
+              "default": "You are a fixed camera sensor in an interactive art installation. Describe in this format:\n\"Scene: [count+position]. Engagement: [none/watching/approaching/leaving/interacting].\"\nIf empty: \"Scene: empty room. Engagement: none.\"\nEnglish only."
             }
           }
         },

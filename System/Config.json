@@ -79,8 +79,8 @@
       "base_url": "http://127.0.0.1:8084",
       "model": "Efficient-Large-Model/VILA1.5-3b",
       "timeout_sec": 20,
-      "max_new_tokens": 48,
-      "prompt": "Describe the scene in one brief sentence: people, movements, notable objects. No Chinese characters."
+      "max_new_tokens": 80,
+      "prompt": "You are a fixed camera sensor in an interactive art installation. Describe in this format:\n\"Scene: [count+position]. Engagement: [none/watching/approaching/leaving/interacting].\"\nExample: \"Scene: 2 people near installation, one leaning in. Engagement: watching.\"\nIf empty: \"Scene: empty room. Engagement: none.\"\nEnglish only."
     },
     "asr": {
       "provider": "whisperx",

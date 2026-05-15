@@ -27,7 +27,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from .config import Settings, PROJECT_ROOT
 from .events import EventLog
-from .memory import MemoryStore
+from .memory import EpisodicMemory, MemoryStore
 from .metrics import MetricsLog
 from .wake_calibration import collect_noise_profile, persist_noise_profile
 from pathlib import Path
@@ -96,6 +96,7 @@ class RuntimeDeps:
     rebuild_clients: Callable[[str], list[str]]
     capture_snapshot: Callable[[], bytes]
     run_dialogue_turn: Callable[..., Awaitable[dict[str, Any]]]
+    episodic_memory: EpisodicMemory | None = None
     get_voice_loop: Callable[[], Any] | None = None
 
 
@@ -315,6 +316,58 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
     @router.get("/api/memory/summary")
     async def memory_summary() -> dict[str, Any]:
         return {"text": deps.memory.summary_text()}
+
+    @router.get("/api/memory/status")
+    async def memory_status() -> dict[str, Any]:
+        em = deps.episodic_memory
+        if em is None:
+            raise HTTPException(status_code=503, detail="episodic memory not available")
+        from datetime import datetime, timezone
+        diary = await asyncio.to_thread(em.read_diary)
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        episodes_today = list(await asyncio.to_thread(
+            lambda: list(em.iter_episodes_since(today_start))
+        ))
+        episodes_total = await asyncio.to_thread(
+            lambda: sum(1 for _ in em.iter_episodes())
+        )
+        state = await asyncio.to_thread(em.load_state)
+        echoes_pool: int = 0
+        from .echoes_gate import EchoGate
+        # count echoes pool size via gate file path if available
+        echoes_path = em.root.parent.parent / "Agent Adam Chip" / "Echoes.txt"
+        if not echoes_path.exists():
+            echoes_path = em.root.parent / "echoes.txt"
+        if echoes_path.exists():
+            try:
+                text = echoes_path.read_text(encoding="utf-8")
+                echoes_pool = text.count("[echo_")
+            except OSError:
+                pass
+        metrics_summary: dict[str, Any] = {}
+        metrics_path = em.root / "metrics.jsonl"
+        if metrics_path.exists():
+            try:
+                from .memory_metrics import MemoryMetrics
+                mm = MemoryMetrics(metrics_path)
+                metrics_summary = mm.summary(hours=24)
+            except Exception:
+                pass
+        return {
+            "diary_chars": len(diary),
+            "episodes_total": episodes_total,
+            "episodes_today": len(episodes_today),
+            "echoes_pool_size": echoes_pool,
+            "last_consolidation": state.get("last_consolidation"),
+            "last_echo_injected": metrics_summary.get("last_echo"),
+            "metrics_last_24h": {
+                "echo_inject_count": metrics_summary.get("echo_inject_count", 0),
+                "episodes_committed": metrics_summary.get("episodes_committed", 0),
+                "consolidations": metrics_summary.get("consolidations", 0),
+            },
+        }
 
     @router.get("/api/metrics/turns")
     async def metrics_turns(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:

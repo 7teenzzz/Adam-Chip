@@ -158,6 +158,12 @@ class EpisodicMemory:
                 if ep.ts_end >= since:
                     yield ep
 
+    def is_recurring(self, name: str, min_visits: int = 2, lookup_days: int = 90) -> bool:
+        """Возвращает True если посетитель с таким именем встречался min_visits раз за lookup_days."""
+        if not name:
+            return False
+        return len(self.query_by_name(name, limit=min_visits, lookup_days=lookup_days)) >= min_visits
+
     def query_by_name(self, name: str, limit: int = 2, lookup_days: int = 30) -> list[Episode]:
         if not name:
             return []
@@ -183,6 +189,39 @@ class EpisodicMemory:
         self.diary_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             self.diary_path.write_text(text, encoding="utf-8")
+
+    def quick_patch_diary(self, episode: "Episode") -> bool:
+        """Rule-based мгновенная консолидация без LLM.
+
+        Вызывается при высокой значимости эпизода (>= instant_threshold).
+        Добавляет имя посетителя и темы в diary.md синхронно.
+        Возвращает True если diary.md был изменён.
+        """
+        try:
+            current = self.read_diary()
+            lines_to_add: list[tuple[str, str]] = []  # (section, entry)
+
+            name = episode.visitor.introduced_name
+            if name and name.lower() not in current.lower():
+                themes_str = ", ".join(episode.themes) if episode.themes else "нет данных"
+                lines_to_add.append((
+                    "Постоянные посетители",
+                    f"- **{name}** (визит: {episode.ts_end.date().isoformat()}). Темы: {themes_str}.",
+                ))
+            for theme in episode.themes:
+                if theme.lower() not in current.lower():
+                    lines_to_add.append(("Цепляющие темы", f"- {theme}"))
+
+            if not lines_to_add:
+                return False
+
+            new_text = _apply_simple_diary_patch(current, lines_to_add)
+            self.write_diary(new_text)
+            log.info("quick_patch_diary: applied instant patch for episode %s", episode.id)
+            return True
+        except Exception as exc:
+            log.warning("quick_patch_diary failed: %s", exc)
+            return False
 
     # ----- gate use logs -----
 
@@ -256,6 +295,42 @@ class EpisodicMemory:
         if not ids:
             return 0
         return self._rewrite_with(lambda ep: _set_flag(ep, "pinned", True) if ep.id in ids else ep)
+
+    def trim_gate_logs(self, max_days: int = 30) -> dict[str, int]:
+        """Удаляет записи старше max_days из echoes_used.jsonl и chinese_used.jsonl.
+
+        Возвращает {'echoes_dropped': N, 'chinese_dropped': N}.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_days)
+        stats: dict[str, int] = {"echoes_dropped": 0, "chinese_dropped": 0}
+        for pool, key in (("echoes", "echoes_dropped"), ("chinese", "chinese_dropped")):
+            path = self._gate_log_path(pool)
+            if not path.exists():
+                continue
+            kept: list[str] = []
+            dropped = 0
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    ts = _parse_ts(rec.get("ts"))
+                    if ts is None or ts >= cutoff:
+                        kept.append(line)
+                    else:
+                        dropped += 1
+            if dropped:
+                tmp = path.with_suffix(path.suffix + ".tmp")
+                with self._lock:
+                    with tmp.open("w", encoding="utf-8") as handle:
+                        handle.write("\n".join(kept) + ("\n" if kept else ""))
+                    tmp.replace(path)
+            stats[key] = dropped
+        return stats
 
     def decay(self, now: Optional[datetime] = None, *, decay_days: int = 14) -> dict[str, int]:
         """Удаляет старые записи. Возвращает stats {dropped, kept, files_removed}.
@@ -383,6 +458,51 @@ def _set_flag(episode: Episode, attr: str, value: bool) -> Episode:
         pinned=episode.pinned,
         consolidated=episode.consolidated,
     )
+
+
+def _apply_simple_diary_patch(
+    text: str,
+    entries: list[tuple[str, str]],
+) -> str:
+    """Добавляет записи (section, entry) в нужные секции diary.md.
+
+    Секции определяются по заголовкам '## Section'. Если секция не найдена — создаётся.
+    """
+    lines = text.splitlines()
+    # group entries by section
+    by_section: dict[str, list[str]] = {}
+    for section, entry in entries:
+        by_section.setdefault(section, []).append(entry)
+
+    result: list[str] = []
+    handled: set[str] = set()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("## "):
+            section_name = line[3:].strip()
+            result.append(line)
+            i += 1
+            # absorb existing section body
+            while i < len(lines) and not lines[i].startswith("## "):
+                result.append(lines[i])
+                i += 1
+            # append new entries for this section
+            if section_name in by_section:
+                for entry in by_section[section_name]:
+                    result.append(entry)
+                handled.add(section_name)
+        else:
+            result.append(line)
+            i += 1
+
+    # add any sections not yet in the file
+    for section, new_entries in by_section.items():
+        if section not in handled:
+            result.append(f"\n## {section}")
+            result.extend(new_entries)
+
+    return "\n".join(result).rstrip() + "\n"
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:

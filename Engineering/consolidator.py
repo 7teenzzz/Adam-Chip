@@ -38,6 +38,7 @@ import urllib.request  # noqa: E402
 from adam.config import Settings  # noqa: E402
 from adam.episodic import Episode  # noqa: E402
 from adam.memory import EpisodicMemory  # noqa: E402
+from adam.memory_metrics import MemoryMetrics  # noqa: E402
 from adam.tuning import Tuning, TuningStore  # noqa: E402
 
 LOG_FMT = "%(asctime)s [%(levelname)s] consolidator: %(message)s"
@@ -110,7 +111,7 @@ def setup_logging(memory: EpisodicMemory) -> logging.Logger:
     return logger
 
 
-def call_ollama(
+def call_llm(
     *,
     base_url: str,
     model: str,
@@ -119,7 +120,7 @@ def call_ollama(
     temperature: float,
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    """Прямой POST к /api/chat с format=json. Возвращает распарсенный JSON-ответ.
+    """POST к /chat/completions (llama.cpp OpenAI-compatible API). Возвращает распарсенный JSON-ответ.
 
     Бросает RuntimeError если ответ не валидный JSON или не словарь.
     """
@@ -130,12 +131,12 @@ def call_ollama(
             {"role": "user", "content": user},
         ],
         "stream": False,
-        "format": "json",
-        "options": {"temperature": float(temperature)},
+        "response_format": {"type": "json_object"},
+        "temperature": float(temperature),
     }
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        f"{base_url.rstrip('/')}/api/chat",
+        f"{base_url.rstrip('/')}/chat/completions",
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -143,7 +144,9 @@ def call_ollama(
     with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
         body = resp.read().decode("utf-8")
     response = json.loads(body)
-    content = (response.get("message") or {}).get("content", "")
+    content = ((response.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+    if not content:
+        raise RuntimeError(f"LLM вернул пустой content; response keys={list(response.keys())}")
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as exc:
@@ -267,6 +270,40 @@ def apply_patch(text: str, patch: dict[str, Any]) -> str:
     return render_semantic(sections)
 
 
+def rule_based_patch(episodes: list[Episode], current_diary: str) -> dict[str, Any]:
+    """Создаёт патч без LLM — добавляет имена посетителей и темы из новых эпизодов.
+
+    Применяется как fallback при недоступности LLM-сервера.
+    """
+    existing = parse_semantic(current_diary)
+    existing_visitors_text = " ".join(existing.get("Постоянные посетители", [])).lower()
+    existing_themes_text = " ".join(existing.get("Цепляющие темы", [])).lower()
+
+    add_entries: list[dict[str, str]] = []
+    seen_names: set[str] = set()
+    seen_themes: set[str] = set()
+
+    for ep in episodes:
+        name = ep.visitor.introduced_name
+        if name and name.lower() not in existing_visitors_text and name.lower() not in seen_names:
+            themes_str = ", ".join(ep.themes) if ep.themes else "нет данных"
+            add_entries.append({
+                "section": "Постоянные посетители",
+                "entry": f"- **{name}** (визит: {ep.ts_end.date().isoformat()}). Темы: {themes_str}.",
+            })
+            seen_names.add(name.lower())
+
+        for theme in ep.themes:
+            if theme.lower() not in existing_themes_text and theme.lower() not in seen_themes:
+                add_entries.append({
+                    "section": "Цепляющие темы",
+                    "entry": f"- {theme}",
+                })
+                seen_themes.add(theme.lower())
+
+    return {"add": add_entries} if add_entries else {}
+
+
 # ---------- main ----------
 
 
@@ -279,27 +316,28 @@ def main() -> int:
     tuning: Tuning = tuning_store.current()
 
     log = setup_logging(memory)
-    log.info("starting; data_dir=%s decay=%dd model=%s",
-             settings.data_dir, tuning.memory.episodic.decay_days,
-             tuning.memory.consolidator.model)
+    # Model: Tuning.json override → Config.json fallback (llama.cpp ignores the field anyway)
+    llm_base_url = settings.section("services").get("llm", {}).get("base_url", "http://127.0.0.1:8081/v1")
+    llm_model = tuning.memory.consolidator.model or settings.section("services").get("llm", {}).get("model", "")
+    log.info("starting; data_dir=%s decay=%dd llm=%s model=%s",
+             settings.data_dir, tuning.memory.episodic.decay_days, llm_base_url, llm_model)
 
-    if not tuning.memory.consolidator.model and not args.decay_only:
-        log.warning("consolidator.model not set in Tuning.json — LLM consolidation disabled; run with --decay-only or set model")
-        if not args.decay_only:
-            return 1
     if not tuning.memory.consolidator.enabled and not args.decay_only:
         log.info("consolidator disabled in tuning, exiting")
         return 0
 
     since = datetime.now(timezone.utc) - parse_since(args.since)
 
-    # 1. Декей всегда
+    # 1. Декей и обрезка логов перезарядки
     if not args.dry_run:
         decay_stats = memory.decay(decay_days=tuning.memory.episodic.decay_days)
         log.info("decay: dropped=%d kept=%d files_removed=%d",
                  decay_stats["dropped"], decay_stats["kept"], decay_stats["files_removed"])
+        trim_stats = memory.trim_gate_logs(max_days=tuning.memory.consolidator.gate_log_max_days)
+        log.info("trim_gate_logs: echoes_dropped=%d chinese_dropped=%d",
+                 trim_stats["echoes_dropped"], trim_stats["chinese_dropped"])
     else:
-        log.info("decay: skipped (dry-run)")
+        log.info("decay + trim: skipped (dry-run)")
 
     if args.decay_only:
         return 0
@@ -316,29 +354,29 @@ def main() -> int:
 
     log.info("processing %d episodes", len(new_episodes))
 
-    # 3. LLM вызов
-    base_url = os.environ.get("ADAM_LLM_BASE_URL") or \
-        settings.section("services").get("llm", {}).get("base_url", "http://127.0.0.1:11434")
+    # 3. LLM вызов → при ошибке rule-based fallback
     user_msg = (
         f"Текущая памятка (diary.md):\n```\n{memory.read_diary() or '(пусто)'}\n```\n\n"
         f"Новые эпизоды:\n```json\n{episodes_payload(new_episodes)}\n```"
     )
 
     t0 = time.time()
+    patch_source = "llm"
     try:
-        patch = call_ollama(
-            base_url=base_url,
-            model=tuning.memory.consolidator.model,
+        patch = call_llm(
+            base_url=llm_base_url,
+            model=llm_model,
             system=CONSOLIDATOR_SYSTEM_PROMPT,
             user=user_msg,
             temperature=tuning.memory.consolidator.temperature,
             timeout_seconds=tuning.memory.consolidator.max_runtime_minutes * 60,
         )
     except Exception as exc:
-        log.error("LLM call failed: %s", exc)
-        return 2
+        log.warning("LLM call failed (%s), falling back to rule-based patch", exc)
+        patch = rule_based_patch(new_episodes, memory.read_diary())
+        patch_source = "rule_based"
     elapsed = time.time() - t0
-    log.info("LLM responded in %.1fs; patch keys: %s", elapsed, list(patch.keys()))
+    log.info("patch ready in %.1fs; source=%s keys=%s", elapsed, patch_source, list(patch.keys()))
 
     if not validate_patch(patch):
         log.error("patch failed schema validation: %r", patch)
@@ -346,7 +384,7 @@ def main() -> int:
 
     # 4. Применение
     if args.dry_run:
-        log.info("dry-run patch:\n%s", json.dumps(patch, ensure_ascii=False, indent=2))
+        log.info("dry-run patch (source=%s):\n%s", patch_source, json.dumps(patch, ensure_ascii=False, indent=2))
         new_text = apply_patch(memory.read_diary(), patch)
         log.info("dry-run new diary:\n%s", new_text)
         return 0
@@ -357,10 +395,20 @@ def main() -> int:
     pinned_count = memory.pin_episodes(patch.get("pin_episodes", []))
     log.info("applied: consolidated=%d pinned=%d", consolidated_count, pinned_count)
 
+    # Record consolidation metrics
+    _mm = MemoryMetrics(Path(settings.data_dir) / "memory" / "metrics.jsonl")
+    _mm.record_consolidation(
+        episodes_count=len(new_episodes),
+        patch_keys=list(patch.keys()),
+        runtime_s=elapsed,
+        source=patch_source,
+    )
+
     # 5. State
     memory.save_state({
         "last_run": datetime.now(timezone.utc).isoformat(),
         "last_patch_keys": list(patch.keys()),
+        "last_patch_source": patch_source,
         "last_episodes_count": len(new_episodes),
         "last_runtime_seconds": round(elapsed, 1),
     })

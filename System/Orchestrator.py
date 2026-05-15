@@ -37,6 +37,7 @@ from adam.camera import CameraReader, SceneDescriptionBuffer
 from adam.inference import WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
 from adam.media import MediaHealth
 from adam.memory import EpisodicMemory, MemoryStore
+from adam.memory_metrics import MemoryMetrics
 from adam.metrics import MetricsLog
 from adam.power import PowerGate
 from adam.prompt import PromptBuilder, LeadingNoiseFilter, sanitize_reply
@@ -55,6 +56,7 @@ event_log = EventLog(settings.data_dir)
 metrics_log = MetricsLog(settings.data_dir)
 memory = MemoryStore(settings.data_dir)
 episodic_memory = EpisodicMemory(settings.data_dir)
+memory_metrics = MemoryMetrics(Path(settings.data_dir) / "memory" / "metrics.jsonl")
 tuning_store: TuningStore = _get_tuning_store()
 power_gate = PowerGate(settings.section("power"))
 media_health = MediaHealth(settings.section("media"))
@@ -213,6 +215,9 @@ async def _commit_session_locked(reason: str) -> None:
     if write:
         try:
             episodic_memory.commit_episode(episode)
+            memory_metrics.record_episode_committed(
+                episode.id, episode.salience, triggered_by=reason
+            )
             event_log.append(
                 "episode_committed",
                 {
@@ -224,6 +229,8 @@ async def _commit_session_locked(reason: str) -> None:
                     "reason": reason,
                 },
             )
+            if episode.salience >= tuning.memory.consolidator.instant_threshold:
+                episodic_memory.quick_patch_diary(episode)
         except Exception as exc:
             event_log.append("episode_commit_error", {"error": str(exc), "id": episode.id})
     else:
@@ -940,20 +947,31 @@ class SceneWorker:
                 if not jpeg:
                     await asyncio.sleep(0.2)
                     continue
+                prev = scene_cache.text or ""
                 event_log.append("vlm_request_started", {"frame_bytes": len(jpeg), "camera_source": self._cam.active_source})
                 t_vlm = time.perf_counter()
-                summary = (await self.vlm_client.describe_jpeg(jpeg)).strip()
+                summary = (await self.vlm_client.describe_jpeg(jpeg, prev_scene=prev)).strip()
                 vlm_ms = round((time.perf_counter() - t_vlm) * 1000, 1)
-                event_log.append("vlm_request_finished", {"vlm_ms": vlm_ms, "text_len": len(summary)})
+                event_log.append("vlm_request_finished", {
+                    "vlm_ms": vlm_ms,
+                    "text_len": len(summary),
+                    "text_preview": summary[:120],
+                    "has_prev_scene": bool(prev),
+                })
                 runtime_state["last_vlm_ms"] = vlm_ms
-                self._buf.push(summary)
-                updated = scene_cache.update(
-                    summary,
-                    {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms, "last_error": ""},
-                )
+                meta = {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms, "last_error": ""}
+                pushed = self._buf.push(summary)
+                if not pushed:
+                    event_log.append("scene_description_duplicate", {
+                        "text": summary,
+                        "camera_source": self._cam.active_source,
+                    })
+                    scene_cache.update(summary, meta)
+                else:
+                    updated = scene_cache.update(summary, meta)
+                    event_log.append("scene_updated", updated)
                 self.last_error = ""
                 self._consecutive_errors = 0
-                event_log.append("scene_updated", updated)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -2025,8 +2043,14 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     visitor_name = _extract_visitor_name(transcript)
     if visitor_name:
         acc.set_visitor_name(visitor_name)
+        if episodic_memory.is_recurring(
+            visitor_name,
+            min_visits=tuning.memory.episodic.recurring_min_visits,
+            lookup_days=tuning.memory.episodic.recurring_lookup_days,
+        ):
+            acc.set_recurring(True)
 
-    acc.note_turn("visitor", transcript)
+    acc.note_turn("visitor", transcript, theme_clusters=tuning.memory.theme_clusters)
 
     # recent episodic
     recent_lines: list[str] = []
@@ -2037,7 +2061,8 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         recent_lines = _format_recent_episodic(recent_eps)
 
     # echoes / chinese gate (приоритет — echoes, потом chinese)
-    mood = _resolve_mood(scene_cache.text, sensors)
+    # mood = _resolve_mood(scene_cache.text, sensors)  # disabled: VLM outputs English, Russian keywords never match
+    mood = "neutral"
     echo_hint: str | None = None
     echo_meta: dict[str, Any] | None = None
     if tuning.echoes.enabled:
@@ -2051,6 +2076,9 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             echo_hint = echo_inj.hint_text
             acc.note_echo_used(echo_inj.entry.id)
             echo_meta = {"pool": "echoes", "id": echo_inj.entry.id, "score": echo_inj.score}
+            memory_metrics.record_echo_injected(
+                echo_inj.entry.id, echo_inj.score, tuning.echoes.matcher_type
+            )
     if echo_hint is None and tuning.chinese.enabled:
         cn_inj = chinese_gate.maybe_inject(
             transcript=transcript,
@@ -2062,6 +2090,9 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             echo_hint = cn_inj.hint_text
             acc.note_chinese_used(cn_inj.entry.id)
             echo_meta = {"pool": "chinese", "id": cn_inj.entry.id, "score": cn_inj.score}
+            memory_metrics.record_echo_injected(
+                cn_inj.entry.id, cn_inj.score, tuning.chinese.matcher_type
+            )
 
     # semantic
     semantic_text = ""
@@ -2074,6 +2105,12 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     history_turns = tuning.prompt.history_turns
     history = memory.recent_dialogue(history_turns)
     scene_context_count = int(settings.section("media").get("scene_context_count", 3))
+    recent_scenes = scene_buffer.recent(scene_context_count)
+    event_log.append("scene_context_injected", {
+        "count": len(recent_scenes),
+        "unique": len(set(recent_scenes)),
+        "texts": recent_scenes,
+    }, turn_id=turn_id)
     messages = prompt_builder.build_messages(
         transcript=transcript,
         dialogue_history=history,
@@ -2081,7 +2118,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         sensors=sensors,
         semantic_text=semantic_text,
         recent_episodic=recent_lines,
-        recent_scenes=scene_buffer.recent(scene_context_count),
+        recent_scenes=recent_scenes,
         echo_hint=echo_hint,
         history_turns=history_turns,
         include_scene=tuning.prompt.include_scene,
@@ -2881,6 +2918,7 @@ _runtime_deps = RuntimeDeps(
     rebuild_clients=_rebuild_clients,
     capture_snapshot=camera_reader.get_latest,
     run_dialogue_turn=_run_dialogue_turn,
+    episodic_memory=episodic_memory,
     get_voice_loop=lambda: voice_loop,
 )
 app.include_router(build_router(_runtime_deps))
