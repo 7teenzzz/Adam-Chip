@@ -602,8 +602,12 @@ function buildWakeWordExtras() {
   // one-shot fetch on mount caused the user-reported "UI doesn't match
   // actual mic" confusion.
   //
-  // Strategy: refresh on mount + on every voice_loop / mic-fallback /
-  // mode event via SSE. Cheap, keeps the label in sync without polling.
+  // GSD-investigation T17-deploy follow-up: the previous implementation
+  // leaked an SSE subscription on every panel-unmount because the panel
+  // mount returned an empty teardown. Now buildWakeWordExtras exposes a
+  // `_dispose` callback on the wrapper element so the panel teardown can
+  // tear the subscription down cleanly.
+  let _profileUnsub = null;
   Promise.all([
     import("../api.js"),
   ]).then(([{ api, subscribeEvents }]) => {
@@ -620,7 +624,7 @@ function buildWakeWordExtras() {
     const refresh = () => api.get("/api/agent/status").then(renderProfileLabel).catch(() => {});
     refresh();
     // Subscribe to events that change which mic is actually active.
-    const unsub = subscribeEvents((event) => {
+    _profileUnsub = subscribeEvents((event) => {
       if (event && [
         "voice_loop_started",
         "voice_loop_stopped",
@@ -632,12 +636,6 @@ function buildWakeWordExtras() {
         refresh();
       }
     });
-    // Clean up the previous panel mount's SSE subscription if any —
-    // prevents EventSource leak when the user toggles between panels.
-    if (typeof window !== "undefined") {
-      try { window.__calibProfileUnsub__ && window.__calibProfileUnsub__(); } catch (_) {}
-      window.__calibProfileUnsub__ = unsub;
-    }
   });
 
   function _describeCalibProfile(rec) {
@@ -647,7 +645,7 @@ function buildWakeWordExtras() {
     return `Профиль: ${key} — калибровано ${ts}`;
   }
 
-  return el("div", { style: "display:flex; flex-direction:column; gap:6px; margin-top:10px" }, [
+  const wrapper = el("div", { style: "display:flex; flex-direction:column; gap:6px; margin-top:10px" }, [
     el("div", { style: "display:flex; align-items:center; gap:8px" }, [
       el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Уровень микрофона · порог OWW"),
       el("span", { class: "spacer" }),
@@ -662,6 +660,16 @@ function buildWakeWordExtras() {
     ]),
     calibProfileEl,
   ]);
+  // T17-deploy GSD fix — expose a dispose hook so the panel teardown can
+  // unsubscribe the SSE listener + dispose the wake-meter widget. Without
+  // this every settings-then-leave navigation leaked one EventSource.
+  wrapper._dispose = () => {
+    try { if (_profileUnsub) _profileUnsub(); } catch (_) {}
+    if (meter && typeof meter.dispose === "function") {
+      try { meter.dispose(); } catch (_) {}
+    }
+  };
+  return wrapper;
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -687,6 +695,10 @@ export function mount(target) {
   let audioDevices = [];
   let inputDevices = [];
   let ttsVoices    = [];
+  // T17-deploy GSD fix — collect dispose callbacks from any panel-scoped
+  // resources (SSE subscriptions, animation frames, canvases). The mount
+  // teardown drains this list so navigating away leaks nothing.
+  const disposables = [];
 
   const container  = el("div", { class: "col" });
   const refreshBtn = el("button", { class: "btn", onclick: () => renderAll() }, "Перезагрузить");
@@ -741,6 +753,13 @@ export function mount(target) {
   ]));
 
   async function renderAll() {
+    // T17-deploy GSD fix — releasing previous-render disposables before
+    // re-rendering. Without this, every "Перезагрузить" click stacked one
+    // more SSE listener on top of the existing one.
+    while (disposables.length) {
+      const fn = disposables.pop();
+      try { fn(); } catch (_) {}
+    }
     container.innerHTML = "";
     container.appendChild(el("div", { class: "muted" }, [el("span", { class: "spinner" }), " загрузка…"]));
 
@@ -812,7 +831,14 @@ export function mount(target) {
       const bodyChildren = [grid];
       if (typeof group.extras === "function") {
         const extra = group.extras(ctx, sectionData);
-        if (extra) bodyChildren.push(extra);
+        if (extra) {
+          bodyChildren.push(extra);
+          // T17-deploy GSD fix — collect disposable extras so the panel
+          // teardown can release their SSE subscriptions / canvases.
+          if (typeof extra._dispose === "function") {
+            disposables.push(extra._dispose);
+          }
+        }
       }
 
       const card = el("section", { class: "card" }, [
@@ -839,5 +865,14 @@ export function mount(target) {
   }
 
   renderAll();
-  return () => {};
+  return () => {
+    // T17-deploy GSD fix — drain every dispose callback registered during
+    // this mount. Without this, each settings-then-leave navigation leaked
+    // an SSE subscription that kept fetching /api/agent/status against a
+    // detached DOM.
+    while (disposables.length) {
+      const fn = disposables.pop();
+      try { fn(); } catch (_) {}
+    }
+  };
 }
