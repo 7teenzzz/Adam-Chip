@@ -28,6 +28,180 @@
 
 ---
 
+### Test 15 — 2026-05-15 14:31 MSK ⚠ COMPLETED (V-S06.3: E2B + ngram-mod tuned — LLM win, TTS regression blocker)
+**Module:** Voice Pipeline (E2E voice — **первый valid прогон на V-S06.3 c CUDA ASR после T13**) • **Commit:** [27f83c1](https://github.com/7teenzzz/Adam-Chip/commit/27f83c1) (`V-S06.3-opt_voice_pipe_3wave`) • **Phrases:** standard 7-phrase set × 3 runs
+**Wall (combined):** 757s (3 runs) • **Verdict:** ⚠ 21/21 turns delivered, persona OK; **E2B LLM speedup доказан (T15a LLM warm −19% vs T7), но TTS regression +34-97% и filler artifacts блокируют UX**
+
+#### Context
+
+T15 — первый E2E прогон V-S06.3 stack'а с правильно работающей CUDA ASR (после T13 CPU fallback). Применены **pre-T15 fix'ы:**
+- H5: ngram-mod n-min 48→4, n-max 64→16 (commit `000bf39`)
+- H6: history_turns 0→2 (commit `a26a4a1`)
+- systemd StartLimit fix → orchestrator crashloop предотвращён (commit `27f83c1`)
+- H7 (OWW threshold) откатан — остался 0.20
+
+**Микрофон:** локальный PulseAudio (webcam, ALSA card 3). ESP32 INMP441 в fallback.
+
+#### Config (active runtime)
+- **LLM:** Gemma 4 **E2B** UD-Q4_K_XL + ngram-mod (n-match=24, n-min=4, n-max=16)
+- **ASR:** WhisperX `small` **CUDA Docker** (T13 fix validated)
+- **TTS:** Silero `eugene` 24kHz, speed_multiplier=1.10, filler «Хм...» 800ms
+- **Prompt:** history_turns=2 (H6 middle ground), semantic.max_chars=2000
+- **OWW threshold:** 0.20, debounce_hits=2
+- **mic_source:** local
+
+#### Three-run protocol
+
+| | T15a | T15b | T15c |
+|---|---|---|---|
+| **Тип рестарта** | Fresh boot | Full stop+start | `systemctl restart adam-orchestrator` only |
+| **Adam запущен** | 14:31:12 MSK | 14:40:05 MSK | (orch restart 14:47:42) |
+| **T_start** | 14:32:42 (повтор фразы) | 14:42:07 (повтор фразы) | 14:50:00 |
+| **T_end** | 14:36:40 | 14:45:53 | 14:53:54 (≈) |
+| **Wall window** | 238s | 226s | 293s |
+
+#### Per-turn breakdown — T15a (fresh boot)
+| # | TX | ASR | LLM | TTFV | TTS | Total | Заметка |
+|--:|---|--:|--:|--:|--:|--:|---|
+| 1 | Привет. | 497 | 3479 | 858 | 6338 | 7328 | T_start не сработал, второй take |
+| 2 | Как тебя зовут? | 3050 | **1270** | 927 | 4184 | **5426** | ngram-like speedup? |
+| 3 | Что ты сейчас чувствуешь? | 2959 | 1541 | 645 | 7473 | 8204 | |
+| 4 | что ты видишь вокруг. | 1021 | 2409 | 2404 | 5198 | 10465 | ASR drift |
+| 5 | **Кто тебя создал и зачем Расскажи коротко, кто тебя создал и зачем** | 1481 | 4018 | 1654 | **10390** | **14486** | ASR склеил две произнесённые фразы |
+| 6 | А ты помнишь как меня зовут? | 1182 | 3970 | 734 | 7256 | 10706 | |
+| 7 | Спасибо, На этом всё. | 2344 | 728 | 728 | 3206 | 4059 | |
+
+#### Per-turn breakdown — T15b (full restart)
+| # | TX | ASR | LLM | TTFV | TTS | Total | Заметка |
+|--:|---|--:|--:|--:|--:|--:|---|
+| 1 | Привет. | 503 | 3937 | 766 | 7151 | **12691** | T_start первая попытка не сработала |
+| 2 | Как тебя зовут? | 1136 | 2538 | 2534 | 8076 | 10831 | |
+| 3 | Что ты сейчас чувствуешь? | 3808 | 3833 | 3828 | 7812 | 11792 | |
+| 4 | что ты видишь вокруг? | 1142 | 4015 | 1357 | **10685** | **16712** | TTS catastrophe |
+| 5 | Расскажи коротко… | 1461 | 4022 | 1381 | **10805** | **14612** | |
+| 6 | А ты помнишь как меня зовут? | 1330 | **6508** | 3160 | **11222** | **14470** | LLM anomaly |
+| 7 | Спасибо, На этом всё. | 3146 | 6953 | 6954 | 3410 | 10706 | TTFV=LLM (filler не успел) |
+
+#### Per-turn breakdown — T15c (orchestrator-only restart)
+| # | TX | ASR | LLM | TTFV | TTS | Total | Заметка |
+|--:|---|--:|--:|--:|--:|--:|---|
+| 1 | Привет. | 984 | 2873 | 2864 | 4007 | 6936 | |
+| 2 | Как тебя зовут? | 2500 | 4107 | 932 | 7220 | 8224 | |
+| 3 | Что ты сейчас чувствуешь? | 2982 | 3921 | 663 | 7666 | 10801 | |
+| 4 | что ты видишь вокруг. | 804 | 2614 | 2602 | 8124 | 13455 | |
+| 5 | **И зачем? Я скажи коротко…** | 1579 | 4057 | 1168 | **10870** | **14361** | wake-word noise в transcript |
+| 6 | А ты помнишь как меня зовут? | 3019 | 3793 | 839 | **10990** | 12076 | |
+| 7 | **Спасибо, а дом на этом всё.** | 2186 | 3610 | 821 | **10546** | 13744 | ASR «Адам, на» → «а дом на»; третий take |
+
+#### Warm aggregate (n=6, exclude Turn 1)
+
+| Stage | T7 (gold) | T14c (best E4B) | **T15a** | **T15b** | **T15c** |
+|---|--:|--:|--:|--:|--:|
+| ASR avg | **1009** | 1222 | 2006 | 2004 | 2178 |
+| **LLM avg** | 2868 | 3946 | **2323** ✅ −19% vs T7 | 4645 | 3684 |
+| TTFV avg | 1688 | 2544 | **1182** ✅ −30% vs T7 | 3202 | 1171 ✅ |
+| **TTS avg** | **4695** | 5434 | 6285 (+34%) | **8668** ❌ (+85%) | **9236** ❌ (+97%) |
+| **Total avg** | **7632** | 8369 | 8891 (+16%) | **13187** ❌ | **12110** ❌ |
+
+#### Throughput
+
+| Test | Wall(s) | Active(s) | Active% | Thr (t/min) |
+|---|--:|--:|--:|--:|
+| T7 baseline | 110 | 52.8 | 48.0% | 3.82 |
+| T14c (best E4B) | 274 | 63.6 | 23.2% | 1.53 |
+| **T15a** | 238 | 60.7 | 25.5% | **1.76** |
+| **T15b** | 226 | 91.8 | 40.6% | 1.86 |
+| **T15c** | 293 | 79.6 | 27.2% | 1.43 |
+
+#### Reply window events
+
+| Event | T7 (норма) | T15a | T15b | T15c |
+|---|---|--:|--:|--:|
+| `wake_word_detected` | 1 | **8** | 4 | **9** |
+| `reply_window_expired` | 0-1 | **5** | 2 | **5** |
+| `asr_no_reply_standby` | 1 | 1 | 2 | 1 |
+| `tts_filler` | 7/7 | **3/7** | 6/7 | **4/7** |
+| `voice_state_change` | 5-8 | 21 | 11 | 24 |
+
+**Reply window нестабильность подтверждена** — каждый turn в T15a/T15c триггерил несколько wake_word_detected events. User отметил «слушаю двух/трёх раз» — это и есть симптом. Причина: OWW threshold=0.20 + low-quality PulseAudio webcam mic.
+
+#### ngram-mod statistics (H5 verification — FAILED)
+
+```
+common_speculative_init: initialized ngram_mod with n_match=24, size=4194304 (16.000 MB)
+statistics ngram_mod: #calls=5/78/0  #gen drafts = 0  #acc drafts = 0  #gen tokens = 0  #acc tokens = 0
+occupancy = 4285/4194304 (0.00%)
+```
+
+**H5 не сработал.** Несмотря на снижение n-min 48→4 и n-max 64→16, `#gen drafts=0`. Hash pool наполняется, но draft generation никогда не запускается. ngram-mod на свободном русском тексте — статистический no-op.
+
+**LLM speedup в T15a (LLM warm 2323ms vs T14c 3946ms = −41%) пришёл от E2B alone**, не от ngram. Рекомендация для T16: либо `n_match=24 → 8`, либо удалить ngram block полностью.
+
+#### Persona quality
+
+| Test | Reply length avg | Markers/turn | Особое |
+|---|---|---|---|
+| T15a | 8.5 w / 54 c | 1.1 | T15a.5 ASR-склейка двух фраз — Adam ответил нормально |
+| T15b | 12.3 w / 70 c | 1.3 | **«ритм в холодной стали»**, **«свет режет пыль»** — поэтичный пик |
+| T15c | 13.0 w / 72 c | 1.0 | **«технофлора»** — новый Adam-термин; **T15c.7** обыграл ASR-drift «а дом» → философский ответ |
+
+**Correctness checks (21 turns):**
+| Check | Result |
+|---|---|
+| JSON/markdown/code leakage | ✅ 0/21 |
+| Chinese characters | ✅ 0/21 |
+| max_tokens=40 truncation | ✅ 0/21 |
+| Russian fluency | ✅ all |
+
+#### Critical bugs surfaced
+
+**🔥 BUG #1 — TTS «Хм..Хм..» stutter at reply start (CRITICAL)**
+User отчёт: «когда Адам начинает говорить он будто проговаривает Хм..Хм..». Подтверждено через `tts_filler` count: T15a=3/7, T15b=6/7, T15c=4/7 — рассогласованность с TTFV (filler должен играть когда TTFV>800ms, но триггерится на других условиях). Filler / real-reply race condition в `Orchestrator.py:_filler_task`.
+
+**🔥 BUG #2 — TTS echo between sentence chunks (CRITICAL)**
+User отчёт: «как будто эхо после окончания некоторых слов». Подтверждено через TTS warm avg: T15 6285-9236ms vs T7 4695ms (+34-97%). ALSA buffer не дренируется между sentence-chunks. Streaming TTS pipeline накладывает chunks. Произношение Адама становится трудно понимать.
+
+**⚠ BUG #3 — ngram-mod статистически no-op (после H5)**
+`#acc_drafts=0` даже на n-min=4 / n-max=16. 16 MB hash overhead без пользы.
+
+**⚠ BUG #4 — OWW false-wakes от PulseAudio webcam mic**
+Reply window нестабильность повторяется. Threshold=0.20 + low-quality mic = шумовые false-wakes.
+
+**⚠ BUG #5 — UI lag («эквалайзер не показывает актуальное состояние»)**
+SSE event throttling: audio_level events каждые 20ms (50/s) → SSE backpressure → UI отстаёт.
+
+#### Сравнение с предыдущими тестами
+
+| Metric | T7 (E4B gold) | T14c (E4B best) | T13 (E2B, CPU-ASR) | **T15a (E2B+ngram, best)** |
+|---|--:|--:|--:|--:|
+| ASR warm | 1009 | 1222 | 12216 ❌ | 2006 |
+| LLM warm | 2868 | 3946 | 4490 | **2323** ✅ |
+| TTFV warm | 1688 | 2544 | 3843 | **1182** ✅ |
+| TTS warm | **4695** | 5434 | 9044 | 6285 (+34%) ❌ |
+| Total warm | **7632** | 8369 | 14665 | 8891 (+16%) |
+| Persona | OK | OK | OK | OK |
+
+**T15 не побил T7.** E2B/LLM выигрыш съеден TTS-регрессией.
+
+#### Key findings
+
+1. ✅ **E2B is faster than E4B on LLM stage** (T15a LLM warm 2323ms vs T14c 3946ms = **−41%**). Подтверждённый win.
+2. ✅ **TTFV warm 1182ms — лучший показатель из всех voice-тестов.** Streaming pipeline работает.
+3. ❌ **TTS regression блокирует прогресс.** Без чистого произношения никакой LLM speedup не имеет смысла. Цель T16 — фикс BUG #1 и BUG #2.
+4. ❌ **ngram-mod на русском free-form тексте — no-op.** Удалить или попробовать `n_match=8`.
+5. ⚠ **history_turns=2 кореллирует с TTS regression.** Возможно длиннее prompt → длиннее replies → больше TTS chunks → больше «эхо». Стоит проверить с history_turns=0 в T16.
+6. ✅ **systemd crashloop fix работает** — `sound_success` events только при настоящем boot (3 раза за весь T15), без loop'а.
+
+#### Raw data filter
+```
+T15a: source=voice_loop, ts ∈ [2026-05-15T11:32:42Z, 2026-05-15T11:36:40Z]
+T15b: source=voice_loop, ts ∈ [2026-05-15T11:42:07Z, 2026-05-15T11:45:53Z]
+T15c: source=voice_loop, ts ∈ [2026-05-15T11:50:00Z, 2026-05-15T11:54:53Z]
+Backup: /tmp/T15_metrics.jsonl, /tmp/T15_events.jsonl, /tmp/T15_adam_llm.log, /tmp/T15_orchestrator.log
+```
+
+---
+
 ### Test 14 — 2026-05-15 13:17 MSK ✅ COMPLETED (restart-resilience: 3 consecutive runs on T7 baseline config)
 **Module:** Voice Pipeline (E2E voice — **regression validation на a8ff3ce, T7-equivalent state**) • **Commit:** [a8ff3ce](https://github.com/7teenzzz/Adam-Chip/commit/a8ff3ce) (detached HEAD from `V-S06.3-opt_voice_pipe_3wave`) • **Phrases:** standard 7-phrase set × 3 runs
 **Wall (combined):** 1003s (3 runs) • **Verdict:** ✅ 21/21 turns delivered, persona OK, total warm avg в одной лиге с T7 baseline (+10-18%); все 3 restart pattern'а отработали без потерь
