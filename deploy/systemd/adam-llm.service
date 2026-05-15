@@ -13,32 +13,21 @@ SupplementaryGroups=render video
 WorkingDirectory=/home/i17jet/Agents/Adam-Chip
 EnvironmentFile=-/etc/adam-chip/adam.env
 
-# Defaults — override in /etc/adam-chip/adam.env
+# Single source of truth for the model is System/Config.json
+# (services.llm.model_path + services.llm.speculative). The launcher
+# script reads it and exec's llama-server with the right flags.
+# Env vars below are low-priority fallbacks used only when Config.json
+# omits the field (and ADAM_LLM_GGUF_PATH is honored if model_path is
+# absent — kept for backwards compatibility).
 Environment=ADAM_LLM_LLAMACPP_DIR=/home/i17jet/Agents/Adam-Chip/Subsystem/llama.cpp
-Environment=ADAM_LLM_GGUF_PATH=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/gguf/gemma-4-E2B-it-UD-Q4_K_XL.gguf
 Environment=ADAM_LLM_PORT=8081
-Environment=ADAM_LLM_CTX=8192
 Environment=ADAM_LLM_GPU_LAYERS=99
+Environment=ADAM_CONFIG=/home/i17jet/Agents/Adam-Chip/System/Config.json
 
 ExecStartPre=/usr/bin/test -x ${ADAM_LLM_LLAMACPP_DIR}/build/bin/llama-server
-ExecStartPre=/usr/bin/test -f ${ADAM_LLM_GGUF_PATH}
+ExecStartPre=/usr/bin/test -f ${ADAM_CONFIG}
 
-ExecStart=/bin/bash -c \
-  '"${ADAM_LLM_LLAMACPP_DIR}/build/bin/llama-server" \
-    --model "${ADAM_LLM_GGUF_PATH}" \
-    --host 127.0.0.1 \
-    --port "${ADAM_LLM_PORT}" \
-    --n-gpu-layers "${ADAM_LLM_GPU_LAYERS}" \
-    --ctx-size "${ADAM_LLM_CTX}" \
-    --parallel 1 \
-    --reasoning off \
-    --flash-attn on \
-    --cache-type-k q8_0 \
-    --cache-type-v q8_0 \
-    --spec-type ngram-mod \
-    --spec-ngram-mod-n-match 24 \
-    --spec-ngram-mod-n-min 48 \
-    --spec-ngram-mod-n-max 64'
+ExecStart=/home/i17jet/Agents/Adam-Chip/scripts/adam_llm_run.sh
 
 Restart=on-failure
 StartLimitIntervalSec=120
