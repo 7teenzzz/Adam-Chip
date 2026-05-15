@@ -1,302 +1,323 @@
 # AdamsServer Firmware
 
-`AdamsServer` — это прошивка для `ESP32-S3 WROOM CAM`, которая после старта работает по `Wi‑Fi` и публикует:
+`AdamsServer` — прошивка для `ESP32-S3 N16R8 WROOM CAM`. После старта публикует:
 
-- `MJPEG` видео по `HTTP`
-- uplink-аудио с `INMP441` через `GET /audio`
-- playback-аудио на `PCM5102` через `POST /speaker`
-- telemetry по сенсорам
-- low-level управление `PCA9685`
+- MJPEG-видео с `OV5640` по HTTP
+- Uplink-аудио с `INMP441` x2 через `GET :81/audio`
+- Playback на `PCM5102A` через `POST :81/speaker`
+- Телеметрию сенсоров (`TEMT6000`, `BTE16-19`)
+- Управление `PCA9685` (16-канальный PWM)
 
-## Важно: актуальная иерархия UI/API
+---
 
-В текущей версии используется 2-уровневая схема:
+## Сеть и адрес
 
-- UI уровень 1: `/` (операционный дашборд: стримы + телеметрия + ключевые статусы)
-- UI уровень 2: `/ctrldash` (управление и настройки: камера, аудио, PCA9685, OTA, endpoint-health)
-- API/техдоступ: legacy маршруты `/api/*`, `/ws`, `:81/stream`, `:82/audio`, `:83/speaker`
+ESP32 автоматически выбирает транспорт в порядке приоритета:
 
-Legacy UI пути (`/vision`, `/hearing`, `/sensorics`, `/motor_skills`, `/system`) сохранены и ведут на рабочие уровни интерфейса.
+| Приоритет | Транспорт | Статический IP |
+|-----------|-----------|----------------|
+| 1 | W5500 Ethernet (SPI) | `192.168.0.171` |
+| 2 | Wi-Fi STA | `192.168.0.171` |
+| 3 | AP-fallback (если оба недоступны) | `192.168.4.1` |
 
-## Важное разделение аудио
+Никакого ручного переключения не нужно — прошивка сама определяет, что доступно.
 
-В прошивке есть два независимых аудионаправления:
+Сетевые настройки (SSID, пароль, IP-схема) хранятся в:
 
-- `INMP441` = вход / микрофон / uplink / `GET /audio`
-- `PCM5102` = выход / playback / `POST /speaker`
+- [`config/PrivateConfig.h`](config/PrivateConfig.h) — локальный файл, не коммитится
+- [`config/PrivateConfig.example.h`](config/PrivateConfig.example.h) — шаблон
 
-`PCM5102` не участвует в тракте микрофона и не должен использоваться для диагностики `INMP441`.
+Схема IP: `192.168.<kWifiSubnetOctet3>.<kWifiHostOctet>`. Текущее значение `kWifiHostOctet = 171`.
 
-## Рабочая схема подключения
+AP-fallback: SSID `Adam Chip`, пароль `4D4M-CH1P4$`, IP `192.168.4.1`.
 
-- `COM7` = `USB TO SERIAL` -> использовать для прошивки
-- `COM6` = `USB OTG / native USB CDC` -> использовать для логов приложения
+---
 
-После старта устройство должно работать по `Wi‑Fi`, без постоянного USB.
+## Порты
 
-## Статический IP
+| Порт | Назначение |
+|------|-----------|
+| **80** | Control-сервер: UI, весь `/api/*`, `/ws`, `/capture` |
+| **81** | Stream-сервер: `/stream` (MJPEG), `/audio` (mic uplink), `/speaker` (playback) |
 
-В прошивке можно зафиксировать IP-адрес ESP32, чтобы не искать его после каждой перезагрузки.
+Пути `/audio` и `/speaker` на порту 80 возвращают `301 → :81`. Для прямого доступа используй порт 81.
 
-Приватные сетевые настройки теперь лежат в локальном файле [config/PrivateConfig.h](F:\Adam-Chip\Subsystem\AdamsServer\config\PrivateConfig.h), а шаблон — в [config/PrivateConfig.example.h](F:\Adam-Chip\Subsystem\AdamsServer\config\PrivateConfig.example.h).
+---
 
-Схема адреса такая:
+## UI-иерархия
 
-- итоговый IP устройства = `192.168.<kWifiSubnetOctet3>.<kWifiHostOctet>`
+| Путь | Описание |
+|------|---------|
+| `GET /` или `/dashboard` | Панель управления: стримы, телеметрия, сенсоры. Авто-обновление 1 с |
+| `GET /ctrldash` | Техническая панель: endpoint-health, raw-состояния модулей, OTA |
+| `GET /live` | Только видео, минимальный интерфейс |
+| `GET /ota` | Обновление прошивки через браузер |
+| `GET /motor_skills` | Управление PCA9685: каналы, сцены, частота |
+| `GET /vision` `/hearing` `/sensorics` `/system` | Legacy — редирект на `/dashboard` |
+| `GET /vision/live` `/hearing/live` | Legacy live-страницы — работают |
 
-Рекомендуемые номера хоста:
+---
 
-- `17`
-- `71`
-- `171`
+## Аудио: два независимых тракта
 
-Текущая локальная настройка:
+| Тракт | Железо | Направление | Endpoint |
+|-------|--------|-------------|---------|
+| Capture (mic) | INMP441 x2 | ESP → Jetson | `GET :81/audio` |
+| Playback (speaker) | PCM5102A | Jetson → ESP | `POST :81/speaker` |
 
-- `kWifiSubnetOctet3 = 0`
-- `kWifiHostOctet = 171`
+`PCM5102A` не участвует в тракте микрофона и не должен использоваться для его диагностики.
 
-Значит текущий адрес ESP32:
+### Speaker playback — формат
 
-- `192.168.0.171`
+`POST :81/speaker` ожидает **mono, 16-bit PCM, 44100 Hz**.
 
-Если у вас другая сеть, например `192.168.1.x`, достаточно поменять только:
+Принимает:
+- Сырые PCM-байты (без заголовка)
+- WAV-файл — заголовок автоматически парсится и валидируется
 
-- `kWifiSubnetOctet3 = 1`
-
-Если хотите другой хост-адрес, меняется только:
-
-- `kWifiHostOctet = 17` или `71` или `171`
-
-## W5500 Ethernet
-
-Прошивка поддерживает `W5500 MINI` через штатный `ETH.h` из Arduino-ESP32. Сейчас активный транспорт по умолчанию остаётся `Wi‑Fi`:
-
-- `kNetworkTransport = AdamsNetworkTransport::WiFi`
-- текущий адрес ESP32 остаётся `192.168.0.171`
-
-Для прямого кабеля Jetson ↔ W5500 переключите транспорт на `AdamsNetworkTransport::EthernetW5500` или соберите с `-DADAMS_NETWORK_TRANSPORT_ETHERNET_W5500=1`.
-
-Статическая Ethernet-схема:
-
-- Jetson NIC: `192.168.50.1/24`
-- ESP32 W5500: `192.168.50.2/24`
-- `ESP_BASE_URL=http://192.168.50.2`
-- `ESP_SPEAKER_URL=http://192.168.50.2:83/speaker`
-
-После переключения те же endpoint-ы работают на Ethernet host: `http://192.168.50.2`, `:81/stream`, `:82/audio`, `:83/speaker`.
-
-## Структура папки
-
-- `Subsystem/AdamsServer` - входная точка скетча и build-файлы
-- `Subsystem/AdamsServer/config` - конфиги платы и прошивки
-- `Subsystem/AdamsServer/config/PrivateConfig.h` - локальные приватные данные, не коммитится
-- `Subsystem/AdamsServer/config/PrivateConfig.example.h` - шаблон приватного конфига
-- `Subsystem/AdamsServer/src/audio` - модуль микрофона и speaker playback
-- `Subsystem/AdamsServer/src/camera` - камера и встроенные camera assets
-- `Subsystem/AdamsServer/src/core` - runtime state и boot diagnostics
-- `Subsystem/AdamsServer/src/io` - сенсоры и PCA9685
-- `Subsystem/AdamsServer/src/web` - HTTP API и web UI
-- `Subsystem/AdamsServer/tools` - `flash_com7.ps1` и `arduino-cli.exe`
-- `Subsystem/AdamsServer/docs` - runbook и эксплуатационные инструкции
-- `Subsystem/AdamsServer/artifacts` - временные диагностические файлы, клипы и HTML-дампы
-
-## Основные endpoint-ы
-
-- `GET /` - русифицированная диагностическая панель
-- `GET /ctrldash` - панель управления и настроек
-- `GET /live` - легкая страница только с видео
-- `GET /ota` - страница обновления прошивки по Wi‑Fi
-- `GET http://ESP32_IP:81/stream` - MJPEG video
-- `GET http://ESP32_IP/audio` - бесконечный mic uplink как `WAV/PCM`
-- `GET http://ESP32_IP/api/audio` - полная audio diagnostics
-- `POST http://ESP32_IP/api/audio` - runtime-config capture-профиля микрофона
-- `GET http://ESP32_IP/api/audio/clip?ms=2000` - конечный WAV-клип из ring buffer
-- `POST http://ESP32_IP/speaker` - playback sink для `PCM5102`
-- `GET http://ESP32_IP/capture` - одиночный JPEG
-- `GET http://ESP32_IP/api/status` - общий runtime status
-- `GET http://ESP32_IP/api/ota` - статус OTA
-- `POST http://ESP32_IP/api/ota/upload` - загрузка новой прошивки по Wi‑Fi
-- `GET http://ESP32_IP/api/sensors` - snapshot сенсоров
-- `GET http://ESP32_IP/api/camera` - camera state/capabilities
-- `POST http://ESP32_IP/api/camera` - применить camera settings
-- `POST http://ESP32_IP/api/camera/preset/apply` - применить camera preset
-- `POST http://ESP32_IP/api/camera/preset/save` - сохранить camera preset
-- `POST http://ESP32_IP/api/camera/preset/delete` - удалить user preset
-- `POST http://ESP32_IP/api/camera/preset/resetdefaults` - сбросить встроенные presets
-- `GET http://ESP32_IP/api/pca9685` - состояние `PCA9685`
-- `POST http://ESP32_IP/api/pca9685/channel` - один канал
-- `POST http://ESP32_IP/api/pca9685/channels` - несколько каналов
-- `POST http://ESP32_IP/api/pca9685/scene` - сцена
-- `POST http://ESP32_IP/api/pca9685/frequency` - частота PWM
-- `POST http://ESP32_IP/api/sound/play` - проиграть встроенный системный звук `boot`
-- `WS http://ESP32_IP/ws` - push telemetry
-
-## Микрофон: как проверять правильно
-
-`GET /audio` нужен в первую очередь для `ffmpeg` / `go2rtc`, а не как главный ручной тест через браузер.
-
-Для ручной проверки микрофона используйте:
-
-- `GET /api/audio` — чтобы посмотреть профиль, пики `left/right`, `signal_state`, `dc_offset`, `clip_count`
-- `GET /api/audio/clip?ms=2000` — чтобы открыть конечный WAV и нормально прослушать последние 2 секунды
-
-Пример диагностики:
-
-```powershell
-curl.exe http://ESP32_IP/api/audio
-```
-
-Пример получения тестового клипа:
-
-```powershell
-curl.exe http://ESP32_IP/api/audio/clip?ms=2000 --output mic_test.wav
-```
-
-Пример смены capture-профиля без перепрошивки:
-
-```powershell
-curl.exe -X POST http://ESP32_IP/api/audio ^
-  -H "Content-Type: application/json" ^
-  -d "{\"profile\":\"inmp441_philips32_left\",\"software_gain\":1.0,\"dc_block\":true,\"slot\":1,\"shift\":14}"
-```
-
-Встроенные профили:
-
-- `inmp441_philips32_left`
-- `inmp441_philips32_right`
-- `inmp441_msb32_left`
-- `inmp441_msb32_right`
-- `compat16_left`
-- `compat16_right`
-
-## go2rtc
-
-Пример `go2rtc.yaml`:
-
-```yaml
-streams:
-  adams_cam:
-    - ffmpeg:http://ESP32_IP:81/stream#video=mjpeg
-    - ffmpeg:http://ESP32_IP/audio#audio=pcm_s16le#audio=16000
-```
-
-Для быстрой проверки audio transport:
-
-```powershell
-ffmpeg -i http://ESP32_IP/audio -f null -
-```
-
-## Прошивка и порты
-
-Один основной скрипт:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1 -ListPorts
-```
-
-Он умеет:
-
-- показать диагностику по `COM`-портам
-- подобрать upload/monitor порты
-- собрать прошивку
-- прошить ESP32
-- открыть serial monitor при ключе `-Monitor`
-
-## OTA по Wi‑Fi
-
-Разметка `partitions.csv` уже подходит для OTA:
-
-- есть `otadata`
-- есть два app-слота: `app0` и `app1`
-
-Это значит, что новая прошивка записывается в свободный app-слот, а затем ESP32 перезагружается уже в него.
-
-Способы обновления:
-
-- через встроенную страницу `http://ESP32_IP/ota`
-- через PowerShell-скрипт `tools/flash_ota.ps1`
-- через `curl` на `POST /api/ota/upload`
-
-PowerShell:
-
-```powershell
-cd F:\Adam-Chip
-powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_ota.ps1 -Host ESP32_IP
-```
-
-Если включен токен OTA в `config/PrivateConfig.h`:
-
-```powershell
-cd F:\Adam-Chip
-powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_ota.ps1 -Host ESP32_IP -Token YOUR_TOKEN
-```
-
-Прямой upload через `curl`:
-
-```powershell
-curl.exe -X POST ^
-  -H "Content-Type: application/octet-stream" ^
-  --data-binary "@AdamsServer.ino.bin" ^
-  http://ESP32_IP/api/ota/upload
-```
-
-Важно:
-
-- нужен именно основной бинарник приложения, например `AdamsServer.ino.bin`
-- не нужно отправлять `bootloader.bin`
-- не нужно отправлять `partitions.bin`
-
-## Speaker playback с ПК
-
-`POST /speaker` ожидает:
-
-- `mono`
-- `16 kHz`
-- `16-bit PCM`
+Если WAV-заголовок не соответствует (`sampleRate ≠ 44100`, `channels ≠ 1`, `bits ≠ 16`):
+ответ `400 speaker_wav_format_mismatch`.
 
 WAV-файл:
 
 ```powershell
-curl.exe --data-binary "@input.wav" -H "Content-Type: audio/wav" http://ESP32_IP/speaker
+curl.exe --data-binary "@input.wav" -H "Content-Type: audio/wav" http://192.168.0.171:81/speaker
 ```
 
 Поток через `ffmpeg`:
 
 ```powershell
-ffmpeg -re -i input.wav -f s16le -acodec pcm_s16le -ac 1 -ar 16000 -chunked_post 0 http://ESP32_IP/speaker
+ffmpeg -re -i input.wav -f s16le -acodec pcm_s16le -ac 1 -ar 44100 http://192.168.0.171:81/speaker
 ```
 
-## Системные звуки ESP
+Speaker ring buffer: **32 KB** (~372 мс при 44100 Hz). Alloced в DRAM. Запись rate-limited — при переполнении ждёт I2S drain вместо дропа (4 мс backoff).
 
-Boot-cue больше не отправляется с Jetson при каждом старте. Он встроен в
-прошивку как flash/PROGMEM PCM и проигрывается самой ESP после успешной
-инициализации `PCM5102`. `success` cue тоже встроен в прошивку и может быть
-вызван вручную через тот же API.
+---
 
-Исходный asset:
+## Микрофон — диагностика
 
-- `Subsystem/AdamsServer/data/sounds/boot.wav`
-- `Subsystem/AdamsServer/data/sounds/success.wav`
-- формат embedded playback assets: `mono`, `44.1 kHz`, `16-bit PCM`
-
-Ручной тест после прошивки:
+Основной инструмент диагностики — **не** браузерный стрим, а:
 
 ```powershell
-curl.exe -X POST "http://ESP32_IP/api/sound/play?name=boot"
-curl.exe -X POST "http://ESP32_IP/api/sound/play?name=tone"
-curl.exe -X POST "http://ESP32_IP/api/sound/play?name=success"
+# Статус: профиль, пики L/R, signal_state, dc_offset, clip_count
+curl.exe http://192.168.0.171/api/audio
+
+# WAV-клип последних 2 с из ring buffer
+curl.exe "http://192.168.0.171/api/audio/clip?ms=2000" --output mic_test.wav
+
+# Смена профиля без перепрошивки
+curl.exe -X POST http://192.168.0.171/api/audio `
+  -H "Content-Type: application/json" `
+  -d '{"profile":"inmp441_philips32_stereo","software_gain":7.0,"dc_block":true}'
 ```
 
+Встроенные профили:
+
+| Профиль | Формат | Канал |
+|---------|--------|-------|
+| `inmp441_philips32_left` | Philips/32-bit | Левый |
+| `inmp441_philips32_right` | Philips/32-bit | Правый |
+| `inmp441_philips32_stereo` | Philips/32-bit | Стерео (default) |
+| `inmp441_msb32_left` | MSB/32-bit | Левый |
+| `inmp441_msb32_right` | MSB/32-bit | Правый |
+| `inmp441_msb32_stereo` | MSB/32-bit | Стерео |
+| `compat16_left` | Philips/16-bit | Левый |
+| `compat16_right` | Philips/16-bit | Правый |
+
+Mic ring buffer: **256 KB** в PSRAM (~4 с стерео при 16 kHz 16-bit).
+
+---
+
+## go2rtc
+
+```yaml
+streams:
+  adams_cam:
+    - ffmpeg:http://192.168.0.171:81/stream#video=mjpeg
+    - ffmpeg:http://192.168.0.171:81/audio#audio=pcm_s16le#audio=16000
+```
+
+Быстрая проверка audio transport:
+
+```powershell
+ffmpeg -i http://192.168.0.171:81/audio -f null -
+```
+
+---
+
 ## PCA9685
+
+Частота и активная сцена хранятся в NVS и восстанавливаются при каждой перезагрузке.
+
+Текущие значения на устройстве: `freq=200 Hz`, `scene=test_all`.
 
 Один канал:
 
 ```powershell
-curl.exe -X POST http://ESP32_IP/api/pca9685/channel -H "Content-Type: application/json" -d "{\"channel\":0,\"mode\":\"pwm\",\"value\":2048}"
+curl.exe -X POST http://192.168.0.171/api/pca9685/channel `
+  -H "Content-Type: application/json" `
+  -d '{"channel":0,"mode":"pwm","value":2048}'
+```
+
+Несколько каналов:
+
+```powershell
+curl.exe -X POST http://192.168.0.171/api/pca9685/channels `
+  -H "Content-Type: application/json" `
+  -d '{"channels":[{"channel":0,"mode":"pwm","value":2048},{"channel":1,"mode":"off"}]}'
 ```
 
 Сцена:
 
 ```powershell
-curl.exe -X POST http://ESP32_IP/api/pca9685/scene -H "Content-Type: application/json" -d "{\"scene\":\"all_on\"}"
+curl.exe -X POST http://192.168.0.171/api/pca9685/scene `
+  -H "Content-Type: application/json" `
+  -d '{"scene":"boot_idle"}'
 ```
+
+Встроенные сцены: `boot_idle`, `test_all`, `all_on`, `alternating`.
+
+Частота:
+
+```powershell
+curl.exe -X POST http://192.168.0.171/api/pca9685/frequency `
+  -H "Content-Type: application/json" `
+  -d '{"frequency":50}'
+```
+
+---
+
+## Системные звуки
+
+Boot-звук встроен в прошивку и проигрывается автоматически после инициализации `PCM5102A`.
+
+Ручной тест:
+
+```powershell
+curl.exe -X POST "http://192.168.0.171/api/sound/play?name=boot"
+curl.exe -X POST "http://192.168.0.171/api/sound/play?name=success"
+curl.exe -X POST "http://192.168.0.171/api/sound/play?name=tone"
+```
+
+Формат embedded assets: mono, 44.1 kHz, 16-bit PCM.
+
+---
+
+## Полный список API-маршрутов
+
+### Port 80 — Control
+
+| Метод | Путь | Описание |
+|-------|------|---------|
+| GET | `/api/status` | Runtime-статус всех подсистем |
+| GET | `/api/dashboard` | Агрегированный дашборд (для UI) |
+| GET | `/api/sensors` | Сенсоры: свет, motion |
+| GET | `/api/audio` | Состояние capture + playback |
+| POST | `/api/audio` | Обновить профиль/параметры capture |
+| GET | `/api/audio/clip?ms=N` | WAV-клип из ring buffer (250–4000 мс) |
+| GET | `/api/camera` | Состояние и возможности камеры |
+| POST | `/api/camera` | Применить настройки камеры |
+| POST | `/api/camera/preset/apply` | Применить пресет |
+| POST | `/api/camera/preset/save` | Сохранить пользовательский пресет |
+| POST | `/api/camera/preset/delete` | Удалить пресет |
+| POST | `/api/camera/preset/resetdefaults` | Сбросить встроенные пресеты |
+| GET | `/capture` | Одиночный JPEG |
+| GET | `/api/pca9685` | Состояние PCA9685 |
+| POST | `/api/pca9685/channel` | Один канал |
+| POST | `/api/pca9685/channels` | Несколько каналов |
+| POST | `/api/pca9685/scene` | Сцена |
+| POST | `/api/pca9685/frequency` | Частота PWM (сохраняется в NVS) |
+| POST | `/api/sound/play?name=X` | Проиграть системный звук |
+| GET | `/api/ota` | Статус OTA |
+| POST | `/api/ota/upload` | Загрузить новую прошивку |
+| POST | `/api/video_latency/reset` | Сбросить метрики видео-латентности |
+| POST | `/api/system/reset` | Перезагрузить ESP32 |
+| POST | `/api/system/stream/restart` | Перезапустить stream-сервер |
+| GET | `/api/system/info` | Heap, uptime, минимальный heap |
+| WS | `/ws` | Push-телеметрия |
+| GET | `/audio` | → 301 redirect на `:81/audio` |
+| POST | `/speaker` | → 301 redirect на `:81/speaker` |
+
+### Port 81 — Streams
+
+| Метод | Путь | Описание |
+|-------|------|---------|
+| GET | `/stream` | MJPEG-видеопоток |
+| GET | `/audio` | Mic uplink (бесконечный WAV/PCM) |
+| POST | `/speaker` | Playback sink (WAV или raw PCM) |
+
+---
+
+## Прошивка и COM-порты
+
+```
+COM7 = USB TO SERIAL (CH343)  → предпочтительный порт для прошивки
+COM6 = USB OTG / CDC          → логи приложения; используется как fallback для прошивки
+```
+
+Скрипт умеет автоматически выбрать порт, откомпилировать и зашить:
+
+```powershell
+# Показать доступные COM-порты
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1 -ListPorts
+
+# Сборка + прошивка (автовыбор порта)
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1
+
+# Указать порт явно
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1 -Port COM6
+
+# После прошивки сразу открыть serial monitor
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1 -Monitor
+
+# Пропустить стирание flash (быстрее, NVS сохраняется)
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com7.ps1 -SkipErase
+```
+
+Флаг `-SkipErase` сохраняет NVS-данные (частота PCA9685, сцена, camera-пресеты).
+
+---
+
+## OTA по Wi-Fi
+
+Структура `partitions.csv` поддерживает двойной app-слот — OTA пишет в свободный слот, затем перезагружается.
+
+Через браузер: `http://192.168.0.171/ota`
+
+Через PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_ota.ps1 -Host 192.168.0.171
+# С токеном:
+powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_ota.ps1 -Host 192.168.0.171 -Token YOUR_TOKEN
+```
+
+Нужен только основной бинарник `AdamsServer.ino.bin` (не bootloader, не partitions).
+
+Через curl:
+
+```powershell
+curl.exe -X POST -H "Content-Type: application/octet-stream" `
+  --data-binary "@AdamsServer.ino.bin" `
+  http://192.168.0.171/api/ota/upload
+```
+
+---
+
+## Структура папки
+
+| Путь | Содержимое |
+|------|-----------|
+| `AdamsServer.ino` | Точка входа скетча |
+| `config/AdamsConfig.h` | Все compile-time константы |
+| `config/PrivateConfig.h` | Сетевые данные (не коммитится) |
+| `config/PrivateConfig.example.h` | Шаблон PrivateConfig |
+| `config/PinsConfig.h` | Распиновка всех модулей |
+| `src/audio/` | I2S capture + playback |
+| `src/camera/` | OV5640, MJPEG-стриминг |
+| `src/core/` | Network (W5500/WiFi/AP), OTA, RuntimeState, boot diagnostics |
+| `src/io/` | PCA9685, сенсоры |
+| `src/web/` | HTTP-серверы (control + stream), весь UI |
+| `tools/` | `flash_com7.ps1`, `flash_ota.ps1`, `arduino-cli.exe` |
+| `artifacts/` | Диагностические файлы, WAV-клипы, логи |
+| `docs/` | Runbook, эксплуатационные инструкции |
