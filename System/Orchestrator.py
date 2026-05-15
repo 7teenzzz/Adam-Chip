@@ -120,8 +120,15 @@ prompt_trace: deque[dict[str, Any]] = deque(maxlen=_PROMPT_TRACE_MAX)
 
 
 # Pre-compiled sentence boundary regex for streaming LLM→TTS pipeline.
-# Matches .!?。！？ and em-dash (—, common in Russian) followed by whitespace.
-_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？—])\s+")
+# Matches .!?。！？ — true sentence terminators only.
+#
+# Em-dash (—) deliberately excluded: in Russian it is a paraphrasing /
+# dialogue / mid-sentence punctuation, not a sentence end. Including it
+# produced tiny 5-10 char chunks ("Зачем —"), each rendered as a separate
+# Silero WAV with its own leading/trailing silence padding. After streaming
+# concatenation, the gaps were perceived as audio "echo" / hesitation
+# between words (T16 user report).
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？])\s+")
 
 
 def _apply_wav_speed(wav: bytes, speed: float) -> bytes:
