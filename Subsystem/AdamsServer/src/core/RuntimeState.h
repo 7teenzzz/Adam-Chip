@@ -20,6 +20,16 @@ struct RuntimeState {
   volatile uint32_t latestFrameSequence = 0;
   volatile uint32_t streamRestarts = 0;
   volatile uint32_t streamDrops = 0;
+  // T17 fix #11 — audio /audio:81 endpoint diagnostics. Lets the Jetson and
+  // the operator UI tell at a glance whether the stream server is leaking
+  // sessions (audioSessionsActive trending up across iterations) or whether
+  // the audioHandler is rejecting connects (allocFailures / chunkAllocFailures).
+  volatile uint32_t audioSessionsTotal = 0;          // cumulative sessions started
+  volatile uint32_t audioSessionsActive = 0;         // currently running audioHandler tasks
+  volatile uint32_t audioSessionsTimedOut = 0;       // exited via send_wait_timeout
+  volatile uint32_t audioSessionsKeepaliveDeath = 0; // exited via TCP keepalive / disconnect probe
+  volatile uint32_t audioChunkAllocFailures = 0;     // malloc(kAudioReadChunkBytes) returned null
+  volatile uint32_t audioHeaderSendFailures = 0;     // initial WAV-header send_chunk failed
   volatile uint32_t cameraReinitCount = 0;
   volatile uint32_t streamSendTimeMs = 0;
   volatile uint32_t streamTimeoutCloses = 0;

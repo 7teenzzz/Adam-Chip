@@ -157,15 +157,15 @@ const SCHEMA = [
       { key: "command_endpointing_ms", label: "Endpointing — пауза перед отправкой (мс)", type: "number",
         hint: "3000 рекомендуется · VAD ждёт такую паузу тишины, затем отправляет фразу в распознавание",
         min: 200, max: 5000, step: 100 },
-      { key: "reply_window_sec", label: "Reply window — ожидание ответа (с)", type: "number",
-        hint: "4.0 · после ответа Адама открывается окно, в котором зритель может говорить без wake word",
-        min: 1, max: 30, step: 0.5 },
-      { key: "reply_absolute_deadline_sec", label: "Reply window — жёсткий дедлайн (с)", type: "number",
-        hint: "12.0 · принудительное закрытие reply window даже при наличии звука",
-        min: 5, max: 60, step: 1 },
+      { key: "reply_window_sec", label: "Reply window — soft (с)", type: "number",
+        hint: "3.75 · soft-окно после ответа Адама — зритель может говорить без wake word; если речи нет → STANDBY",
+        min: 1, max: 30, step: 0.25 },
+      { key: "reply_absolute_deadline_sec", label: "Reply window — доп. время до hard-дедлайна (с)", type: "number",
+        hint: "7.5 · дополнительные секунды поверх soft-окна. Hard cutoff = soft + это значение (по умолчанию 3.75 + 7.5 = 11.25)",
+        min: 1, max: 60, step: 0.5 },
       { key: "reply_window_expired_action", label: "Reply window — действие по истечении", type: "select",
         choices: ["standby", "stop"],
-        hint: "standby — остаётся в ожидании wake word · stop — отключает микрофон (принудительно, как в exhibition)" },
+        hint: "standby — возврат в ожидание wake word (микрофон работает) · stop — полностью останавливает voice loop, требует ручного запуска через /api/voice/start" },
       { key: "webrtc_vad_aggressiveness", label: "WebRTC VAD — агрессивность", type: "number",
         sourceSection: "media.audio",
         hint: "0–3 · 2 = баланс, 3 = строго · выше = меньше ложных срабатываний на фоновый шум, но возможны пропуски тихой речи",
@@ -233,6 +233,7 @@ const SCHEMA = [
       { key: "max_segment_ms", label: "Макс. длина сегмента (мс)", type: "number",
         hint: "9000 рекомендуется" },
     ],
+    extras: () => buildMicSourceExtras(),
   },
 
   // ── Scene worker ──────────────────────────────────────────────────────────────
@@ -596,15 +597,46 @@ function buildWakeWordExtras() {
     style: "font-size:10px; color:var(--muted); font-family:var(--font-mono)",
   }, "");
 
-  // Pull current calibration profile label from status on mount.
-  import("../api.js").then(({ api }) => {
-    api.get("/api/agent/status").then((s) => {
-      const vl = s?.voice_loop || {};
+  // T17 fix — the calibration profile label has to track mic_active_source
+  // live, otherwise the user sees a stale "local" after an ESP32 reboot
+  // (or stale "esp32" after a silent fallback to local). The previous
+  // one-shot fetch on mount caused the user-reported "UI doesn't match
+  // actual mic" confusion.
+  //
+  // GSD-investigation T17-deploy follow-up: the previous implementation
+  // leaked an SSE subscription on every panel-unmount because the panel
+  // mount returned an empty teardown. Now buildWakeWordExtras exposes a
+  // `_dispose` callback on the wrapper element so the panel teardown can
+  // tear the subscription down cleanly.
+  let _profileUnsub = null;
+  Promise.all([
+    import("../api.js"),
+  ]).then(([{ api, subscribeEvents }]) => {
+    const renderProfileLabel = (status) => {
+      const vl = status?.voice_loop || {};
       const src = vl.mic_active_source || vl.mic_source || "local";
       const profile = vl.esp32_mic_profile || "";
-      const key = src.startsWith("esp") ? `esp32:${profile}` : `local:${s?.media?.audio?.input_device || "pulse"}`;
-      calibProfileEl.textContent = `Профиль: ${key}`;
-    }).catch(() => {});
+      const key = src.startsWith("esp")
+        ? `esp32:${profile}`
+        : `local:${status?.media?.audio?.input_device || "pulse"}`;
+      const fallbackTag = vl.esp_mic_fallback ? " · fallback" : "";
+      calibProfileEl.textContent = `Профиль: ${key}${fallbackTag}`;
+    };
+    const refresh = () => api.get("/api/agent/status").then(renderProfileLabel).catch(() => {});
+    refresh();
+    // Subscribe to events that change which mic is actually active.
+    _profileUnsub = subscribeEvents((event) => {
+      if (event && [
+        "voice_loop_started",
+        "voice_loop_stopped",
+        "esp32_mic_fallback_start",
+        "esp32_mic_restored",
+        "mode_changed",
+        "config_patched",
+      ].includes(event.type)) {
+        refresh();
+      }
+    });
   });
 
   function _describeCalibProfile(rec) {
@@ -614,7 +646,7 @@ function buildWakeWordExtras() {
     return `Профиль: ${key} — калибровано ${ts}`;
   }
 
-  return el("div", { style: "display:flex; flex-direction:column; gap:6px; margin-top:10px" }, [
+  const wrapper = el("div", { style: "display:flex; flex-direction:column; gap:6px; margin-top:10px" }, [
     el("div", { style: "display:flex; align-items:center; gap:8px" }, [
       el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Уровень микрофона · порог OWW"),
       el("span", { class: "spacer" }),
@@ -629,6 +661,154 @@ function buildWakeWordExtras() {
     ]),
     calibProfileEl,
   ]);
+  // T17-deploy GSD fix — expose a dispose hook so the panel teardown can
+  // unsubscribe the SSE listener + dispose the wake-meter widget. Without
+  // this every settings-then-leave navigation leaked one EventSource.
+  wrapper._dispose = () => {
+    try { if (_profileUnsub) _profileUnsub(); } catch (_) {}
+    if (meter && typeof meter.dispose === "function") {
+      try { meter.dispose(); } catch (_) {}
+    }
+  };
+  return wrapper;
+}
+
+// ── Mic-source live status + Force ESP retry button ───────────────────────────
+// Live badge of which mic is actually feeding audio + a button that triggers
+// a single-shot retry to switch from local fallback back to ESP. The button
+// is enabled only when voice_loop is on local fallback (mic_source=esp32 BUT
+// _esp_mic_fallback=true). After click, the orchestrator probes ESP once;
+// on success it cancels the bg-retry task and restarts voice_loop with ESP.
+function buildMicSourceExtras() {
+  const statusBadge = el("span", {
+    class: "badge",
+    style: "font-size:10px; padding:2px 8px; font-family:var(--font-mono)",
+  }, "…");
+
+  const forceBtn = el("button", {
+    class: "btn",
+    style: "font-size:11px; padding:4px 10px",
+    disabled: true,
+    onclick: async () => {
+      forceBtn.disabled = true;
+      forceBtn.textContent = "Подключаюсь к ESP…";
+      try {
+        const { api } = await import("../api.js");
+        const result = await api.post("/api/voice/force_esp_retry", {});
+        if (result && result.ok) {
+          statusBadge.textContent = "ESP отвечает — переключение…";
+          statusBadge.style.background = "rgba(67,209,122,0.15)";
+          forceBtn.textContent = "✓ Переключение";
+          // refresh() will fire on voice_loop_started event shortly
+        } else {
+          const err = (result && result.error) || "неизвестная ошибка";
+          forceBtn.textContent = `Ошибка: ${err}`;
+          forceBtn.disabled = false;
+          setTimeout(() => { forceBtn.textContent = "Подключиться к ESP"; }, 4000);
+        }
+      } catch (e) {
+        forceBtn.textContent = `Ошибка: ${e.message || e}`;
+        forceBtn.disabled = false;
+        setTimeout(() => { forceBtn.textContent = "Подключиться к ESP"; }, 4000);
+      }
+    },
+  }, "Подключиться к ESP");
+
+  const hintEl = el("span", {
+    class: "dim",
+    style: "font-size:10px; color:var(--muted); line-height:1.3",
+  }, "Активно только если сейчас работает local mic, а в Config выбран esp32.");
+
+  let _unsub = null;
+  Promise.all([
+    import("../api.js"),
+  ]).then(([{ api, subscribeEvents }]) => {
+    const renderStatus = (status) => {
+      const vl = status?.voice_loop || {};
+      const active = vl.mic_active_source || vl.mic_source || "local";
+      const stream = vl.mic_stream_state || "n/a";
+      const wait = vl.esp_boot_wait_state || "n/a";
+      const bgRetry = !!vl.esp_bg_retry_active;
+      const canForce = !!vl.force_esp_retry_available;
+
+      // Build human-readable badge text
+      let badgeText = "";
+      let badgeBg = "rgba(150,150,160,0.15)";
+      if (active === "esp32_stereo" || active === "esp32_mono") {
+        badgeText = `Активен: ESP32 (${active === "esp32_stereo" ? "stereo" : "mono"})`;
+        badgeBg = "rgba(67,209,122,0.18)";
+      } else if (active === "local_fallback") {
+        const sub = bgRetry ? " · фон-retry активен" : " · ESP не отвечает";
+        badgeText = `Активен: Local fallback${sub}`;
+        badgeBg = "rgba(240,184,74,0.18)";
+      } else if (active === "local") {
+        badgeText = "Активен: Local (по конфигу)";
+        badgeBg = "rgba(150,150,160,0.15)";
+      } else {
+        badgeText = `Активен: ${active}`;
+      }
+      if (wait === "waiting") badgeText += " · ожидание ESP";
+      if (stream === "connecting" && active !== "local") badgeText += " · подключение";
+
+      statusBadge.textContent = badgeText;
+      statusBadge.style.background = badgeBg;
+
+      // Force button is enabled only when on local fallback
+      forceBtn.disabled = !canForce;
+      if (!canForce) {
+        forceBtn.style.opacity = "0.5";
+        forceBtn.style.cursor = "not-allowed";
+      } else {
+        forceBtn.style.opacity = "1";
+        forceBtn.style.cursor = "pointer";
+        if (forceBtn.textContent.startsWith("Ошибка") || forceBtn.textContent === "✓ Переключение") {
+          forceBtn.textContent = "Подключиться к ESP";
+        }
+      }
+    };
+
+    const refresh = () => api.get("/api/agent/status").then(renderStatus).catch(() => {});
+    refresh();
+
+    _unsub = subscribeEvents((event) => {
+      if (event && [
+        "voice_loop_started",
+        "voice_loop_stopped",
+        "voice_loop_esp_boot_wait_start",
+        "voice_loop_esp_boot_wait_ok",
+        "voice_loop_esp_boot_timeout",
+        "voice_loop_esp_bg_retry_success",
+        "voice_loop_esp_bg_retry_fail",
+        "voice_loop_esp_bg_retry_exhausted",
+        "voice_loop_force_esp_retry_success",
+        "voice_loop_force_esp_retry_fail",
+        "esp32_mic_fallback_start",
+        "esp32_mic_restored",
+        "config_patched",
+      ].includes(event.type)) {
+        refresh();
+      }
+    });
+  });
+
+  const wrapper = el("div", {
+    style: "display:flex; flex-direction:column; gap:6px; margin-top:10px; padding:8px; background:rgba(255,255,255,0.03); border-radius:6px",
+  }, [
+    el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap" }, [
+      el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Статус источника микрофона"),
+      el("span", { class: "spacer" }),
+      statusBadge,
+    ]),
+    el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap" }, [
+      forceBtn,
+      hintEl,
+    ]),
+  ]);
+
+  wrapper._dispose = () => {
+    try { if (_unsub) _unsub(); } catch (_) {}
+  };
+  return wrapper;
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -654,6 +834,10 @@ export function mount(target) {
   let audioDevices = [];
   let inputDevices = [];
   let ttsVoices    = [];
+  // T17-deploy GSD fix — collect dispose callbacks from any panel-scoped
+  // resources (SSE subscriptions, animation frames, canvases). The mount
+  // teardown drains this list so navigating away leaks nothing.
+  const disposables = [];
 
   const container  = el("div", { class: "col" });
   const refreshBtn = el("button", { class: "btn", onclick: () => renderAll() }, "Перезагрузить");
@@ -708,6 +892,13 @@ export function mount(target) {
   ]));
 
   async function renderAll() {
+    // T17-deploy GSD fix — releasing previous-render disposables before
+    // re-rendering. Without this, every "Перезагрузить" click stacked one
+    // more SSE listener on top of the existing one.
+    while (disposables.length) {
+      const fn = disposables.pop();
+      try { fn(); } catch (_) {}
+    }
     container.innerHTML = "";
     container.appendChild(el("div", { class: "muted" }, [el("span", { class: "spinner" }), " загрузка…"]));
 
@@ -779,7 +970,14 @@ export function mount(target) {
       const bodyChildren = [grid];
       if (typeof group.extras === "function") {
         const extra = group.extras(ctx, sectionData);
-        if (extra) bodyChildren.push(extra);
+        if (extra) {
+          bodyChildren.push(extra);
+          // T17-deploy GSD fix — collect disposable extras so the panel
+          // teardown can release their SSE subscriptions / canvases.
+          if (typeof extra._dispose === "function") {
+            disposables.push(extra._dispose);
+          }
+        }
       }
 
       const card = el("section", { class: "card" }, [
@@ -806,5 +1004,14 @@ export function mount(target) {
   }
 
   renderAll();
-  return () => {};
+  return () => {
+    // T17-deploy GSD fix — drain every dispose callback registered during
+    // this mount. Without this, each settings-then-leave navigation leaked
+    // an SSE subscription that kept fetching /api/agent/status against a
+    // detached DOM.
+    while (disposables.length) {
+      const fn = disposables.pop();
+      try { fn(); } catch (_) {}
+    }
+  };
 }

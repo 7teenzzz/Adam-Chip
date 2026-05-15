@@ -62,7 +62,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "max_segment_ms": 9000,
             "mic_source": "esp32",
             "esp32_mic_profile": "inmp441_philips32_stereo",
-            "esp_mic_fail_threshold": 6,
+            "esp_mic_fail_threshold": 3,
             "esp_mic_retry_interval_sec": 10.0,
             "esp_health": {
                 "poll_interval_s": 60,
@@ -120,6 +120,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "sample_rate": 24000,
             "timeout_sec": 20,
             "available_speakers": ["aidar", "baya", "kseniya", "xenia", "eugene", "random"],
+            "output_target": "jetson_hdmi",
             "output_device": "plughw:1,3",
             "filler_enabled": True,
             "filler_phrase": "Хм...",
