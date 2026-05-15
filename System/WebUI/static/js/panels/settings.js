@@ -596,15 +596,48 @@ function buildWakeWordExtras() {
     style: "font-size:10px; color:var(--muted); font-family:var(--font-mono)",
   }, "");
 
-  // Pull current calibration profile label from status on mount.
-  import("../api.js").then(({ api }) => {
-    api.get("/api/agent/status").then((s) => {
-      const vl = s?.voice_loop || {};
+  // T17 fix — the calibration profile label has to track mic_active_source
+  // live, otherwise the user sees a stale "local" after an ESP32 reboot
+  // (or stale "esp32" after a silent fallback to local). The previous
+  // one-shot fetch on mount caused the user-reported "UI doesn't match
+  // actual mic" confusion.
+  //
+  // Strategy: refresh on mount + on every voice_loop / mic-fallback /
+  // mode event via SSE. Cheap, keeps the label in sync without polling.
+  Promise.all([
+    import("../api.js"),
+  ]).then(([{ api, subscribeEvents }]) => {
+    const renderProfileLabel = (status) => {
+      const vl = status?.voice_loop || {};
       const src = vl.mic_active_source || vl.mic_source || "local";
       const profile = vl.esp32_mic_profile || "";
-      const key = src.startsWith("esp") ? `esp32:${profile}` : `local:${s?.media?.audio?.input_device || "pulse"}`;
-      calibProfileEl.textContent = `Профиль: ${key}`;
-    }).catch(() => {});
+      const key = src.startsWith("esp")
+        ? `esp32:${profile}`
+        : `local:${status?.media?.audio?.input_device || "pulse"}`;
+      const fallbackTag = vl.esp_mic_fallback ? " · fallback" : "";
+      calibProfileEl.textContent = `Профиль: ${key}${fallbackTag}`;
+    };
+    const refresh = () => api.get("/api/agent/status").then(renderProfileLabel).catch(() => {});
+    refresh();
+    // Subscribe to events that change which mic is actually active.
+    const unsub = subscribeEvents((event) => {
+      if (event && [
+        "voice_loop_started",
+        "voice_loop_stopped",
+        "esp32_mic_fallback_start",
+        "esp32_mic_restored",
+        "mode_changed",
+        "config_patched",
+      ].includes(event.type)) {
+        refresh();
+      }
+    });
+    // Clean up the previous panel mount's SSE subscription if any —
+    // prevents EventSource leak when the user toggles between panels.
+    if (typeof window !== "undefined") {
+      try { window.__calibProfileUnsub__ && window.__calibProfileUnsub__(); } catch (_) {}
+      window.__calibProfileUnsub__ = unsub;
+    }
   });
 
   function _describeCalibProfile(rec) {
