@@ -1,6 +1,7 @@
 #include "WebServerModule.h"
 
 #include <cctype>
+#include <cerrno>
 #include <cinttypes>
 #include <cstring>
 #include <cstdlib>
@@ -2426,7 +2427,27 @@ esp_err_t audioHandler(httpd_req_t *req) {
 
   uint64_t cursor = getAudioWriteSequence();
 
+  // T17 zombie-session fix — non-blocking peek detects client-side close
+  // immediately, even during the 8 ms idle waits when no audio data is
+  // ready to send. Without this, the handler kept looping (silently) for
+  // up to send_wait_timeout seconds after the client had gone, holding the
+  // socket slot and ~5-10 KB of task heap.
+  const int audioSockFd = httpd_req_to_sockfd(req);
+  auto clientStillAlive = [audioSockFd]() -> bool {
+    if (audioSockFd < 0) return true;  // can't check — assume alive
+    char peekBuf;
+    ssize_t r = recv(audioSockFd, &peekBuf, 1, MSG_PEEK | MSG_DONTWAIT);
+    if (r > 0) return true;            // unread bytes — alive
+    if (r == 0) return false;          // orderly close
+    return (errno == EAGAIN || errno == EWOULDBLOCK);
+  };
+
   while (result == ESP_OK) {
+    if (!clientStillAlive()) {
+      result = ESP_FAIL;
+      break;
+    }
+
     size_t bytesRead = 0;
     if (!readAudioChunk(chunk, kAudioReadChunkBytes, bytesRead, cursor)) {
       result = ESP_FAIL;
@@ -2864,6 +2885,21 @@ void registerSpeakerHandlers(httpd_handle_t server) {
 esp_err_t streamServerOpenFn(httpd_handle_t /*hd*/, int sockfd) {
   int nodelay = 1;
   setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+  // T17 zombie-session fix — enable TCP keepalive so the stack auto-detects
+  // dead clients (proxy timeouts, NAT drops, ungraceful disconnects) within
+  // ~9 s instead of waiting for the 30-60 s kernel timeout. Without this,
+  // a hung /audio long-poll session keeps its socket in CLOSE_WAIT and
+  // saturates max_open_sockets, eventually hanging the whole stream server.
+  //   5 s idle + 2 × 2 s probes = ~9 s detection window
+  int keepalive   = 1;
+  int idle        = 5;
+  int intvl       = 2;
+  int cnt         = 2;
+  setsockopt(sockfd, SOL_SOCKET,  SO_KEEPALIVE,  &keepalive, sizeof(keepalive));
+  setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,      sizeof(idle));
+  setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl,     sizeof(intvl));
+  setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,       sizeof(cnt));
   return ESP_OK;
 }
 
@@ -2902,9 +2938,9 @@ esp_err_t systemStreamRestartHandler(httpd_req_t *req) {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port   = kHttpPort + 1 + 1;  // avoid collision with control ctrl_port
   streamConfig.max_uri_handlers  = 6;
-  streamConfig.max_open_sockets  = 4;
+  streamConfig.max_open_sockets  = 6;  // T17 fix: headroom for zombie cleanup window
   streamConfig.lru_purge_enable  = true;
-  streamConfig.send_wait_timeout = 10;
+  streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size        = 8192;
   streamConfig.open_fn           = streamServerOpenFn;
 
@@ -2982,9 +3018,9 @@ bool startWebServer() {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port = controlConfig.ctrl_port + 1;
   streamConfig.max_uri_handlers = 6;
-  streamConfig.max_open_sockets = 4;
+  streamConfig.max_open_sockets = 6;  // T17 fix: headroom for zombie cleanup window
   streamConfig.lru_purge_enable = true;
-  streamConfig.send_wait_timeout = 10;
+  streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size = 8192;
   streamConfig.open_fn = streamServerOpenFn;
 
