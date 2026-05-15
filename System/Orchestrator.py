@@ -335,6 +335,17 @@ class VoiceLoopController:
         self._esp_mic_fallback: bool = False
         self._esp_mic_fail_count: int = 0
         self._esp_mic_last_retry: float = 0.0
+        # Boot-wait + background retry for ESP mic.
+        # Reference logic: every 5s probe ESP /api/status; wait up to 90s before
+        # starting voice_loop. If ESP still silent → fallback to local + spawn
+        # background retry task (20 × 15s = 5 min) which switches back to ESP
+        # on first successful probe. After 20 attempts, stay on local.
+        self.esp_boot_wait_max_sec: int = int(audio_config.get("esp_boot_wait_max_sec", 90))
+        self.esp_boot_wait_poll_sec: int = int(audio_config.get("esp_boot_wait_poll_sec", 5))
+        self.esp_bg_retry_attempts: int = int(audio_config.get("esp_bg_retry_attempts", 20))
+        self.esp_bg_retry_interval_sec: int = int(audio_config.get("esp_bg_retry_interval_sec", 15))
+        self._esp_retry_task: asyncio.Task[None] | None = None
+        self._esp_boot_wait_state: str = "n/a"  # "n/a" | "waiting" | "ready" | "timeout"
         self._raw_is_stereo: bool = False
         self._raw_level_l: float = 0.0
         self._raw_level_r: float = 0.0
@@ -439,6 +450,13 @@ class VoiceLoopController:
             # UI never shows a false-positive INMP441 ✓ during the open
             # window before the WAV header arrives.
             "mic_stream_state": self._mic_stream_state,
+            # Boot-wait + background retry telemetry for the UI button.
+            # esp_boot_wait_state: n/a → waiting → ready | timeout
+            # esp_bg_retry_active: true while 20×15s retry task is alive
+            "esp_boot_wait_state": self._esp_boot_wait_state,
+            "esp_bg_retry_active": bool(self._esp_retry_task and not self._esp_retry_task.done()),
+            # Force-button enabled = user is on local fallback AND mic_source is esp32
+            "force_esp_retry_available": self.mic_source == "esp32" and self._esp_mic_fallback,
         }
 
     def _set_voice_state(self, state: str, reason: str = "") -> None:
@@ -475,6 +493,13 @@ class VoiceLoopController:
 
     async def stop(self) -> dict[str, Any]:
         self.running = False
+        # Cancel background ESP retry task too so it doesn't survive into the next start()
+        if self._esp_retry_task and not self._esp_retry_task.done():
+            self._esp_retry_task.cancel()
+            try:
+                await self._esp_retry_task
+            except asyncio.CancelledError:
+                pass
         if self._task and not self._task.done():
             self._task.cancel()
             try:
@@ -497,12 +522,138 @@ class VoiceLoopController:
 
     async def _run(self) -> None:
         if self.mic_source == "esp32":
-            # ESP32 stream always produces mono 16-bit output (downmix handled in _run_esp32).
-            frame_bytes = max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
-            await self._run_esp32(frame_bytes)
+            # Boot-wait phase: probe ESP /api/status every 5s for up to 90s
+            # before starting voice_loop. ESP должен быть primary mic-source —
+            # даём ему время подняться вместо мгновенного fallback на local.
+            esp_ready = await self._wait_for_esp_ready(
+                max_seconds=self.esp_boot_wait_max_sec,
+                poll_interval=self.esp_boot_wait_poll_sec,
+            )
+            if esp_ready:
+                # ESP отвечает — запускаем _run_esp32 как обычно
+                frame_bytes = max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
+                await self._run_esp32(frame_bytes)
+            else:
+                # ESP молчит 90 сек → fallback на local + background retry task
+                self._esp_mic_fallback = True
+                self._mic_stream_state = "fallback"
+                self._esp_boot_wait_state = "timeout"
+                event_log.append("voice_loop_esp_boot_timeout", {
+                    "waited_sec": self.esp_boot_wait_max_sec,
+                    "background_retry_attempts": self.esp_bg_retry_attempts,
+                    "background_retry_interval_sec": self.esp_bg_retry_interval_sec,
+                })
+                self._start_background_esp_retry()
+                fb_frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
+                await self._run_local(fb_frame_bytes)
         else:
             frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
             await self._run_local(frame_bytes)
+
+    async def _wait_for_esp_ready(self, max_seconds: int = 90, poll_interval: int = 5) -> bool:
+        """Probe ESP /api/status every poll_interval seconds for up to max_seconds.
+        Returns True as soon as ESP responds, False if timeout.
+        Used at boot — Adam должен по умолчанию использовать ESP-микрофоны,
+        давая ESP время подняться перед fallback на local."""
+        if self._mcu is None:
+            return False
+        attempts = max(1, max_seconds // max(1, poll_interval))
+        self._esp_boot_wait_state = "waiting"
+        self._mic_stream_state = "connecting"
+        event_log.append("voice_loop_esp_boot_wait_start", {
+            "max_seconds": max_seconds, "poll_interval_sec": poll_interval, "attempts": attempts,
+        })
+        for i in range(attempts):
+            if not self.running:
+                return False
+            try:
+                result = await self._mcu.request("GET", "/api/status")
+                if result.ok:
+                    elapsed = (i + 1) * poll_interval
+                    self._esp_boot_wait_state = "ready"
+                    event_log.append("voice_loop_esp_boot_wait_ok", {
+                        "attempts": i + 1, "elapsed_sec": elapsed,
+                    })
+                    return True
+            except Exception as exc:
+                event_log.append("voice_loop_esp_boot_wait_probe_error", {
+                    "attempt": i + 1, "error": str(exc)[:120],
+                })
+            if i < attempts - 1:
+                await asyncio.sleep(poll_interval)
+        return False
+
+    def _start_background_esp_retry(self) -> None:
+        """Spawn background task: 20 × 15s polling ESP. On first success → restart voice_loop with ESP."""
+        if self._esp_retry_task and not self._esp_retry_task.done():
+            return
+        self._esp_retry_task = asyncio.create_task(
+            self._background_esp_retry(), name="adam_esp_bg_retry"
+        )
+
+    async def _background_esp_retry(self) -> None:
+        """20 attempts × 15s polling. On success → switch back to ESP via restart()."""
+        max_attempts = self.esp_bg_retry_attempts
+        interval = self.esp_bg_retry_interval_sec
+        for attempt in range(1, max_attempts + 1):
+            await asyncio.sleep(interval)
+            if not self.running:
+                return
+            if not self._esp_mic_fallback:
+                # Someone (force-button) already restored ESP — stop the bg loop
+                return
+            if self._mcu is None:
+                continue
+            try:
+                result = await self._mcu.request("GET", "/api/status")
+                if result.ok:
+                    event_log.append("voice_loop_esp_bg_retry_success", {
+                        "attempt": attempt, "max": max_attempts,
+                    })
+                    self._esp_mic_fallback = False
+                    self._mic_stream_state = "connecting"
+                    if self.running:
+                        asyncio.ensure_future(self.restart())
+                    return
+            except Exception as exc:
+                event_log.append("voice_loop_esp_bg_retry_fail", {
+                    "attempt": attempt, "max": max_attempts, "error": str(exc)[:120],
+                })
+                continue
+            event_log.append("voice_loop_esp_bg_retry_fail", {
+                "attempt": attempt, "max": max_attempts,
+            })
+        event_log.append("voice_loop_esp_bg_retry_exhausted", {"attempts": max_attempts})
+
+    async def force_esp_retry(self) -> dict[str, Any]:
+        """Single-shot retry triggered from UI button.
+        Active only when in local fallback. Probes ESP once; if alive — switches voice_loop to ESP."""
+        if self.mic_source != "esp32":
+            return {"ok": False, "error": "mic_source is not esp32"}
+        if not self._esp_mic_fallback:
+            return {"ok": False, "error": "not in fallback — ESP already active or never tried"}
+        if self._mcu is None:
+            return {"ok": False, "error": "mcu client not configured"}
+        try:
+            result = await self._mcu.request("GET", "/api/status")
+        except Exception as exc:
+            event_log.append("voice_loop_force_esp_retry_error", {"error": str(exc)[:120]})
+            return {"ok": False, "error": f"ESP probe raised: {exc}"}
+        if not result.ok:
+            event_log.append("voice_loop_force_esp_retry_fail", {
+                "status": result.status, "error": result.error,
+            })
+            return {"ok": False, "error": f"ESP not responding: {result.error or result.status}"}
+        # ESP отвечает → restore + restart voice_loop с ESP
+        event_log.append("voice_loop_force_esp_retry_success", {})
+        self._esp_mic_fallback = False
+        self._mic_stream_state = "connecting"
+        # Cancel running background retry to avoid double-restart race
+        if self._esp_retry_task and not self._esp_retry_task.done():
+            self._esp_retry_task.cancel()
+        if self.running:
+            asyncio.ensure_future(self.restart())
+        return {"ok": True, "message": "ESP responded — switching voice_loop"}
 
     async def _run_local(self, frame_bytes: int) -> None:
         _delays = [1.0, 2.0, 4.0]
@@ -1730,6 +1881,13 @@ async def listen_stop() -> dict[str, Any]:
 @app.get("/api/agent/listen/status")
 async def listen_status() -> dict[str, Any]:
     return {"ok": True, **voice_loop.status()}
+
+
+@app.post("/api/voice/force_esp_retry")
+async def voice_force_esp_retry() -> dict[str, Any]:
+    """Single-shot ESP probe + voice_loop restart (UI button).
+    Active only when mic_source=esp32 AND in local fallback."""
+    return await voice_loop.force_esp_retry()
 
 
 def _ui_settings_public() -> dict[str, Any]:

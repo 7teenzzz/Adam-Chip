@@ -233,6 +233,7 @@ const SCHEMA = [
       { key: "max_segment_ms", label: "Макс. длина сегмента (мс)", type: "number",
         hint: "9000 рекомендуется" },
     ],
+    extras: () => buildMicSourceExtras(),
   },
 
   // ── Scene worker ──────────────────────────────────────────────────────────────
@@ -668,6 +669,144 @@ function buildWakeWordExtras() {
     if (meter && typeof meter.dispose === "function") {
       try { meter.dispose(); } catch (_) {}
     }
+  };
+  return wrapper;
+}
+
+// ── Mic-source live status + Force ESP retry button ───────────────────────────
+// Live badge of which mic is actually feeding audio + a button that triggers
+// a single-shot retry to switch from local fallback back to ESP. The button
+// is enabled only when voice_loop is on local fallback (mic_source=esp32 BUT
+// _esp_mic_fallback=true). After click, the orchestrator probes ESP once;
+// on success it cancels the bg-retry task and restarts voice_loop with ESP.
+function buildMicSourceExtras() {
+  const statusBadge = el("span", {
+    class: "badge",
+    style: "font-size:10px; padding:2px 8px; font-family:var(--font-mono)",
+  }, "…");
+
+  const forceBtn = el("button", {
+    class: "btn",
+    style: "font-size:11px; padding:4px 10px",
+    disabled: true,
+    onclick: async () => {
+      forceBtn.disabled = true;
+      forceBtn.textContent = "Подключаюсь к ESP…";
+      try {
+        const { api } = await import("../api.js");
+        const result = await api.post("/api/voice/force_esp_retry", {});
+        if (result && result.ok) {
+          statusBadge.textContent = "ESP отвечает — переключение…";
+          statusBadge.style.background = "rgba(67,209,122,0.15)";
+          forceBtn.textContent = "✓ Переключение";
+          // refresh() will fire on voice_loop_started event shortly
+        } else {
+          const err = (result && result.error) || "неизвестная ошибка";
+          forceBtn.textContent = `Ошибка: ${err}`;
+          forceBtn.disabled = false;
+          setTimeout(() => { forceBtn.textContent = "Подключиться к ESP"; }, 4000);
+        }
+      } catch (e) {
+        forceBtn.textContent = `Ошибка: ${e.message || e}`;
+        forceBtn.disabled = false;
+        setTimeout(() => { forceBtn.textContent = "Подключиться к ESP"; }, 4000);
+      }
+    },
+  }, "Подключиться к ESP");
+
+  const hintEl = el("span", {
+    class: "dim",
+    style: "font-size:10px; color:var(--muted); line-height:1.3",
+  }, "Активно только если сейчас работает local mic, а в Config выбран esp32.");
+
+  let _unsub = null;
+  Promise.all([
+    import("../api.js"),
+  ]).then(([{ api, subscribeEvents }]) => {
+    const renderStatus = (status) => {
+      const vl = status?.voice_loop || {};
+      const active = vl.mic_active_source || vl.mic_source || "local";
+      const stream = vl.mic_stream_state || "n/a";
+      const wait = vl.esp_boot_wait_state || "n/a";
+      const bgRetry = !!vl.esp_bg_retry_active;
+      const canForce = !!vl.force_esp_retry_available;
+
+      // Build human-readable badge text
+      let badgeText = "";
+      let badgeBg = "rgba(150,150,160,0.15)";
+      if (active === "esp32_stereo" || active === "esp32_mono") {
+        badgeText = `Активен: ESP32 (${active === "esp32_stereo" ? "stereo" : "mono"})`;
+        badgeBg = "rgba(67,209,122,0.18)";
+      } else if (active === "local_fallback") {
+        const sub = bgRetry ? " · фон-retry активен" : " · ESP не отвечает";
+        badgeText = `Активен: Local fallback${sub}`;
+        badgeBg = "rgba(240,184,74,0.18)";
+      } else if (active === "local") {
+        badgeText = "Активен: Local (по конфигу)";
+        badgeBg = "rgba(150,150,160,0.15)";
+      } else {
+        badgeText = `Активен: ${active}`;
+      }
+      if (wait === "waiting") badgeText += " · ожидание ESP";
+      if (stream === "connecting" && active !== "local") badgeText += " · подключение";
+
+      statusBadge.textContent = badgeText;
+      statusBadge.style.background = badgeBg;
+
+      // Force button is enabled only when on local fallback
+      forceBtn.disabled = !canForce;
+      if (!canForce) {
+        forceBtn.style.opacity = "0.5";
+        forceBtn.style.cursor = "not-allowed";
+      } else {
+        forceBtn.style.opacity = "1";
+        forceBtn.style.cursor = "pointer";
+        if (forceBtn.textContent.startsWith("Ошибка") || forceBtn.textContent === "✓ Переключение") {
+          forceBtn.textContent = "Подключиться к ESP";
+        }
+      }
+    };
+
+    const refresh = () => api.get("/api/agent/status").then(renderStatus).catch(() => {});
+    refresh();
+
+    _unsub = subscribeEvents((event) => {
+      if (event && [
+        "voice_loop_started",
+        "voice_loop_stopped",
+        "voice_loop_esp_boot_wait_start",
+        "voice_loop_esp_boot_wait_ok",
+        "voice_loop_esp_boot_timeout",
+        "voice_loop_esp_bg_retry_success",
+        "voice_loop_esp_bg_retry_fail",
+        "voice_loop_esp_bg_retry_exhausted",
+        "voice_loop_force_esp_retry_success",
+        "voice_loop_force_esp_retry_fail",
+        "esp32_mic_fallback_start",
+        "esp32_mic_restored",
+        "config_patched",
+      ].includes(event.type)) {
+        refresh();
+      }
+    });
+  });
+
+  const wrapper = el("div", {
+    style: "display:flex; flex-direction:column; gap:6px; margin-top:10px; padding:8px; background:rgba(255,255,255,0.03); border-radius:6px",
+  }, [
+    el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap" }, [
+      el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Статус источника микрофона"),
+      el("span", { class: "spacer" }),
+      statusBadge,
+    ]),
+    el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap" }, [
+      forceBtn,
+      hintEl,
+    ]),
+  ]);
+
+  wrapper._dispose = () => {
+    try { if (_unsub) _unsub(); } catch (_) {}
   };
   return wrapper;
 }
