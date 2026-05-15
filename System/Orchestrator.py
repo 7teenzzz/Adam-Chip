@@ -64,7 +64,10 @@ mcu = MCUClient(settings.section("mcu"))
 llm = create_llm_client(settings.section("services").get("llm", {}))
 asr = create_asr_client(settings.section("services").get("asr", {}))
 vlm = VLMClient(settings.section("services").get("vlm", {}))
-tts = TTSClient(settings.section("services").get("tts", {}))
+tts = TTSClient(
+    settings.section("services").get("tts", {}),
+    mcu_speaker_url=mcu.speaker_endpoint_url(),
+)
 scene_cache = SceneCache()
 _media_cfg = settings.section("media")
 _video_cfg = dict(_media_cfg.get("video", {}))
@@ -267,7 +270,6 @@ class VoiceLoopController:
         self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
         self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
         self._reply_absolute_deadline_sec: float = float(asr_cfg.get("reply_absolute_deadline_sec", 12.0))
-        self._reply_window_expired_action: str = str(asr_cfg.get("reply_window_expired_action", "standby"))
         self._voice_state: str       = "standby"   # standby | listening | reply
         self._reply_start: float     = 0.0
         self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
@@ -443,41 +445,6 @@ class VoiceLoopController:
         await self.stop()
         await self.start()
 
-    def open_reply_window(self, timeout_sec: float = 4.0) -> None:
-        """Open a post-reply listen window after Adam's TTS finishes.
-
-        Wake word is bypassed for speech that starts within `timeout_sec` seconds.
-        If no speech begins before the deadline, the voice loop is stopped.
-        A new turn cancels the current window and schedules a fresh one after its TTS.
-        """
-        if self._reply_window_task and not self._reply_window_task.done():
-            self._reply_window_task.cancel()
-        self._reply_window_task = asyncio.create_task(
-            self._reply_window_coro(timeout_sec), name="reply_window"
-        )
-
-    async def _reply_window_coro(self, timeout_sec: float) -> None:
-        self._reply_window_active = True
-        self._reply_window_latched = False
-        event_log.append("reply_window_open", {"timeout_sec": timeout_sec})
-        try:
-            await asyncio.sleep(timeout_sec)
-            cfg_action = self._reply_window_expired_action
-            # "stop" — always stop; "standby" (default) — stop only in exhibition mode
-            should_stop = self.running and (
-                cfg_action == "stop" or runtime_state.get("mode") == "exhibition"
-            )
-            if should_stop:
-                event_log.append("reply_window_expired", {"action": "voice_loop_stopped", "config": cfg_action})
-                await self.stop()
-            else:
-                event_log.append("reply_window_expired", {"action": "voice_loop_kept", "config": cfg_action})
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self._reply_window_active = False
-            self._reply_window_latched = False
-
     async def _run(self) -> None:
         if self.mic_source == "esp32":
             # ESP32 stream always produces mono 16-bit output (downmix handled in _run_esp32).
@@ -576,6 +543,30 @@ class VoiceLoopController:
             await self._run_local(fb_frame_bytes)
         self.running = False
         self.vad_state = "idle"
+
+    async def _drain_esp32_backlog(
+        self,
+        read_fn: Callable[[int], bytes],
+        frame_bytes: int,
+        mute_start: float,
+    ) -> int:
+        """Read and discard ESP32 stream frames buffered during the mute window.
+
+        ESP32 keeps writing PCM into the open TCP stream while the orchestrator is
+        busy (transcribe → LLM → TTS). On unmute, the next read returns those
+        accumulated frames, which include acoustic self-echo of the agent's own
+        TTS. Discarding ~mute_duration_ms (+200 ms jitter) of frames realigns the
+        reader with live audio.
+        """
+        mute_duration_ms = (time.perf_counter() - mute_start) * 1000.0 + 200.0
+        frames_to_drain = max(0, int(mute_duration_ms / self.frame_ms))
+        drained = 0
+        for _ in range(frames_to_drain):
+            chunk = await asyncio.to_thread(read_fn, frame_bytes)
+            if not chunk:
+                break
+            drained += 1
+        return drained
 
     def _make_stereo_reader(self, read_fn: Callable[[int], bytes]) -> Callable[[int], bytes]:
         """Wraps a stereo PCM read_fn to return downmixed mono (L+R)/2.
@@ -767,20 +758,31 @@ class VoiceLoopController:
                         _using_process = self._process is not None
                         if _using_process:
                             self._stop_process()
+                        mute_start = time.perf_counter()
                         self.muted_by_tts = True
                         event_log.append("mic_muted", {"reason": "asr_transcribing"})
                         self.vad_state = "transcribing"
 
                         spoke = await self._transcribe_and_dispatch(pcm)
 
-                        # Local mode: restart arecord and update _reader.
-                        # ESP32 mode: stream was never stopped, reader stays valid.
+                        # Local mode: restart arecord and update _reader (clean buffer).
+                        # ESP32 mode: stream stays open and accumulates frames in TCP
+                        # during transcribe + LLM + TTS. Drain that backlog here so the
+                        # next read does not return TTS self-echo as user speech.
                         if _using_process:
                             self._process = self._start_arecord()
                             stdout = self._process.stdout
                             if stdout is None:
                                 raise RuntimeError("arecord restart failed")
                             _reader[0] = stdout.read
+                        else:
+                            drained = await self._drain_esp32_backlog(
+                                _reader[0], frame_bytes, mute_start
+                            )
+                            event_log.append("esp32_mic_drained", {
+                                "frames": drained,
+                                "ms": drained * self.frame_ms,
+                            })
                         event_log.append("mic_unmuted", {"reason": "transcription_complete"})
                         self.muted_by_tts = False
                         speech_frames.clear()
@@ -2851,7 +2853,7 @@ def _rebuild_clients(section_path: str) -> list[str]:
         scene_worker.vlm_client = vlm
         restarted.append("vlm")
     if section_path.startswith("services.tts") or section_path == "services":
-        tts = TTSClient(services.get("tts", {}))
+        tts = TTSClient(services.get("tts", {}), mcu_speaker_url=mcu.speaker_endpoint_url())
         restarted.append("tts")
     if section_path.startswith("wake_word"):
         ww_cfg = settings.section("wake_word") or {}

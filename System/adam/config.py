@@ -110,7 +110,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "timeout_sec": 30,
             "wake_words": "адам",
             "wake_word_required": True,
-            "reply_window_expired_action": "standby",
         },
         "tts": {
             "provider": "silero",
@@ -120,6 +119,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "sample_rate": 24000,
             "timeout_sec": 20,
             "available_speakers": ["aidar", "baya", "kseniya", "xenia", "eugene", "random"],
+            "output_target": "jetson_hdmi",
             "output_device": "plughw:1,3",
             "filler_enabled": True,
             "filler_phrase": "Хм...",
