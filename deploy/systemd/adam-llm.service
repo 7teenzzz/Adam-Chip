@@ -15,7 +15,7 @@ EnvironmentFile=-/etc/adam-chip/adam.env
 
 # Defaults — override in /etc/adam-chip/adam.env
 Environment=ADAM_LLM_LLAMACPP_DIR=/home/i17jet/Agents/Adam-Chip/Subsystem/llama.cpp
-Environment=ADAM_LLM_GGUF_PATH=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf
+Environment=ADAM_LLM_GGUF_PATH=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/gguf/gemma-4-E2B-it-UD-Q4_K_XL.gguf
 Environment=ADAM_LLM_PORT=8081
 Environment=ADAM_LLM_CTX=8192
 Environment=ADAM_LLM_GPU_LAYERS=99
