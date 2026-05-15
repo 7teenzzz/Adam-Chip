@@ -10,15 +10,38 @@ Adam Chip — **физическая воплощённость** через ESP
 
 ## Graphify Evidence
 
-| Node | File | Role |
-|---|---|---|
-| `MCUClient` | System/adam/device.py | 25 — связь с ESP32 |
-| `ActionLayer` | System/adam/action.py | Перевод тегов в команды |
-| `CameraReader` | System/adam/camera.py | 23 — захват видео |
-| `SceneWorker` | System/Orchestrator.py | 30 — VLM анализ |
-| `TTSClient` | System/adam/inference.py | 15 — TTS аудио вывод |
-| `WhisperASRClient` | System/adam/inference.py | 15 — ASR аудио вход |
-| ESP32 firmware | Subsystem/AdamsServer/ | Light/Sound/Vibration |
+### Jetson-сторона (graphify-out/)
+
+| Node | File | Edges | Role |
+|---|---|---|---|
+| `MCUClient` | System/adam/device.py | 25 | связь с ESP32 по HTTP |
+| `ActionLayer` | System/adam/action.py | — | перевод LLM тегов в MCU команды |
+| `CameraReader` | System/adam/camera.py | 23 | захват видеопотока |
+| `SceneWorker` | System/Orchestrator.py | 30 | VLM анализ сцены |
+| `TTSClient` | System/adam/inference.py | 15 | TTS аудио вывод (Silero) |
+| `WhisperASRClient` | System/adam/inference.py | 15 | ASR аудио вход (WhisperX) |
+
+### ESP32 прошивка (graphify-out-esp32/) — построен 2026-05-16
+
+**780 nodes · 1262 edges · 42 communities**
+
+| Node / Community | File | Edges | Role |
+|---|---|---|---|
+| `bootLogf()` | src/core/BootDiagnostics.cpp | 32 | god-node: пронизывает все 6 подсистем |
+| `streamHandler()` | src/web/WebServerModule.cpp | 20 | MJPEG stream gate (порт 81) |
+| `motorSkillsControlHandler()` | src/web/WebServerModule.cpp | 13 | PCA9685 web entry point |
+| `playSystemSound()` | src/audio/SystemSoundModule.cpp | 12 | аудио-кью bridge |
+| Community "Mic Audio Capture (I2S)" | src/audio/AudioModule.cpp | 37 nodes | INMP441 I2S RX, ring buffer 256KB |
+| Community "Speaker Playback and Sounds" | src/audio/AudioModule.cpp | 16 nodes | PCM5102A I2S TX, ring buffer 32KB |
+| Community "PCA9685 PWM Control" | src/io/Pca9685Module.cpp | 15 nodes | 16-ch PWM, NVS persistence, scenes |
+| Community "Camera Capture and Presets" | src/camera/CameraModule.cpp | 38 nodes | OV5640 DVP, QVGA, MJPEG |
+| Community "Environmental Sensors" | src/io/SensorModule.cpp | 5 nodes | TEMT6000 (ADC), BTE16-19 (GPIO) |
+| Community "Boot Diagnostics and Init" | src/core/BootDiagnostics.cpp | 40 nodes | 10-step boot sequence |
+| Community "Web Server Request Handlers" | src/web/WebServerModule.cpp | 93 nodes | 40+ API routes, порты 80+81 |
+
+**Hyperedges (группы):**
+- **ESP32 Dual HTTP Server Architecture** — port81_stream_server + api_mjpeg_stream + api_audio_stream + api_speaker_post [EXTRACTED 0.95]
+- **Network Transport Priority Chain** — w5500_ethernet + wifi_fallback + ap_fallback [EXTRACTED 0.95]
 
 ## Verification Trace
 
