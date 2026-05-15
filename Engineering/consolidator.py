@@ -38,6 +38,7 @@ import urllib.request  # noqa: E402
 from adam.config import Settings  # noqa: E402
 from adam.episodic import Episode  # noqa: E402
 from adam.memory import EpisodicMemory  # noqa: E402
+from adam.memory_metrics import MemoryMetrics  # noqa: E402
 from adam.tuning import Tuning, TuningStore  # noqa: E402
 
 LOG_FMT = "%(asctime)s [%(levelname)s] consolidator: %(message)s"
@@ -393,6 +394,15 @@ def main() -> int:
     consolidated_count = memory.mark_consolidated([ep.id for ep in new_episodes])
     pinned_count = memory.pin_episodes(patch.get("pin_episodes", []))
     log.info("applied: consolidated=%d pinned=%d", consolidated_count, pinned_count)
+
+    # Record consolidation metrics
+    _mm = MemoryMetrics(Path(settings.data_dir) / "memory" / "metrics.jsonl")
+    _mm.record_consolidation(
+        episodes_count=len(new_episodes),
+        patch_keys=list(patch.keys()),
+        runtime_s=elapsed,
+        source=patch_source,
+    )
 
     # 5. State
     memory.save_state({

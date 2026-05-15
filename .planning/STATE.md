@@ -1,15 +1,39 @@
 # Adam-Chip — Project State
 
 **Last Updated:** 2026-05-15
-**Status:** All documentation phases complete
+**Status:** Memory Pipeline Phases 6A + 6B завершены; ветка `Memory-upgrade` готова к мёржу
 
 ## Active Phase
 
-Все документационные фазы (1–5) завершены. Система готова к выставочному использованию.
-Следующие задачи: см. Backlog в [ROADMAP.md](.planning/ROADMAP.md).
+Фазы 6A и 6B завершены. Все изменения в ветке `Memory-upgrade`.
+Следующий шаг: code review + мёрж `Memory-upgrade` → `main`.
+Wave 2 (Neural search через llama.cpp /embeddings) — в Backlog до освобождения VRAM.
 → [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
 
 ## Completed Phases
+
+### Phase 6B: Memory Search, Logging & Quality ✓ COMPLETE (2026-05-15)
+
+Что сделано:
+
+- `memory_search.py`: BM25Index + FaissEpisodeIndex (Wave 1 TF-IDF, faiss-cpu optional)
+- `memory_metrics.py`: JSONL-логгер событий памяти; интеграция в Orchestrator + consolidator
+- `GET /api/memory/status`: diary chars, episodes, echoes pool, last consolidation, metrics_last_24h
+- `tests/test_memory_pipeline.py`: 34 unit + E2E теста, все зелёные
+
+### Phase 6A: Memory Foundation ✓ COMPLETE (2026-05-15)
+
+Что сделано:
+
+- consolidator.py: Ollama → llama.cpp OpenAI API + rule-based fallback
+- trim_gate_logs(): атомарная обрезка echoes_used + chinese_used
+- TF-IDF matcher в echoes_gate.py (чистый Python, переключение через tuning.matcher_type)
+- note_turn() с автотематизацией по кластерам из Tuning.json
+- quick_patch_diary() — немедленная консолидация при salience ≥ 0.75
+- is_recurring() — обнаружение повторных посетителей
+- Все хардкоды вынесены в Tuning.json (score_boost, tag_short_cutoff, default_entry_weight)
+
+→ Commit Wave 6A: `f6b2c5a`
 
 ### Phase 5: Agent Protocol — поведение агента-разработчика ✓ COMPLETE (2026-05-15)
 
@@ -72,6 +96,8 @@
 
 ## History
 
+- 2026-05-15: Phase 6B завершена. memory_search.py, memory_metrics.py, /api/memory/status, 34 теста.
+- 2026-05-15: Phase 6A завершена. llama.cpp в consolidator, rule-based fallback, TF-IDF, auto-themes, trim_gate_logs. Commit Wave 6A: f6b2c5a.
 - 2026-05-15: Phase 5 завершена. AGENT-PROTOCOL.md, @-reference в CLAUDE.md. Все 5 фаз завершены.
 - 2026-05-15: Phase 4 завершена. 3 per-directory CLAUDE.md, 2 git hooks, Quick start update.
 - 2026-05-15: Phase 3 завершена. BRANCH-template.md, ACTIVE.md, BRANCH.md note в CLAUDE.md.

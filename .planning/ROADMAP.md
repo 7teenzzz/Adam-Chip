@@ -159,9 +159,56 @@ Plans:
 
 ---
 
+## Phase 6A: Memory Foundation — устранение критических дефектов ✓ COMPLETE (2026-05-15)
+
+**Branch:** `Memory-upgrade`
+
+**Goal:** Устранить критические проблемы пайплайна памяти без новых зависимостей.
+
+**Delivers:**
+
+- A1: `Engineering/consolidator.py` — заменён `call_ollama()` на `call_llm()` (llama.cpp OpenAI-compat API)
+- A2: Rule-based fallback консолидации при недоступном LLM
+- A3: `EpisodicMemory.trim_gate_logs()` — обрезка echoes_used.jsonl + chinese_used.jsonl (параметр `gate_log_max_days`)
+- A4: Хардкод вынесен из `echoes_gate.py` в Tuning.json (`score_boost`, `tag_short_cutoff`, `default_entry_weight`)
+- A5: `SessionAccumulator.note_turn()` — автотематизация по кластерам из `Tuning.json → memory.theme_clusters`
+- A6: `TfIdfMatcher` — TF-IDF поиск для выбора эхо-фрагментов (переключение через `matcher_type`)
+- A7: `EpisodicMemory.quick_patch_diary()` — немедленная консолидация если `salience >= instant_threshold`
+- A8: `EpisodicMemory.is_recurring()` — обнаружение повторных посетителей (параметры в Tuning.json)
+
+**Commit:** Wave 6A → `f6b2c5a`
+
+---
+
+## Phase 6B: Memory Search, Logging & Quality ✓ COMPLETE (2026-05-15)
+
+**Branch:** `Memory-upgrade`
+
+**Goal:** Векторный поиск по эпизодам (BM25 + FAISS CPU Wave 1), метрики памяти, API, тесты.
+
+**Delivers:**
+
+- B1: `System/adam/memory_search.py` — `BM25Index` (чистый Python, BM25 Okapi)
+- B2: `FaissEpisodeIndex` — FAISS CPU + TF-IDF векторы (Wave 1); graceful fallback без faiss-cpu
+- B3: `System/adam/memory_metrics.py` — `MemoryMetrics` JSONL-логгер; интеграция в Orchestrator.py + consolidator.py
+- B4: `GET /api/memory/status` в `api_runtime.py` — diary_chars, episodes, echoes pool, last_consolidation, metrics_last_24h
+- B5: `tests/test_memory_pipeline.py` — 34 теста (unit + E2E), все зелёные
+- B6: ROADMAP.md + STATE.md обновлены
+
+**Wave 2 (Backlog):** Neural search — заменить TF-IDF в `FaissEpisodeIndex` на llama.cpp `/embeddings`.
+Условие запуска: свободная VRAM ≥ 4 GB при работающем Gemma 4 E4B (~16 GB VRAM Jetson Orin NX 16 GB).
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.
+
+### Memory Wave 2: Neural search
+
+Заменить TF-IDF векторизацию в `FaissEpisodeIndex` на llama.cpp `/embeddings` endpoint.
+Условие запуска: VRAM ≥ 4 GB свободно при работающем Gemma 4 E4B (Q4_K_XL ≈ 8 GB → остаток ~8 GB на Jetson 16 GB).
+Интерфейс не меняется (`.build()` / `.search()` / `.save()` / `.load()`), только векторизация.
 
 ### UI: Пересборка интерфейса управления
 

@@ -37,6 +37,7 @@ from adam.camera import CameraReader, SceneDescriptionBuffer
 from adam.inference import WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
 from adam.media import MediaHealth
 from adam.memory import EpisodicMemory, MemoryStore
+from adam.memory_metrics import MemoryMetrics
 from adam.metrics import MetricsLog
 from adam.power import PowerGate
 from adam.prompt import PromptBuilder, LeadingNoiseFilter, sanitize_reply
@@ -55,6 +56,7 @@ event_log = EventLog(settings.data_dir)
 metrics_log = MetricsLog(settings.data_dir)
 memory = MemoryStore(settings.data_dir)
 episodic_memory = EpisodicMemory(settings.data_dir)
+memory_metrics = MemoryMetrics(Path(settings.data_dir) / "memory" / "metrics.jsonl")
 tuning_store: TuningStore = _get_tuning_store()
 power_gate = PowerGate(settings.section("power"))
 media_health = MediaHealth(settings.section("media"))
@@ -213,6 +215,9 @@ async def _commit_session_locked(reason: str) -> None:
     if write:
         try:
             episodic_memory.commit_episode(episode)
+            memory_metrics.record_episode_committed(
+                episode.id, episode.salience, triggered_by=reason
+            )
             event_log.append(
                 "episode_committed",
                 {
@@ -2059,6 +2064,9 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             echo_hint = echo_inj.hint_text
             acc.note_echo_used(echo_inj.entry.id)
             echo_meta = {"pool": "echoes", "id": echo_inj.entry.id, "score": echo_inj.score}
+            memory_metrics.record_echo_injected(
+                echo_inj.entry.id, echo_inj.score, tuning.echoes.matcher_type
+            )
     if echo_hint is None and tuning.chinese.enabled:
         cn_inj = chinese_gate.maybe_inject(
             transcript=transcript,
@@ -2070,6 +2078,9 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             echo_hint = cn_inj.hint_text
             acc.note_chinese_used(cn_inj.entry.id)
             echo_meta = {"pool": "chinese", "id": cn_inj.entry.id, "score": cn_inj.score}
+            memory_metrics.record_echo_injected(
+                cn_inj.entry.id, cn_inj.score, tuning.chinese.matcher_type
+            )
 
     # semantic
     semantic_text = ""
@@ -2889,6 +2900,7 @@ _runtime_deps = RuntimeDeps(
     rebuild_clients=_rebuild_clients,
     capture_snapshot=camera_reader.get_latest,
     run_dialogue_turn=_run_dialogue_turn,
+    episodic_memory=episodic_memory,
     get_voice_loop=lambda: voice_loop,
 )
 app.include_router(build_router(_runtime_deps))
