@@ -7,6 +7,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "lwip/sockets.h"
 
@@ -2866,6 +2867,85 @@ esp_err_t streamServerOpenFn(httpd_handle_t /*hd*/, int sockfd) {
   return ESP_OK;
 }
 
+// ── System management handlers ─────────────────────────────────────────────
+
+static void doReset(void* /*arg*/) { esp_restart(); }
+
+esp_err_t systemResetHandler(httpd_req_t *req) {
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_sendstr(req, "{\"ok\":true,\"action\":\"reset\",\"delay_ms\":300}");
+  // Schedule reset after response is flushed (~300ms)
+  esp_timer_handle_t t;
+  esp_timer_create_args_t args = {};
+  args.callback = doReset;
+  args.name = "sys_reset";
+  if (esp_timer_create(&args, &t) == ESP_OK) {
+    esp_timer_start_once(t, 300 * 1000ULL);
+  }
+  return ESP_OK;
+}
+
+esp_err_t systemStreamRestartHandler(httpd_req_t *req) {
+  // Stop stream server — kills all stale camera/audio/speaker connections.
+  // Restarted immediately so new clients can connect without physical RST.
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  if (sStreamServer != nullptr) {
+    httpd_stop(sStreamServer);
+    sStreamServer = nullptr;
+  }
+  // Brief yield so OS cleans up sockets before we re-bind.
+  vTaskDelay(pdMS_TO_TICKS(150));
+
+  httpd_config_t streamConfig = HTTPD_DEFAULT_CONFIG();
+  streamConfig.server_port = kStreamPort;
+  streamConfig.ctrl_port   = kHttpPort + 1 + 1;  // avoid collision with control ctrl_port
+  streamConfig.max_uri_handlers  = 6;
+  streamConfig.max_open_sockets  = 4;
+  streamConfig.lru_purge_enable  = true;
+  streamConfig.send_wait_timeout = 10;
+  streamConfig.stack_size        = 8192;
+  streamConfig.open_fn           = streamServerOpenFn;
+
+  bool ok = (httpd_start(&sStreamServer, &streamConfig) == ESP_OK);
+  if (ok) {
+    registerStreamHandlers(sStreamServer);
+    registerAudioHandlers(sStreamServer);
+    registerSpeakerHandlers(sStreamServer);
+  }
+  char buf[64];
+  snprintf(buf, sizeof(buf), "{\"ok\":%s,\"stream_port\":%u}", ok ? "true" : "false", kStreamPort);
+  httpd_resp_sendstr(req, buf);
+  return ESP_OK;
+}
+
+esp_err_t systemInfoHandler(httpd_req_t *req) {
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  const uint32_t up = gRuntimeState.uptimeMs;
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+  char buf[256];
+  snprintf(buf, sizeof(buf),
+    "{\"uptime_ms\":%lu,\"heap_free\":%lu,\"heap_min_free\":%lu,\"psram_free\":%lu}",
+    (unsigned long)up,
+    (unsigned long)esp_get_free_heap_size(),
+    (unsigned long)esp_get_minimum_free_heap_size(),
+    (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+  httpd_resp_sendstr(req, buf);
+  return ESP_OK;
+}
+
+void registerSystemHandlers(httpd_handle_t server) {
+  httpd_uri_t resetUri       = makeHttpUri("/api/system/reset",          HTTP_POST, systemResetHandler);
+  httpd_uri_t streamRestUri  = makeHttpUri("/api/system/stream/restart", HTTP_POST, systemStreamRestartHandler);
+  httpd_uri_t infoUri        = makeHttpUri("/api/system/info",           HTTP_GET,  systemInfoHandler);
+  httpd_register_uri_handler(server, &resetUri);
+  httpd_register_uri_handler(server, &streamRestUri);
+  httpd_register_uri_handler(server, &infoUri);
+}
+
 }  // namespace
 
 bool startWebServer() {
@@ -2898,6 +2978,7 @@ bool startWebServer() {
     return false;
   }
   registerControlHandlers(sControlServer);
+  registerSystemHandlers(sControlServer);
 
   httpd_config_t streamConfig = HTTPD_DEFAULT_CONFIG();
   streamConfig.server_port = kStreamPort;

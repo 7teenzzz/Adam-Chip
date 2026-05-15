@@ -1907,6 +1907,35 @@ async def update_scene(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return {"ok": True, **updated}
 
 
+@app.post("/api/mcu/reset")
+async def mcu_reset() -> dict[str, Any]:
+    """Soft-reset ESP32 (~300ms delay). Use when HTTP port 81 is stuck."""
+    if mcu is None:
+        raise HTTPException(status_code=503, detail="mcu_not_configured")
+    result = await mcu.system_reset()
+    event_log.append("esp32_reset_requested", {"ok": result.ok, "error": result.error})
+    return {"ok": result.ok, "detail": result.data or result.error}
+
+
+@app.post("/api/mcu/stream/restart")
+async def mcu_stream_restart() -> dict[str, Any]:
+    """Restart ESP32 port-81 stream server. Clears stale camera/audio/speaker connections."""
+    if mcu is None:
+        raise HTTPException(status_code=503, detail="mcu_not_configured")
+    result = await mcu.stream_restart()
+    event_log.append("esp32_stream_restarted", {"ok": result.ok, "error": result.error})
+    return {"ok": result.ok, "detail": result.data or result.error}
+
+
+@app.get("/api/mcu/info")
+async def mcu_info() -> dict[str, Any]:
+    """ESP32 heap / uptime diagnostics."""
+    if mcu is None:
+        raise HTTPException(status_code=503, detail="mcu_not_configured")
+    result = await mcu.system_info()
+    return {"ok": result.ok, "data": result.data}
+
+
 @app.post("/api/agent/turn")
 async def dialogue_turn(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     transcript = str(payload.get("transcript", "")).strip()

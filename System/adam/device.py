@@ -94,6 +94,18 @@ class MCUClient:
     def speaker_endpoint_url(self) -> str:
         return self.speaker_url
 
+    async def system_reset(self) -> DeviceResult:
+        """Soft-reset ESP32. Returns immediately — device reboots after ~300ms."""
+        return await asyncio.to_thread(self._request, "POST", "/api/system/reset")
+
+    async def stream_restart(self) -> DeviceResult:
+        """Restart port-81 stream server — clears stale camera/audio/speaker connections."""
+        return await asyncio.to_thread(self._request, "POST", "/api/system/stream/restart")
+
+    async def system_info(self) -> DeviceResult:
+        """Return ESP32 heap/uptime diagnostics."""
+        return await asyncio.to_thread(self._request, "GET", "/api/system/info")
+
     def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> DeviceResult:
         target = urljoin(self.base_url + "/", path.lstrip("/"))
         body = None if payload is None else json.dumps(payload).encode("utf-8")
