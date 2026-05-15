@@ -505,7 +505,14 @@ export function mount(target) {
       updateHearing("tts");
       stopCountdown();
     } else if (ev.type === "tts_finished") {
-      if (hearingState === "tts") routeToIdle();
+      // T16 fix: do NOT routeToIdle here. The voice loop opens a reply window
+      // immediately after TTS finishes (mic_unmuted → asr_reply_window_open),
+      // but there is a small backend gap during which the UI used to flash
+      // "Ожидаю обращения" before snapping to "Слушаю". Optimistically jump
+      // to "reply" so the equalizer stays in the listening colour; if no
+      // reply window actually opens, asr_no_reply_standby will arrive shortly
+      // and the routeToIdle branch below will handle it.
+      if (hearingState === "tts") updateHearing("reply");
     } else if (
       ev.type === "wake_silence_timeout" ||
       ev.type === "asr_no_reply_standby" ||
