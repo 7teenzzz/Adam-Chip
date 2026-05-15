@@ -2391,69 +2391,90 @@ async def _stream_llm_and_speak(
             filler_playing[0] = False
             filler_done_event.set()
 
+    # TTS playback sample rate is fixed by the Silero service (Config.json:
+    # services.tts.sample_rate = 24000). Speed multiplier rewrites the WAV
+    # header's rate field to play faster — we feed that same rate to aplay.
+    _tts_sr = int((settings.section("services").get("tts", {}) or {}).get("sample_rate", 24000))
+    _stream_sr = max(8000, int(round(_tts_sr * _playback_speed)))
+
     async def _consumer() -> None:
-        """Pipeline: synthesize chunk N+1 while playing chunk N.
-        Uses /wav endpoint (synthesis-only) + local aplay for playback.
-        Falls back to /speak (synth+play combined) if /wav returns None.
+        """Synthesize each sentence-chunk → pipe raw PCM into a single
+        persistent aplay process (zero inter-chunk gap). Preserves streaming
+        TTFV — the first WAV plays as soon as its PCM hits the pipe.
+
+        Falls back to /speak (synth+play combined, per-chunk subprocess) only
+        when /wav returns None. That fallback path retains the original
+        per-chunk behaviour, but in practice the streaming path always wins
+        when llama-server + Silero are both healthy.
         """
         first = True
-        pending_wav: bytes | None = None   # WAV bytes ready for playback
-        pending_ok: bool = True            # synthesis succeeded for pending
+        writer: Any = None  # PcmStreamWriter, opened on first chunk
 
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                # No more chunks — play the last pending wav if any.
-                if pending_wav is not None and not runtime_state.get("interrupt_tts"):
-                    if filler_playing[0]:
-                        await filler_done_event.wait()
+        async def _wait_filler() -> None:
+            if filler_playing[0]:
+                await filler_done_event.wait()
+
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    runtime_state["interrupt_tts"] = False
+                    break
+
+                if first:
+                    t_tts_start[0] = time.perf_counter()
+                    first = False
+
+                # Synthesize this sentence chunk in a thread.
+                wav = await asyncio.to_thread(tts._get_wav_bytes_sync, chunk)
+                if wav is not None:
+                    wav = _apply_wav_speed(wav, _playback_speed)
+
+                if wav is None:
+                    # /wav endpoint failed for this sentence → fall back to /speak.
+                    # Flush the streaming writer first so the fallback chunk plays
+                    # in correct order with what is already buffered in aplay.
+                    if writer is not None:
+                        result = await asyncio.to_thread(writer.close)
+                        tts_chunks.append({"ok": bool(result.get("ok"))})
+                        writer = None
+                    await _wait_filler()
                     _mark_speaking_started()
-                    result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
-                    tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
-                runtime_state["interrupt_tts"] = False
-                break
+                    result = await asyncio.to_thread(tts._synthesize_sync, chunk)
+                    tts_chunks.append(result)
+                    continue
 
-            if first:
-                t_tts_start[0] = time.perf_counter()
-                first = False
-
-            # Synthesize this chunk in a thread (returns WAV bytes quickly).
-            wav = await asyncio.to_thread(tts._get_wav_bytes_sync, chunk)
-            if wav is not None:
-                wav = _apply_wav_speed(wav, _playback_speed)
-
-            if wav is None:
-                # /wav endpoint failed — fall back to /speak (blocks for synth+play).
-                # First play any pending chunk, then play this one synchronously.
-                if pending_wav is not None:
-                    if filler_playing[0]:
-                        await filler_done_event.wait()
-                    _mark_speaking_started()
-                    result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
-                    tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
-                    pending_wav = None
-                if filler_playing[0]:
-                    await filler_done_event.wait()
-                _mark_speaking_started()
-                result = await asyncio.to_thread(tts._synthesize_sync, chunk)
-                tts_chunks.append(result)
-                continue
-
-            # Play the previous pending chunk while next chunk was being synthesized.
-            if pending_wav is not None:
                 if runtime_state.get("interrupt_tts"):
                     runtime_state["interrupt_tts"] = False
                     break
-                # If a filler chunk is currently playing, wait for it to finish
-                # before starting the real reply so the audio stream is continuous.
-                if filler_playing[0]:
-                    await filler_done_event.wait()
-                _mark_speaking_started()
-                result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
-                tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
 
-            pending_wav = wav
-            pending_ok = True
+                # Open the persistent aplay stream on first valid chunk.
+                # Any in-flight filler must finish before we start writing real
+                # reply PCM, so the user hears "Хм... [reply]" continuous.
+                if writer is None:
+                    await _wait_filler()
+                    try:
+                        writer = await asyncio.to_thread(
+                            tts.open_pcm_stream, _stream_sr, 1, 16
+                        )
+                    except Exception as exc:
+                        event_log.append("tts_stream_open_failed", {"error": str(exc)})
+                        # Fall back to one-shot playback for this chunk.
+                        _mark_speaking_started()
+                        result = await asyncio.to_thread(tts._play_wav_bytes_sync, wav)
+                        tts_chunks.append({"ok": bool(result.get("ok"))})
+                        continue
+                    _mark_speaking_started()
+
+                ok = await asyncio.to_thread(writer.write, wav)
+                if not ok:
+                    # aplay died mid-stream — degrade gracefully.
+                    tts_chunks.append({"ok": False, "error": "pcm_pipe_broken"})
+                    writer = None
+        finally:
+            if writer is not None:
+                result = await asyncio.to_thread(writer.close)
+                tts_chunks.append({"ok": bool(result.get("ok"))})
 
     # NOTE: runtime_state["speaking"] и event "tts_started" больше НЕ ставятся здесь.
     # Они выставляются внутри _consumer() в момент первого реального playback,

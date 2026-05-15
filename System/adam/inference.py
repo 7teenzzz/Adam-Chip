@@ -123,6 +123,78 @@ def create_llm_client(config: dict[str, Any]) -> OpenAIChatClient:
     return OpenAIChatClient(config)
 
 
+def _extract_pcm_from_wav(wav_bytes: bytes) -> bytes | None:
+    """Return the raw PCM samples from a RIFF/WAVE bytestring, or None on error."""
+    import struct
+    if len(wav_bytes) < 44 or wav_bytes[0:4] != b"RIFF" or wav_bytes[8:12] != b"WAVE":
+        return None
+    i = 12  # skip RIFF header + WAVE marker
+    while i + 8 <= len(wav_bytes):
+        chunk_id = wav_bytes[i:i+4]
+        chunk_size = struct.unpack("<I", wav_bytes[i+4:i+8])[0]
+        if chunk_id == b"data":
+            return wav_bytes[i+8 : i+8+chunk_size]
+        i += 8 + chunk_size
+    return None
+
+
+class PcmStreamWriter:
+    """Owns a persistent aplay subprocess that consumes PCM bytes via stdin.
+
+    Use TTSClient.open_pcm_stream(...) to construct; do not instantiate directly.
+    """
+    def __init__(self, proc: Any, owner: "TTSClient") -> None:
+        self._proc = proc
+        self._owner = owner
+        self._closed = False
+        self._wrote_any = False
+
+    def write(self, wav_bytes: bytes) -> bool:
+        """Strip the WAV header, write the raw PCM to aplay's stdin.
+
+        Returns True on success, False if the stream is closed or aplay died.
+        """
+        if self._closed or self._proc.stdin is None:
+            return False
+        pcm = _extract_pcm_from_wav(wav_bytes)
+        if pcm is None:
+            return False
+        try:
+            self._proc.stdin.write(pcm)
+            self._wrote_any = True
+            return True
+        except (BrokenPipeError, OSError):
+            self._closed = True
+            return False
+
+    def close(self, timeout: float = 30.0) -> dict[str, Any]:
+        """Close stdin → aplay drains buffer → exit. Returns playback result."""
+        if self._closed:
+            return {"ok": False, "error": "already_closed"}
+        self._closed = True
+        try:
+            if self._proc.stdin:
+                self._proc.stdin.close()
+        except BrokenPipeError:
+            pass
+        try:
+            rc = self._proc.wait(timeout=timeout)
+        except Exception:
+            try:
+                self._proc.kill()
+            except Exception:
+                pass
+            rc = -1
+        # Release barge-in hook only if this writer's proc is still registered.
+        if self._owner._current_play_proc is self._proc:
+            self._owner._current_play_proc = None
+        return {
+            "ok": rc == 0 and self._wrote_any,
+            "returncode": rc,
+            "player": "aplay-stream",
+        }
+
+
 class TTSClient:
     def __init__(self, config: dict[str, Any]) -> None:
         self.base_url = str(config.get("base_url", "http://127.0.0.1:8082")).rstrip("/")
@@ -248,6 +320,38 @@ class TTSClient:
                 except Exception:
                     pass
         self._current_play_proc = None
+
+    def open_pcm_stream(self, sample_rate: int = 24000, channels: int = 1, bits: int = 16) -> "PcmStreamWriter":
+        """Open a persistent aplay process for gapless multi-chunk playback.
+
+        T16 confirmed audible "echo" between sentence-chunks was caused by
+        spawning a fresh aplay subprocess per chunk: each spawn re-initialises
+        the HDMI/ALSA stream, causing a ~50-150 ms re-sync click. Streaming
+        raw PCM into ONE long-running aplay via stdin eliminates inter-chunk
+        artifacts while preserving streaming TTFV (the first chunk plays as
+        soon as its bytes hit the pipe).
+
+        Defaults match the Silero TTS output format declared in Config.json
+        (services.tts.sample_rate = 24000, mono S16_LE).
+        """
+        import shutil
+        import subprocess
+        fmt_map = {16: "S16_LE", 24: "S24_LE", 32: "S32_LE"}
+        fmt = fmt_map.get(bits)
+        if fmt is None:
+            raise ValueError(f"unsupported bits_per_sample: {bits}")
+        dev = self.output_device or "default"
+        player = shutil.which("aplay")
+        if not player:
+            raise RuntimeError("aplay not available — install alsa-utils")
+        cmd = [player, "-q", "-D", dev, "-t", "raw",
+               "-f", fmt, "-r", str(sample_rate), "-c", str(channels)]
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        # Register for barge-in interrupt — same hook as one-shot playback.
+        self._current_play_proc = proc
+        return PcmStreamWriter(proc, owner=self)
 
     def _health_sync(self) -> ServiceHealth:
         try:
