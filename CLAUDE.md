@@ -1,6 +1,6 @@
 # Adam Chip — Claude Code Instructions
 
-See @README.md for project overview and @CONTEXT.md for full system state (inference stack, endpoints, modules, Config.json snapshot).
+See @README.md for project overview and @System/Config.json + @System/Config.schema.json for runtime parameters.
 
 **Язык общения с пользователем: русский.** Code comments: English.
 

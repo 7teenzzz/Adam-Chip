@@ -37,10 +37,12 @@ Jetson (inference node)             ESP32-S3 (peripheral node)
 |-----------|---------|--------|------|
 | LLM | llama.cpp (OpenAI-compat) | gemma-4-E4B-it-UD-Q4_K_XL | 8081 |
 | VLM | nano_llm (Docker) | VILA 1.5-3b | 8084 |
-| ASR | WhisperX (CUDA, Docker) | small, ru-RU, wake word «адам» | 8095 |
-| TTS | Silero v5_5_ru | голос eugene | 8082 |
+| ASR | WhisperX (CUDA, Docker) | small (ru-RU) | 8095 |
+| TTS | Silero v5_5_ru | eugene | 8082 |
 | Orchestrator | FastAPI + asyncio | — | 8080 |
 | Log Viewer | FastAPI (always-on) | — | 8083 |
+
+Runtime параметры всех сервисов: см. `System/Config.json` и `System/Config.schema.json`.
 
 ## Структура
 
