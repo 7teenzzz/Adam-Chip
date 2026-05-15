@@ -43,7 +43,7 @@
 |-----------|---------|--------|----------|
 | **LLM** | llama.cpp (OpenAI-compat API) | `gemma-4-E4B-it-UD-Q4_K_XL` | http://127.0.0.1:8081/v1 |
 | **VLM** | VILA 1.5-3b | `Efficient-Large-Model/VILA1.5-3b` | http://127.0.0.1:8084 |
-| **ASR** | WhisperX (CUDA, Docker) | `medium`, ru-RU | http://127.0.0.1:8095 |
+| **ASR** | WhisperX (CUDA, Docker) | `small`, ru-RU | http://127.0.0.1:8095 |
 | **TTS** | Silero v5_5_ru | голос `eugene` | http://127.0.0.1:8082 |
 | **Orchestrator** | FastAPI + asyncio | — | http://127.0.0.1:8080 |
 
@@ -52,7 +52,7 @@
 **TTS output:** ALSA device `plughw:1,3`  
 **Audio input:** PulseAudio (`pulse`)  
 **VAD:** WebRTC VAD (CPU, stateless, агрессивность 2) в VoiceLoopController  
-**Wake word:** OpenWakeWord — ONNX-модель `adam.onnx`, порог 0.35, debounce 3 детекции
+**Wake word:** OpenWakeWord — ONNX-модель `adam.onnx`, порог 0.20, debounce 2 детекции
 
 ---
 
@@ -122,7 +122,7 @@ PYTHONPATH=System ADAM_MODE=maintenance ./.venv/bin/python System/Orchestrator.p
     "asr": {
       "provider": "whisperx",
       "base_url": "http://127.0.0.1:8095",
-      "model": "medium",
+      "model": "small",
       "language": "ru",
       "command_endpointing_ms": 3000,
       "reply_window_sec": 4.0,
@@ -132,8 +132,8 @@ PYTHONPATH=System ADAM_MODE=maintenance ./.venv/bin/python System/Orchestrator.p
       "provider": "openwakeword",
       "model_path": "data/wake_word/adam.onnx",
       "wake_word_required": true,
-      "threshold": 0.35,
-      "debounce_hits": 3,
+      "threshold": 0.20,
+      "debounce_hits": 2,
       "wake_silence_timeout_sec": 6.0
     },
     "tts": { "speaker": "eugene", "output_device": "plughw:1,3", "sample_rate": 48000 }

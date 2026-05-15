@@ -83,15 +83,7 @@ The generated systemd environment file is:
 /etc/adam-chip/adam.env
 ```
 
-Current defaults:
-
-- `ADAM_LLM_PROVIDER=ollama`
-- `ADAM_LLM_BASE_URL=http://127.0.0.1:11434`
-- `ADAM_LLM_MODEL=gemma3:4b`
-- `ADAM_VENV=/home/i17jet/Agents/Adam-Chip/.venv`
-- `ADAM_VIDEO_DEVICE=/dev/video0`
-- `ADAM_AUDIO_INPUT_DEVICE=hw:0,0`
-- `ADAM_AUDIO_OUTPUT_DEVICE=default`
+For current runtime defaults, see `System/Config.json`.
 
 ## Media Policy
 

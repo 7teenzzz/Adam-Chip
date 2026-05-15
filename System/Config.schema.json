@@ -1,0 +1,664 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "Config.schema.json",
+  "title": "Adam Chip Runtime Configuration",
+  "description": "JSON Schema documenting all parameters in System/Config.json. This file is documentation only — it is not imported by code. Descriptions are in English to match code conventions.",
+  "type": "object",
+  "properties": {
+    "agent": {
+      "type": "object",
+      "description": "Core agent identity and runtime settings.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Display name of the agent persona. Used in logs and UI headers.",
+          "default": "Адам Чип"
+        },
+        "language": {
+          "type": "string",
+          "description": "BCP-47 locale tag. Used by ASR and TTS services for language selection.",
+          "default": "ru-RU"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["maintenance", "exhibition"],
+          "description": "Runtime mode. 'maintenance' disables wake word gate and power enforcement — use for development and debugging. 'exhibition' requires wake word 'адам' before ASR activates and enforces MAXN power mode.",
+          "default": "maintenance"
+        },
+        "data_dir": {
+          "type": "string",
+          "description": "Absolute path to the agent data directory containing memory.sqlite3, events.jsonl, and inference_metrics.jsonl.",
+          "default": "/home/i17jet/Agents/Adam-Chip/data/adam"
+        },
+        "persona_paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Relative paths to persona markdown files loaded into system prompt in order. Changing order affects prompt structure. Adding/removing files changes character depth.",
+          "default": [
+            "Agent Adam Chip/About/System.md",
+            "Agent Adam Chip/About/Identity.md",
+            "Agent Adam Chip/About/Lore.md",
+            "Agent Adam Chip/About/Abilities.md"
+          ]
+        },
+        "history_turns": {
+          "type": "integer",
+          "description": "Number of dialogue turns kept in LLM context window. Higher = more conversational memory but longer prompt prefill (~9s per turn for Gemma 4 E4B due to SWA cache reset).",
+          "default": 2
+        },
+        "prompt_trace_max": {
+          "type": "integer",
+          "description": "Maximum number of prompt trace entries kept in the in-memory ring buffer for the debug UI.",
+          "default": 50
+        }
+      }
+    },
+    "power": {
+      "type": "object",
+      "description": "Jetson power management gate. Prevents exhibition startup on under-clocked hardware.",
+      "properties": {
+        "required_mode_name": {
+          "type": "string",
+          "description": "Human-readable name of the required nvpmodel power mode.",
+          "default": "MAXN"
+        },
+        "required_mode_id": {
+          "type": "integer",
+          "description": "nvpmodel mode ID that must be active. 0 = MAXN (full power). Run 'nvpmodel -m 0' to set.",
+          "default": 0
+        },
+        "require_jetson_clocks": {
+          "type": "boolean",
+          "description": "When true, orchestrator checks that jetson_clocks are active (all clocks at max frequency). Run 'jetson_clocks' to set.",
+          "default": true
+        },
+        "enforce_in_exhibition": {
+          "type": "boolean",
+          "description": "When true, orchestrator refuses to start in 'exhibition' mode unless power gate conditions are satisfied. Set to false only for development on non-Jetson hardware.",
+          "default": true
+        }
+      }
+    },
+    "media": {
+      "type": "object",
+      "description": "Video and audio input settings, including ESP32 fallback behavior and scene analysis cadence.",
+      "properties": {
+        "video": {
+          "type": "object",
+          "description": "Video input configuration.",
+          "properties": {
+            "primary": {
+              "type": "string",
+              "enum": ["esp_mjpeg", "jetson_gstreamer", "remote_rtsp"],
+              "description": "Active video source. 'esp_mjpeg' uses ESP32 camera stream at esp_mjpeg_url (192.168.0.171:81/stream). 'jetson_gstreamer' uses local USB/CSI camera via GStreamer pipeline. 'remote_rtsp' uses an IP camera RTSP stream.",
+              "default": "esp_mjpeg"
+            },
+            "gstreamer_pipeline": {
+              "type": "string",
+              "description": "GStreamer pipeline string used when primary='jetson_gstreamer'. Must produce RGB frames via appsink named 'adam_frames'.",
+              "default": "v4l2src device=/dev/video0 ! image/jpeg,framerate=30/1 ! jpegdec ! videoconvert ! video/x-raw,format=RGB ! appsink name=adam_frames drop=true max-buffers=1 sync=false"
+            },
+            "remote_rtsp_url": {
+              "type": "string",
+              "description": "RTSP URL for remote camera. Used when primary='remote_rtsp'.",
+              "default": ""
+            },
+            "preview_enabled": {
+              "type": "boolean",
+              "description": "When true, camera preview is served on the agent dashboard UI.",
+              "default": true
+            },
+            "esp_mjpeg_url": {
+              "type": "string",
+              "description": "HTTP URL of the ESP32 MJPEG camera stream.",
+              "default": "http://192.168.0.171:81/stream"
+            },
+            "esp_fail_threshold": {
+              "type": "integer",
+              "description": "Number of consecutive ESP32 camera fetch failures before falling back to jetson_gstreamer.",
+              "default": 3
+            },
+            "esp_retry_interval_sec": {
+              "type": "number",
+              "description": "Seconds between ESP32 camera reconnection attempts after failure.",
+              "default": 30.0
+            },
+            "video_device": {
+              "type": "string",
+              "description": "Linux video device path for local camera. Used by jetson_gstreamer pipeline.",
+              "default": "/dev/video0"
+            },
+            "camera_width": {
+              "type": "integer",
+              "description": "Capture width in pixels for local camera.",
+              "default": 640
+            },
+            "camera_height": {
+              "type": "integer",
+              "description": "Capture height in pixels for local camera.",
+              "default": 480
+            },
+            "camera_quality": {
+              "type": "integer",
+              "description": "JPEG quality (1-100) for camera capture. Higher = better quality but more data for VLM.",
+              "default": 75
+            },
+            "camera_capture_interval_sec": {
+              "type": "number",
+              "description": "Interval in seconds between camera frame captures for VLM scene analysis.",
+              "default": 0.5
+            }
+          }
+        },
+        "audio": {
+          "type": "object",
+          "description": "Audio input/output configuration and VAD parameters.",
+          "properties": {
+            "input_device": {
+              "type": "string",
+              "description": "ALSA/PulseAudio device for microphone input. 'pulse' routes through PulseAudio (current production value). hw:1,0 (Jetson APE I2S) does not produce PCM data — do not use.",
+              "default": "pulse"
+            },
+            "output_device": {
+              "type": "string",
+              "description": "ALSA device for system audio output (not TTS — TTS uses services.tts.output_device).",
+              "default": "default"
+            },
+            "sample_rate": {
+              "type": "integer",
+              "description": "Audio capture sample rate in Hz. Must match ASR service expectation (16000 Hz for WhisperX).",
+              "default": 16000
+            },
+            "channels": {
+              "type": "integer",
+              "description": "Number of audio input channels. 1 = mono.",
+              "default": 1
+            },
+            "frame_ms": {
+              "type": "integer",
+              "enum": [10, 20, 30],
+              "description": "WebRTC VAD frame duration in milliseconds. Must be 10, 20, or 30 — WebRTC VAD requirement.",
+              "default": 20
+            },
+            "vad_threshold": {
+              "type": "integer",
+              "description": "Legacy RMS energy threshold. Kept for reference; active VAD is WebRTC VAD.",
+              "default": 650
+            },
+            "min_speech_ms": {
+              "type": "integer",
+              "description": "Minimum speech segment duration in milliseconds. Shorter segments are discarded.",
+              "default": 200
+            },
+            "max_segment_ms": {
+              "type": "integer",
+              "description": "Maximum recording segment length in milliseconds before forced submission.",
+              "default": 9000
+            },
+            "mic_source": {
+              "type": "string",
+              "enum": ["esp32", "local"],
+              "description": "Active microphone source. 'esp32' fetches WAV clips from ESP32 HTTP API (/api/audio/clip). 'local' captures from input_device directly.",
+              "default": "esp32"
+            },
+            "esp32_mic_profile": {
+              "type": "string",
+              "description": "ESP32 microphone hardware profile name. Used by audio normalisation and format parsing.",
+              "default": "inmp441_philips32_stereo"
+            },
+            "esp_mic_fail_threshold": {
+              "type": "integer",
+              "description": "Consecutive ESP32 mic fetch failures before falling back to local microphone.",
+              "default": 6
+            },
+            "esp_mic_retry_interval_sec": {
+              "type": "number",
+              "description": "Seconds between ESP32 microphone reconnection attempts after failure.",
+              "default": 10.0
+            },
+            "esp_health": {
+              "type": "object",
+              "description": "ESP32 microphone health monitor thresholds. Detects silent/clipping mic automatically.",
+              "properties": {
+                "poll_interval_s": {
+                  "type": "integer",
+                  "description": "Seconds between health polls.",
+                  "default": 60
+                },
+                "silence_threshold": {
+                  "type": "integer",
+                  "description": "RMS level below which audio is considered silent (mic likely off).",
+                  "default": 24
+                },
+                "ratio_threshold": {
+                  "type": "number",
+                  "description": "Peak-to-RMS ratio above which audio is considered clipping.",
+                  "default": 6.0
+                },
+                "clip_burst_threshold": {
+                  "type": "integer",
+                  "description": "Number of clipping frames in a burst before triggering health alert.",
+                  "default": 20
+                },
+                "restore_threshold_polls": {
+                  "type": "integer",
+                  "description": "Number of healthy polls required before mic is considered restored.",
+                  "default": 5
+                }
+              }
+            },
+            "webrtc_vad_aggressiveness": {
+              "type": "integer",
+              "enum": [0, 1, 2, 3],
+              "description": "WebRTC VAD aggressiveness level. 0 = least aggressive (accepts more non-speech), 3 = most aggressive (filters most non-speech). 2 is the production tuning for exhibition distance.",
+              "default": 2
+            },
+            "max_command_segment_ms": {
+              "type": "integer",
+              "description": "Hard cap on command recording length in milliseconds. Prevents runaway recording from stuck VAD.",
+              "default": 15000
+            },
+            "normalize_factor": {
+              "type": "integer",
+              "description": "Target RMS level for audio normalisation before ASR submission.",
+              "default": 8000
+            }
+          }
+        },
+        "scene_worker_enabled": {
+          "type": "boolean",
+          "description": "Enable background VLM scene analysis worker. When false, no scene descriptions are generated and the LLM receives no visual context.",
+          "default": true
+        },
+        "scene_interval_sec": {
+          "type": "integer",
+          "description": "Seconds between automatic VLM scene captures. Lower = more responsive scene awareness but higher VLM load.",
+          "default": 4
+        },
+        "scene_stale_after_sec": {
+          "type": "integer",
+          "description": "Seconds after which a scene description is considered stale and omitted from the LLM prompt.",
+          "default": 8
+        },
+        "scene_buffer_maxlen": {
+          "type": "integer",
+          "description": "Maximum number of scene descriptions kept in the rolling buffer.",
+          "default": 8
+        },
+        "scene_context_count": {
+          "type": "integer",
+          "description": "Number of recent scene descriptions injected into the LLM prompt. Higher = richer visual context but longer prompt.",
+          "default": 1
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "description": "External inference service endpoints and parameters.",
+      "properties": {
+        "llm": {
+          "type": "object",
+          "description": "LLM service configuration (llama.cpp via OpenAI-compatible API).",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["openai"],
+              "description": "API provider type. 'openai' uses the OpenAI-compatible REST API (llama.cpp serves this at port 8081).",
+              "default": "openai"
+            },
+            "base_url": {
+              "type": "string",
+              "description": "Base URL for the LLM API endpoint.",
+              "default": "http://127.0.0.1:8081/v1"
+            },
+            "model": {
+              "type": "string",
+              "description": "Model identifier sent in API requests. llama.cpp ignores this field and uses the loaded model regardless. The .gguf suffix mismatch between this value and the server's reported name is expected and harmless.",
+              "default": "gemma-4-E4B-it-UD-Q4_K_XL"
+            },
+            "model_path": {
+              "type": "string",
+              "description": "Relative path to the GGUF model file. Used by the systemd service unit to locate the model at startup.",
+              "default": "Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "description": "HTTP timeout for LLM API requests in seconds. Gemma 4 E4B takes ~9s for full prefill due to SWA cache reset.",
+              "default": 60
+            },
+            "temperature": {
+              "type": "number",
+              "description": "LLM sampling temperature. Higher = more creative/varied responses, lower = more deterministic.",
+              "default": 0.7
+            },
+            "max_tokens": {
+              "type": "integer",
+              "description": "Maximum tokens in LLM response. Keep low (40-80) to stay in TTS latency budget. Longer responses noticeably delay TTS start.",
+              "default": 40
+            },
+            "num_ctx": {
+              "type": "integer",
+              "description": "KV cache context window size in tokens. Gemma 4 E4B resets the SWA cache between turns, so the full context is prefilled each time (~2781 tokens → ~9s).",
+              "default": 8192
+            }
+          }
+        },
+        "vlm": {
+          "type": "object",
+          "description": "VLM service configuration (VILA 1.5-3b via nano_llm Docker).",
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "description": "Base URL for the VLM API endpoint.",
+              "default": "http://127.0.0.1:8084"
+            },
+            "model": {
+              "type": "string",
+              "description": "HuggingFace model ID for the VLM service.",
+              "default": "Efficient-Large-Model/VILA1.5-3b"
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "description": "HTTP timeout for VLM API requests in seconds.",
+              "default": 20
+            },
+            "max_new_tokens": {
+              "type": "integer",
+              "description": "Maximum new tokens in VLM scene description. Keep short — descriptions are injected into the LLM prompt.",
+              "default": 48
+            },
+            "prompt": {
+              "type": "string",
+              "description": "Scene analysis prompt sent to the VLM with each frame. Must be in English — VILA 1.5-3b loops on Russian input.",
+              "default": "Describe the scene in one brief sentence: people, movements, notable objects. No Chinese characters."
+            }
+          }
+        },
+        "asr": {
+          "type": "object",
+          "description": "ASR service configuration (WhisperX CUDA via Docker, port 8095).",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["whisperx"],
+              "description": "ASR provider type.",
+              "default": "whisperx"
+            },
+            "base_url": {
+              "type": "string",
+              "description": "Base URL for the ASR API endpoint.",
+              "default": "http://127.0.0.1:8095"
+            },
+            "model": {
+              "type": "string",
+              "enum": ["tiny", "base", "small", "medium", "large"],
+              "description": "WhisperX model size. 'small' balances accuracy and latency on Jetson (~1-2s for short utterances). 'medium' is more accurate but ~2x slower.",
+              "default": "small"
+            },
+            "language": {
+              "type": "string",
+              "description": "BCP-47 language code for ASR. Must match the language the agent listens in.",
+              "default": "ru"
+            },
+            "command_endpointing_ms": {
+              "type": "integer",
+              "description": "Milliseconds of silence after speech before the voice loop submits the audio to ASR.",
+              "default": 1500
+            },
+            "reply_window_sec": {
+              "type": "number",
+              "description": "Seconds to wait for the user to continue speaking after silence is detected. Allows natural pauses without cutting off the utterance.",
+              "default": 3.75
+            },
+            "reply_absolute_deadline_sec": {
+              "type": "number",
+              "description": "Hard deadline in seconds from first VAD trigger. If user is still speaking at this point, ASR submits the audio anyway to prevent unbounded recording.",
+              "default": 7.5
+            },
+            "sample_rate": {
+              "type": "integer",
+              "description": "Audio sample rate in Hz sent to the ASR service. Must match the service expectation (16000 Hz for WhisperX).",
+              "default": 16000
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "description": "HTTP timeout for ASR API requests in seconds.",
+              "default": 30
+            },
+            "wake_words": {
+              "type": "string",
+              "description": "Comma-separated wake word(s). The ASR service uses this list to gate transcription in exhibition mode.",
+              "default": "адам"
+            },
+            "wake_word_required": {
+              "type": "boolean",
+              "description": "When true, ASR will not activate unless the wake word was detected by OpenWakeWord. In maintenance mode this is bypassed regardless.",
+              "default": true
+            },
+            "reply_window_expired_action": {
+              "type": "string",
+              "enum": ["standby", "submit"],
+              "description": "What to do when reply_absolute_deadline_sec expires without speech completing. 'standby' resets the voice loop. 'submit' forces ASR submission of whatever was captured.",
+              "default": "standby"
+            }
+          }
+        },
+        "tts": {
+          "type": "object",
+          "description": "TTS service configuration (Silero v5_5_ru HTTP service, port 8082).",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["silero"],
+              "description": "TTS provider type.",
+              "default": "silero"
+            },
+            "base_url": {
+              "type": "string",
+              "description": "Base URL for the TTS API endpoint.",
+              "default": "http://127.0.0.1:8082"
+            },
+            "model": {
+              "type": "string",
+              "description": "Silero model version string.",
+              "default": "v5_5_ru"
+            },
+            "speaker": {
+              "type": "string",
+              "description": "Active Silero voice ID. Must be one of the available_speakers values.",
+              "default": "eugene"
+            },
+            "sample_rate": {
+              "type": "integer",
+              "description": "TTS audio sample rate in Hz. Must match Silero model output (24000 for v5_5_ru). Do not change without rebuilding the TTS service — mismatched sample rate causes pitch shift.",
+              "default": 24000
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "description": "HTTP timeout for TTS synthesis requests in seconds.",
+              "default": 20
+            },
+            "available_speakers": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Available Silero TTS voice IDs for the v5_5_ru model.",
+              "default": ["aidar", "baya", "kseniya", "xenia", "eugene", "random"]
+            },
+            "output_device": {
+              "type": "string",
+              "description": "ALSA device for TTS audio playback. 'plughw:1,3' = HDMI audio (card 1, HDA NVIDIA). hw:1,0 (Jetson APE I2S) does not produce PCM output — do not use.",
+              "default": "plughw:1,3"
+            },
+            "filler_enabled": {
+              "type": "boolean",
+              "description": "When true, TTS plays a short filler phrase (e.g. 'Хм...') while the LLM is generating, to reduce perceived silence latency.",
+              "default": true
+            },
+            "filler_phrase": {
+              "type": "string",
+              "description": "Text of the filler phrase spoken while LLM generates response.",
+              "default": "Хм..."
+            },
+            "filler_delay_ms": {
+              "type": "integer",
+              "description": "Milliseconds after LLM request before filler phrase is spoken. Prevents filler on fast responses.",
+              "default": 800
+            }
+          }
+        }
+      }
+    },
+    "mcu": {
+      "type": "object",
+      "description": "ESP32-S3 MCU (motor controller) HTTP API configuration.",
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "description": "Base URL for the ESP32 HTTP API (port 80). Static IP set via W5500 Ethernet.",
+          "default": "http://192.168.0.171"
+        },
+        "speaker_url": {
+          "type": "string",
+          "description": "URL for the ESP32 speaker playback endpoint (port 81). Separate server on the ESP32 handles audio streaming.",
+          "default": "http://192.168.0.171:81/speaker"
+        },
+        "timeout_sec": {
+          "type": "integer",
+          "description": "HTTP timeout for MCU API requests in seconds. Keep low — MCU commands are fire-and-forget.",
+          "default": 1
+        },
+        "idle_scene": {
+          "type": "string",
+          "description": "Default motor scene played when agent enters standby.",
+          "default": "boot_idle"
+        },
+        "allowed_scenes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Whitelist of scene names accepted by the action layer. Any scene name from the LLM not in this list is rejected as no_action.",
+          "default": ["boot_idle", "all_on", "alternating"]
+        },
+        "channels": {
+          "type": "object",
+          "description": "PCA9685 PWM channel range constraints.",
+          "properties": {
+            "min": {
+              "type": "integer",
+              "description": "Minimum valid PWM channel index.",
+              "default": 0
+            },
+            "max": {
+              "type": "integer",
+              "description": "Maximum valid PWM channel index (PCA9685 has 16 channels: 0-15).",
+              "default": 15
+            },
+            "value_min": {
+              "type": "integer",
+              "description": "Minimum valid PWM value (off).",
+              "default": 0
+            },
+            "value_max": {
+              "type": "integer",
+              "description": "Maximum valid PWM value (full on, 12-bit resolution).",
+              "default": 4095
+            }
+          }
+        }
+      }
+    },
+    "sounds": {
+      "type": "object",
+      "description": "Local audio cue configuration for Jetson-side system sounds.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Master switch for local sound cues (startup chime, error sounds).",
+          "default": true
+        },
+        "success_path": {
+          "type": "string",
+          "description": "Relative path to the startup success sound file played after orchestrator initialisation.",
+          "default": "data/sounds/success.wav"
+        },
+        "local_output_device": {
+          "type": "string",
+          "description": "ALSA device used for local cue playback (not TTS).",
+          "default": "default"
+        },
+        "esp_boot_note": {
+          "type": "string",
+          "description": "Informational note only — not a config value. Documents that the ESP boot sound is embedded in firmware.",
+          "default": "ESP boot sound is embedded in ESP firmware and played by ESP after speaker init"
+        },
+        "error_path": {
+          "type": "string",
+          "description": "Relative path to the error sound file played on critical failures.",
+          "default": "data/sounds/boot.wav"
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "description": "Motor safety constraints enforced by the action layer before any MCU command is sent.",
+      "properties": {
+        "motor_default_duration_ms": {
+          "type": "integer",
+          "description": "Default duration in milliseconds for motor activation commands that do not specify a duration.",
+          "default": 900
+        },
+        "motor_max_duration_ms": {
+          "type": "integer",
+          "description": "Hard cap on motor activation duration in milliseconds. Any LLM-requested duration above this is clamped. Prevents mechanical damage from runaway activations.",
+          "default": 2500
+        },
+        "motor_cooldown_ms": {
+          "type": "integer",
+          "description": "Minimum milliseconds between consecutive motor commands to prevent mechanical stress.",
+          "default": 250
+        },
+        "half_duplex_mute": {
+          "type": "boolean",
+          "description": "When true, microphone input is muted during TTS playback to prevent acoustic echo feedback. MUST remain true in all production modes.",
+          "default": true
+        }
+      }
+    },
+    "wake_word": {
+      "type": "object",
+      "description": "OpenWakeWord ONNX wake word detection configuration.",
+      "properties": {
+        "engine": {
+          "type": "string",
+          "enum": ["openwakeword"],
+          "description": "Wake word detection engine.",
+          "default": "openwakeword"
+        },
+        "model_path": {
+          "type": "string",
+          "description": "Relative path to the ONNX wake word model file. The model is trained for the Russian word 'адам'.",
+          "default": "data/wake_word/adam.onnx"
+        },
+        "threshold": {
+          "type": "number",
+          "description": "Detection confidence threshold (0.0-1.0). Lower = more sensitive but more false positives. 0.20 is tuned for exhibition distance (~1-3m from the installation). Increase if too many false triggers; decrease if the agent misses activations.",
+          "default": 0.20
+        },
+        "debounce_hits": {
+          "type": "integer",
+          "description": "Number of consecutive audio frames above threshold required to confirm wake word. Prevents spurious triggers from single-frame noise spikes.",
+          "default": 2
+        },
+        "vad_threshold": {
+          "type": "number",
+          "description": "VAD pre-filter threshold for wake word detection. 0 disables VAD pre-filtering.",
+          "default": 0
+        },
+        "wake_silence_timeout_sec": {
+          "type": "integer",
+          "description": "Seconds of silence after wake word activation before the voice loop resets to listening state without completing a turn.",
+          "default": 3
+        }
+      }
+    }
+  }
+}
