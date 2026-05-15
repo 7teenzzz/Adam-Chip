@@ -299,12 +299,19 @@ class SceneDescriptionBuffer:
     def __init__(self, maxlen: int = 8) -> None:
         self._buf: deque[str] = deque(maxlen=maxlen)
         self._lock = threading.Lock()
+        self._last_text: str = ""
 
-    def push(self, text: str) -> None:
+    def push(self, text: str) -> bool:
+        """Push description. Returns False if skipped as exact duplicate of last entry."""
         stripped = text.strip()
-        if stripped:
-            with self._lock:
-                self._buf.append(stripped)
+        if not stripped:
+            return False
+        with self._lock:
+            if stripped == self._last_text:
+                return False
+            self._buf.append(stripped)
+            self._last_text = stripped
+        return True
 
     def latest(self) -> str:
         with self._lock:

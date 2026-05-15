@@ -947,20 +947,31 @@ class SceneWorker:
                 if not jpeg:
                     await asyncio.sleep(0.2)
                     continue
+                prev = scene_cache.text or ""
                 event_log.append("vlm_request_started", {"frame_bytes": len(jpeg), "camera_source": self._cam.active_source})
                 t_vlm = time.perf_counter()
-                summary = (await self.vlm_client.describe_jpeg(jpeg)).strip()
+                summary = (await self.vlm_client.describe_jpeg(jpeg, prev_scene=prev)).strip()
                 vlm_ms = round((time.perf_counter() - t_vlm) * 1000, 1)
-                event_log.append("vlm_request_finished", {"vlm_ms": vlm_ms, "text_len": len(summary)})
+                event_log.append("vlm_request_finished", {
+                    "vlm_ms": vlm_ms,
+                    "text_len": len(summary),
+                    "text_preview": summary[:120],
+                    "has_prev_scene": bool(prev),
+                })
                 runtime_state["last_vlm_ms"] = vlm_ms
-                self._buf.push(summary)
-                updated = scene_cache.update(
-                    summary,
-                    {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms, "last_error": ""},
-                )
+                meta = {"source": "vlm", "updated_at": utc_now(), "stale": False, "vlm_ms": vlm_ms, "last_error": ""}
+                pushed = self._buf.push(summary)
+                if not pushed:
+                    event_log.append("scene_description_duplicate", {
+                        "text": summary,
+                        "camera_source": self._cam.active_source,
+                    })
+                    scene_cache.update(summary, meta)
+                else:
+                    updated = scene_cache.update(summary, meta)
+                    event_log.append("scene_updated", updated)
                 self.last_error = ""
                 self._consecutive_errors = 0
-                event_log.append("scene_updated", updated)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -2050,7 +2061,8 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         recent_lines = _format_recent_episodic(recent_eps)
 
     # echoes / chinese gate (приоритет — echoes, потом chinese)
-    mood = _resolve_mood(scene_cache.text, sensors)
+    # mood = _resolve_mood(scene_cache.text, sensors)  # disabled: VLM outputs English, Russian keywords never match
+    mood = "neutral"
     echo_hint: str | None = None
     echo_meta: dict[str, Any] | None = None
     if tuning.echoes.enabled:
@@ -2093,6 +2105,12 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     history_turns = tuning.prompt.history_turns
     history = memory.recent_dialogue(history_turns)
     scene_context_count = int(settings.section("media").get("scene_context_count", 3))
+    recent_scenes = scene_buffer.recent(scene_context_count)
+    event_log.append("scene_context_injected", {
+        "count": len(recent_scenes),
+        "unique": len(set(recent_scenes)),
+        "texts": recent_scenes,
+    }, turn_id=turn_id)
     messages = prompt_builder.build_messages(
         transcript=transcript,
         dialogue_history=history,
@@ -2100,7 +2118,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         sensors=sensors,
         semantic_text=semantic_text,
         recent_episodic=recent_lines,
-        recent_scenes=scene_buffer.recent(scene_context_count),
+        recent_scenes=recent_scenes,
         echo_hint=echo_hint,
         history_turns=history_turns,
         include_scene=tuning.prompt.include_scene,

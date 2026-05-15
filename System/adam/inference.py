@@ -356,20 +356,18 @@ def create_asr_client(config: dict[str, Any]) -> WhisperXASRClient | WhisperASRC
 
 
 _VLM_DEFAULT_PROMPT = (
-    "Отвечай только по-русски. Не используй китайские иероглифы. "
-    "Кратко опиши сцену в одном предложении: люди, движения, заметные объекты."
+    "You are a fixed camera sensor in an interactive art installation. "
+    "Describe in this format:\n"
+    "\"Scene: [count+position]. Engagement: [none/watching/approaching/leaving/interacting].\"\n"
+    "Example: \"Scene: 2 people near installation, one leaning in. Engagement: watching.\"\n"
+    "If empty: \"Scene: empty room. Engagement: none.\"\n"
+    "English only."
 )
 
-# CJK Unified Ideographs (U+4E00..U+9FFF) — VILA 1.5-3b sometimes outputs Chinese
-# despite Russian prompt; we count these to detect and reject such replies.
+# CJK Unified Ideographs (U+4E00..U+9FFF) — VILA 1.5-3b occasionally outputs Chinese.
+# We count ideographs and reject the response (no retry — caller keeps stale scene).
 _CJK_RE = re.compile(r"[一-鿿]")
-_CJK_REJECT_THRESHOLD = 3  # 3+ Chinese ideographs → reject and retry
-
-_VLM_RUSSIAN_RETRY_PROMPT = (
-    "ВНИМАНИЕ: отвечай только по-русски кириллицей. Не используй китайские иероглифы. "
-    "Опиши сцену одним коротким предложением на русском языке: "
-    "люди, движения, заметные объекты."
-)
+_CJK_REJECT_THRESHOLD = 3  # 3+ Chinese ideographs → reject immediately
 
 
 class VLMClient:
@@ -407,28 +405,32 @@ class VLMClient:
                 last_loading = False
         return ServiceHealth(False, last_error, loading=last_loading)
 
-    async def describe_jpeg(self, jpeg_bytes: bytes) -> str:
-        return await asyncio.to_thread(self._describe_jpeg_sync, jpeg_bytes)
+    async def describe_jpeg(self, jpeg_bytes: bytes, prev_scene: str = "") -> str:
+        return await asyncio.to_thread(self._describe_jpeg_sync, jpeg_bytes, prev_scene)
 
-    def _describe_jpeg_sync(self, jpeg_bytes: bytes) -> str:
+    def _describe_jpeg_sync(self, jpeg_bytes: bytes, prev_scene: str = "") -> str:
         if not jpeg_bytes:
             raise RuntimeError("empty scene snapshot")
         image_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
-        # Try with default prompt first; if reply has too many CJK ideographs,
-        # retry with a stronger Russian-only directive.
-        for attempt_prompt in (self.prompt, _VLM_RUSSIAN_RETRY_PROMPT):
-            text = self._call_vlm(image_b64, attempt_prompt)
-            if text and not self._is_chinese_dominant(text):
-                return text
-            if text and self._is_chinese_dominant(text) and attempt_prompt is self.prompt:
-                # First attempt produced Chinese — fall through to retry
-                continue
-            if text:
-                # Retry also produced Chinese — reject (caller will keep stale scene)
-                raise RuntimeError(
-                    f"vlm returned non-russian output (cjk count >= {_CJK_REJECT_THRESHOLD})"
-                )
-        raise RuntimeError("vlm returned no scene description")
+        prompt_text = self._build_prompt(prev_scene)
+        text = self._call_vlm(image_b64, prompt_text)
+        if not text:
+            raise RuntimeError("vlm returned no scene description")
+        if self._is_chinese_dominant(text):
+            raise RuntimeError(
+                f"vlm cjk output rejected (>={_CJK_REJECT_THRESHOLD} ideographs): {text[:80]!r}"
+            )
+        return text
+
+    def _build_prompt(self, prev_scene: str = "") -> str:
+        """Construct VLM prompt, optionally appending previous scene for delta context."""
+        if prev_scene and prev_scene.strip():
+            return (
+                f"{self.prompt}\n"
+                f'Previous observation: "{prev_scene.strip()}"\n'
+                "Report what changed, or confirm if unchanged."
+            )
+        return self.prompt
 
     def _call_vlm(self, image_b64: str, prompt_text: str) -> str:
         payload = {

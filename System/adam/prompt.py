@@ -230,6 +230,12 @@ class PromptBuilder:
 
         if include_scene:
             scenes = [s for s in recent_scenes if s]
+            # Deduplicate consecutive identical descriptions (static scene protection).
+            deduped: list[str] = []
+            for s in scenes:
+                if not deduped or s != deduped[-1]:
+                    deduped.append(s)
+            scenes = deduped
             if len(scenes) > 1:
                 numbered = "\n".join(f"  [{i + 1}] {s}" for i, s in enumerate(scenes))
                 parts.append(f"[ctx.vision]\n{numbered}")
