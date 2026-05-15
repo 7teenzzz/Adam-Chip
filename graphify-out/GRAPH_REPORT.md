@@ -1,139 +1,141 @@
-# Graph Report - System/  (2026-05-15)
+# Graph Report - raw + System/  (2026-05-15)
 
 ## Corpus Check
-- 66 files · ~54,907 words
+- 0 files · ~0 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1391 nodes · 2017 edges · 128 communities (110 shown, 18 thin omitted)
-- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 156 edges (avg confidence: 0.58)
+- 1424 nodes · 2055 edges · 130 communities (113 shown, 17 thin omitted)
+- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 161 edges (avg confidence: 0.59)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
-- [[_COMMUNITY_Sound Config Schema|Sound Config Schema]]
-- [[_COMMUNITY_Agent & MCU Config Schema|Agent & MCU Config Schema]]
-- [[_COMMUNITY_Orchestrator Core|Orchestrator Core]]
-- [[_COMMUNITY_WebRTC VAD Engine|WebRTC VAD Engine]]
-- [[_COMMUNITY_Camera Capture|Camera Capture]]
-- [[_COMMUNITY_Episodic Memory|Episodic Memory]]
-- [[_COMMUNITY_Legacy Host UI Server|Legacy Host UI Server]]
-- [[_COMMUNITY_Core Module Contracts|Core Module Contracts]]
-- [[_COMMUNITY_Web UI JavaScript Core|Web UI JavaScript Core]]
-- [[_COMMUNITY_ESP32 MCU Client|ESP32 MCU Client]]
-- [[_COMMUNITY_Wake Word Config Schema|Wake Word Config Schema]]
-- [[_COMMUNITY_Audio & Media Config Schema|Audio & Media Config Schema]]
-- [[_COMMUNITY_WhisperX ASR Service|WhisperX ASR Service]]
-- [[_COMMUNITY_Audio Runtime Config|Audio Runtime Config]]
-- [[_COMMUNITY_Hot-Reload Tuning Engine|Hot-Reload Tuning Engine]]
-- [[_COMMUNITY_Config Loader|Config Loader]]
-- [[_COMMUNITY_MCU Channels Schema|MCU Channels Schema]]
-- [[_COMMUNITY_ASR Config Schema|ASR Config Schema]]
-- [[_COMMUNITY_TTS Config Schema|TTS Config Schema]]
-- [[_COMMUNITY_Prompt Builder|Prompt Builder]]
-- [[_COMMUNITY_OpenWakeWord Engine|OpenWakeWord Engine]]
-- [[_COMMUNITY_Jetson Power Config Schema|Jetson Power Config Schema]]
-- [[_COMMUNITY_LLM Config Schema|LLM Config Schema]]
-- [[_COMMUNITY_Persona Tuning Profiles|Persona Tuning Profiles]]
-- [[_COMMUNITY_Episode Data Model|Episode Data Model]]
-- [[_COMMUNITY_Config Schema Root|Config Schema Root]]
-- [[_COMMUNITY_Session Accumulator|Session Accumulator]]
-- [[_COMMUNITY_Dialogue Turn Handler|Dialogue Turn Handler]]
-- [[_COMMUNITY_ESP32 Audio Health Monitor|ESP32 Audio Health Monitor]]
-- [[_COMMUNITY_MCU API Config Schema|MCU API Config Schema]]
-- [[_COMMUNITY_VLM Config Schema|VLM Config Schema]]
-- [[_COMMUNITY_Chat Panel & API|Chat Panel & API]]
-- [[_COMMUNITY_Runtime API & Audio Devices|Runtime API & Audio Devices]]
-- [[_COMMUNITY_Inference Helpers|Inference Helpers]]
-- [[_COMMUNITY_Python Dependencies|Python Dependencies]]
-- [[_COMMUNITY_Startup & Sound Cues|Startup & Sound Cues]]
-- [[_COMMUNITY_Silero TTS Service|Silero TTS Service]]
-- [[_COMMUNITY_Video Runtime Config|Video Runtime Config]]
-- [[_COMMUNITY_ASR Runtime Config|ASR Runtime Config]]
-- [[_COMMUNITY_Model Management Panel|Model Management Panel]]
-- [[_COMMUNITY_Event Log|Event Log]]
-- [[_COMMUNITY_Log Viewer Service|Log Viewer Service]]
-- [[_COMMUNITY_Echo Entry Data|Echo Entry Data]]
-- [[_COMMUNITY_Echo Gate (Reply Pool)|Echo Gate (Reply Pool)]]
-- [[_COMMUNITY_Power Runtime Config|Power Runtime Config]]
-- [[_COMMUNITY_TTS Runtime Config|TTS Runtime Config]]
-- [[_COMMUNITY_Metrics Logger|Metrics Logger]]
-- [[_COMMUNITY_VLM Client & Text Extraction|VLM Client & Text Extraction]]
-- [[_COMMUNITY_MCU Channel Config|MCU Channel Config]]
-- [[_COMMUNITY_Metrics Dashboard Panel|Metrics Dashboard Panel]]
-- [[_COMMUNITY_Settings Panel|Settings Panel]]
-- [[_COMMUNITY_Action Layer|Action Layer]]
-- [[_COMMUNITY_Service Control|Service Control]]
-- [[_COMMUNITY_UI Page Router|UI Page Router]]
-- [[_COMMUNITY_Media Health Checker|Media Health Checker]]
-- [[_COMMUNITY_Subsystem Config Panel|Subsystem Config Panel]]
-- [[_COMMUNITY_Memory Store|Memory Store]]
-- [[_COMMUNITY_Wake Word Calibration|Wake Word Calibration]]
-- [[_COMMUNITY_LLM Runtime Config|LLM Runtime Config]]
-- [[_COMMUNITY_Prompt History Panel|Prompt History Panel]]
-- [[_COMMUNITY_WhisperX ASR Client|WhisperX ASR Client]]
-- [[_COMMUNITY_Inference Service Factory|Inference Service Factory]]
-- [[_COMMUNITY_Agent Runtime Config|Agent Runtime Config]]
-- [[_COMMUNITY_UI State Store|UI State Store]]
-- [[_COMMUNITY_Services Status Panel|Services Status Panel]]
-- [[_COMMUNITY_Voice Pipeline Panel|Voice Pipeline Panel]]
-- [[_COMMUNITY_Jetson Power Gate|Jetson Power Gate]]
-- [[_COMMUNITY_Scene Analysis Worker|Scene Analysis Worker]]
-- [[_COMMUNITY_Wake Word Runtime Config|Wake Word Runtime Config]]
-- [[_COMMUNITY_Web UI Styles|Web UI Styles]]
-- [[_COMMUNITY_Scene Description Cache|Scene Description Cache]]
-- [[_COMMUNITY_Session Watcher|Session Watcher]]
-- [[_COMMUNITY_LLM OpenAI Client|LLM OpenAI Client]]
-- [[_COMMUNITY_Service Health Status|Service Health Status]]
-- [[_COMMUNITY_ESP32 Audio Health Init|ESP32 Audio Health Init]]
-- [[_COMMUNITY_Riva ASR (Legacy)|Riva ASR (Legacy)]]
-- [[_COMMUNITY_Scene Media Config|Scene Media Config]]
-- [[_COMMUNITY_VLM Runtime Config|VLM Runtime Config]]
-- [[_COMMUNITY_Sounds Runtime Config|Sounds Runtime Config]]
-- [[_COMMUNITY_Local Sound Playback|Local Sound Playback]]
-- [[_COMMUNITY_Exhibition Mode Gate|Exhibition Mode Gate]]
-- [[_COMMUNITY_ESP Mic Profile Schema|ESP Mic Profile Schema]]
-- [[_COMMUNITY_VAD Frame Duration Schema|VAD Frame Duration Schema]]
-- [[_COMMUNITY_Mic Source Schema|Mic Source Schema]]
-- [[_COMMUNITY_WebRTC Aggressiveness Schema|WebRTC Aggressiveness Schema]]
-- [[_COMMUNITY_Video Primary Source Schema|Video Primary Source Schema]]
-- [[_COMMUNITY_ASR Model Schema|ASR Model Schema]]
-- [[_COMMUNITY_Service Provider Schema|Service Provider Schema]]
-- [[_COMMUNITY_Reply Timeout Action Schema|Reply Timeout Action Schema]]
-- [[_COMMUNITY_TTS Filler Prewarm|TTS Filler Prewarm]]
-- [[_COMMUNITY_ESP Mic Fail Threshold Schema|ESP Mic Fail Threshold Schema]]
-- [[_COMMUNITY_ESP Mic Retry Schema|ESP Mic Retry Schema]]
-- [[_COMMUNITY_Max Command Segment Schema|Max Command Segment Schema]]
-- [[_COMMUNITY_Audio Normalize Schema|Audio Normalize Schema]]
-- [[_COMMUNITY_ESP Health Monitor Schema|ESP Health Monitor Schema]]
-- [[_COMMUNITY_Input Device Schema|Input Device Schema]]
-- [[_COMMUNITY_Max Segment Duration Schema|Max Segment Duration Schema]]
-- [[_COMMUNITY_Min Speech Duration Schema|Min Speech Duration Schema]]
-- [[_COMMUNITY_Camera Capture Interval Schema|Camera Capture Interval Schema]]
-- [[_COMMUNITY_Camera Quality Schema|Camera Quality Schema]]
-- [[_COMMUNITY_ESP Camera Fail Threshold Schema|ESP Camera Fail Threshold Schema]]
-- [[_COMMUNITY_ESP MJPEG Stream Schema|ESP MJPEG Stream Schema]]
-- [[_COMMUNITY_Camera Preview Schema|Camera Preview Schema]]
-- [[_COMMUNITY_Camera Height Schema|Camera Height Schema]]
-- [[_COMMUNITY_Camera Width Schema|Camera Width Schema]]
-- [[_COMMUNITY_ESP Camera Retry Schema|ESP Camera Retry Schema]]
-- [[_COMMUNITY_GStreamer Pipeline Schema|GStreamer Pipeline Schema]]
-- [[_COMMUNITY_RTSP URL Schema|RTSP URL Schema]]
-- [[_COMMUNITY_Video Device Schema|Video Device Schema]]
-- [[_COMMUNITY_Video Config Object Schema|Video Config Object Schema]]
-- [[_COMMUNITY_TTS Filler Phrase Schema|TTS Filler Phrase Schema]]
-- [[_COMMUNITY_Output Device Schema|Output Device Schema]]
-- [[_COMMUNITY_Sample Rate Schema|Sample Rate Schema]]
-- [[_COMMUNITY_Logs Panel & API|Logs Panel & API]]
-- [[_COMMUNITY_Adam Package Init|Adam Package Init]]
-- [[_COMMUNITY_Agent Turn Endpoint|Agent Turn Endpoint]]
-- [[_COMMUNITY_Services Status Endpoint|Services Status Endpoint]]
-- [[_COMMUNITY_MCU Reset Endpoint|MCU Reset Endpoint]]
-- [[_COMMUNITY_MCU Stream Restart|MCU Stream Restart]]
-- [[_COMMUNITY_Interlayers Package|Interlayers Package]]
-- [[_COMMUNITY_Speech Package Init|Speech Package Init]]
-- [[_COMMUNITY_System Package Init|System Package Init]]
-- [[_COMMUNITY_Orchestrator Design Notes|Orchestrator Design Notes]]
-- [[_COMMUNITY_Echo Gate Design Notes|Echo Gate Design Notes]]
+- [[_COMMUNITY_Community 0|Community 0]]
+- [[_COMMUNITY_Community 1|Community 1]]
+- [[_COMMUNITY_Community 2|Community 2]]
+- [[_COMMUNITY_Community 3|Community 3]]
+- [[_COMMUNITY_Community 4|Community 4]]
+- [[_COMMUNITY_Community 5|Community 5]]
+- [[_COMMUNITY_Community 6|Community 6]]
+- [[_COMMUNITY_Community 7|Community 7]]
+- [[_COMMUNITY_Community 8|Community 8]]
+- [[_COMMUNITY_Community 9|Community 9]]
+- [[_COMMUNITY_Community 10|Community 10]]
+- [[_COMMUNITY_Community 11|Community 11]]
+- [[_COMMUNITY_Community 12|Community 12]]
+- [[_COMMUNITY_Community 13|Community 13]]
+- [[_COMMUNITY_Community 14|Community 14]]
+- [[_COMMUNITY_Community 15|Community 15]]
+- [[_COMMUNITY_Community 16|Community 16]]
+- [[_COMMUNITY_Community 17|Community 17]]
+- [[_COMMUNITY_Community 18|Community 18]]
+- [[_COMMUNITY_Community 19|Community 19]]
+- [[_COMMUNITY_Community 20|Community 20]]
+- [[_COMMUNITY_Community 21|Community 21]]
+- [[_COMMUNITY_Community 22|Community 22]]
+- [[_COMMUNITY_Community 23|Community 23]]
+- [[_COMMUNITY_Community 24|Community 24]]
+- [[_COMMUNITY_Community 25|Community 25]]
+- [[_COMMUNITY_Community 26|Community 26]]
+- [[_COMMUNITY_Community 27|Community 27]]
+- [[_COMMUNITY_Community 28|Community 28]]
+- [[_COMMUNITY_Community 29|Community 29]]
+- [[_COMMUNITY_Community 30|Community 30]]
+- [[_COMMUNITY_Community 31|Community 31]]
+- [[_COMMUNITY_Community 32|Community 32]]
+- [[_COMMUNITY_Community 33|Community 33]]
+- [[_COMMUNITY_Community 34|Community 34]]
+- [[_COMMUNITY_Community 35|Community 35]]
+- [[_COMMUNITY_Community 36|Community 36]]
+- [[_COMMUNITY_Community 37|Community 37]]
+- [[_COMMUNITY_Community 38|Community 38]]
+- [[_COMMUNITY_Community 39|Community 39]]
+- [[_COMMUNITY_Community 40|Community 40]]
+- [[_COMMUNITY_Community 41|Community 41]]
+- [[_COMMUNITY_Community 42|Community 42]]
+- [[_COMMUNITY_Community 43|Community 43]]
+- [[_COMMUNITY_Community 44|Community 44]]
+- [[_COMMUNITY_Community 45|Community 45]]
+- [[_COMMUNITY_Community 46|Community 46]]
+- [[_COMMUNITY_Community 47|Community 47]]
+- [[_COMMUNITY_Community 48|Community 48]]
+- [[_COMMUNITY_Community 49|Community 49]]
+- [[_COMMUNITY_Community 50|Community 50]]
+- [[_COMMUNITY_Community 51|Community 51]]
+- [[_COMMUNITY_Community 52|Community 52]]
+- [[_COMMUNITY_Community 53|Community 53]]
+- [[_COMMUNITY_Community 54|Community 54]]
+- [[_COMMUNITY_Community 55|Community 55]]
+- [[_COMMUNITY_Community 56|Community 56]]
+- [[_COMMUNITY_Community 57|Community 57]]
+- [[_COMMUNITY_Community 58|Community 58]]
+- [[_COMMUNITY_Community 59|Community 59]]
+- [[_COMMUNITY_Community 60|Community 60]]
+- [[_COMMUNITY_Community 61|Community 61]]
+- [[_COMMUNITY_Community 62|Community 62]]
+- [[_COMMUNITY_Community 63|Community 63]]
+- [[_COMMUNITY_Community 64|Community 64]]
+- [[_COMMUNITY_Community 65|Community 65]]
+- [[_COMMUNITY_Community 66|Community 66]]
+- [[_COMMUNITY_Community 67|Community 67]]
+- [[_COMMUNITY_Community 68|Community 68]]
+- [[_COMMUNITY_Community 69|Community 69]]
+- [[_COMMUNITY_Community 70|Community 70]]
+- [[_COMMUNITY_Community 71|Community 71]]
+- [[_COMMUNITY_Community 72|Community 72]]
+- [[_COMMUNITY_Community 73|Community 73]]
+- [[_COMMUNITY_Community 74|Community 74]]
+- [[_COMMUNITY_Community 75|Community 75]]
+- [[_COMMUNITY_Community 76|Community 76]]
+- [[_COMMUNITY_Community 77|Community 77]]
+- [[_COMMUNITY_Community 78|Community 78]]
+- [[_COMMUNITY_Community 79|Community 79]]
+- [[_COMMUNITY_Community 80|Community 80]]
+- [[_COMMUNITY_Community 81|Community 81]]
+- [[_COMMUNITY_Community 82|Community 82]]
+- [[_COMMUNITY_Community 83|Community 83]]
+- [[_COMMUNITY_Community 84|Community 84]]
+- [[_COMMUNITY_Community 85|Community 85]]
+- [[_COMMUNITY_Community 86|Community 86]]
+- [[_COMMUNITY_Community 87|Community 87]]
+- [[_COMMUNITY_Community 88|Community 88]]
+- [[_COMMUNITY_Community 89|Community 89]]
+- [[_COMMUNITY_Community 90|Community 90]]
+- [[_COMMUNITY_Community 91|Community 91]]
+- [[_COMMUNITY_Community 92|Community 92]]
+- [[_COMMUNITY_Community 93|Community 93]]
+- [[_COMMUNITY_Community 94|Community 94]]
+- [[_COMMUNITY_Community 95|Community 95]]
+- [[_COMMUNITY_Community 96|Community 96]]
+- [[_COMMUNITY_Community 97|Community 97]]
+- [[_COMMUNITY_Community 98|Community 98]]
+- [[_COMMUNITY_Community 99|Community 99]]
+- [[_COMMUNITY_Community 100|Community 100]]
+- [[_COMMUNITY_Community 101|Community 101]]
+- [[_COMMUNITY_Community 102|Community 102]]
+- [[_COMMUNITY_Community 103|Community 103]]
+- [[_COMMUNITY_Community 104|Community 104]]
+- [[_COMMUNITY_Community 105|Community 105]]
+- [[_COMMUNITY_Community 106|Community 106]]
+- [[_COMMUNITY_Community 107|Community 107]]
+- [[_COMMUNITY_Community 108|Community 108]]
+- [[_COMMUNITY_Community 109|Community 109]]
+- [[_COMMUNITY_Community 110|Community 110]]
+- [[_COMMUNITY_Community 111|Community 111]]
+- [[_COMMUNITY_Community 112|Community 112]]
+- [[_COMMUNITY_Community 113|Community 113]]
+- [[_COMMUNITY_Community 114|Community 114]]
+- [[_COMMUNITY_Community 115|Community 115]]
+- [[_COMMUNITY_Community 116|Community 116]]
+- [[_COMMUNITY_Community 117|Community 117]]
+- [[_COMMUNITY_Community 118|Community 118]]
+- [[_COMMUNITY_Community 119|Community 119]]
+- [[_COMMUNITY_Community 120|Community 120]]
+- [[_COMMUNITY_Community 121|Community 121]]
+- [[_COMMUNITY_Community 122|Community 122]]
+- [[_COMMUNITY_Community 123|Community 123]]
+- [[_COMMUNITY_Community 125|Community 125]]
+- [[_COMMUNITY_Community 127|Community 127]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `VoiceLoopController` - 42 edges
@@ -160,450 +162,462 @@
   Orchestrator.py → adam/device.py
 
 ## Hyperedges (group relationships)
-- **Three-panel WebUI navigation (agent/dash/debug)** — template_agent, template_dash, template_debug [EXTRACTED 0.95]
-- **Orchestrator implements all WebUI + HostUI API endpoints** — orchestrator_py, api_agent_turn, api_ui_status, api_config_patch [INFERRED 0.85]
-- **Voice pipeline runtime deps: OpenWakeWord + WebRTC VAD + Silero TTS** — req_openwakeword, req_webrtcvad, req_silero [INFERRED 0.85]
+- **Jetson Edge Inference Stack (LLM + VLM + ASR + TTS)** — jetsonailab_llama_cpp, jetsonailab_vila_vlm, jetsonailab_whisperx, jetsonailab_silero_tts [EXTRACTED 0.95]
+- **Silero v5_5_ru Russian Speaker Set** — silero_v5_5_ru, silero_speaker_eugene, silero_speaker_aidar, silero_speaker_baya, silero_speaker_kseniya, silero_speaker_xenia [EXTRACTED 1.00]
+- **Jetson-safe Install Order Pattern (PyTorch first, no-deps)** — jetsonailab_pytorch_jetson, silero_jetson_install_order, jetsonailab_whisperx [EXTRACTED 0.95]
 
-## Communities (128 total, 18 thin omitted)
+## Communities (130 total, 17 thin omitted)
 
-### Community 0 - "Sound Config Schema"
-Cohesion: 0.04
-Nodes (44): default, description, type, default, description, type, default, description (+36 more)
+### Community 0 - "Community 0"
+Cohesion: 0.07
+Nodes (17): PowerGate, PowerStatus, _run(), WebRTC VAD wrapper — stateless, CPU-only, no PyTorch required.  Example::      v, Drop-in replacement for Silero VAD in VoiceLoopController.      aggressiveness —, Return 1.0 if speech detected, 0.0 if not.          audio_bytes: raw 16-bit mono, Convenience wrapper returning bool instead of float., No-op — WebRTC VAD is stateless. Exists for API compatibility. (+9 more)
 
-### Community 1 - "Agent & MCU Config Schema"
+### Community 1 - "Community 1"
 Cohesion: 0.05
-Nodes (40): description, properties, type, default, description, items, type, default (+32 more)
+Nodes (42): agent, data_dir, history_turns, language, mode, name, persona_paths, prompt_trace_max (+34 more)
 
-### Community 2 - "Orchestrator Core"
-Cohesion: 0.08
-Nodes (21): _debug_scene_updates(), get_prompt_trace(), mcu_info(), _module_flags(), Список последних prompt-trace записей.      full=false — только метаданные (tran, ESP32 heap / uptime diagnostics., # NOTE: runtime_state["speaking"] и event "tts_started" больше НЕ ставятся здесь, _result_or_raise() (+13 more)
+### Community 2 - "Community 2"
+Cohesion: 0.05
+Nodes (41): channels, esp32_mic_profile, esp_health, esp_mic_fail_threshold, esp_mic_retry_interval_sec, frame_ms, input_device, max_command_segment_ms (+33 more)
 
-### Community 3 - "WebRTC VAD Engine"
-Cohesion: 0.09
-Nodes (14): WebRTC VAD wrapper — stateless, CPU-only, no PyTorch required.  Example::      v, Drop-in replacement for Silero VAD in VoiceLoopController.      aggressiveness —, Return 1.0 if speech detected, 0.0 if not.          audio_bytes: raw 16-bit mono, Convenience wrapper returning bool instead of float., No-op — WebRTC VAD is stateless. Exists for API compatibility., WebRtcVadWrapper, _capture_device_for(), listen_status() (+6 more)
+### Community 3 - "Community 3"
+Cohesion: 0.05
+Nodes (41): base_url, command_endpointing_ms, language, model, provider, reply_absolute_deadline_sec, reply_window_expired_action, reply_window_sec (+33 more)
 
-### Community 4 - "Camera Capture"
+### Community 4 - "Community 4"
+Cohesion: 0.05
+Nodes (37): properties, default, description, items, type, default, description, type (+29 more)
+
+### Community 5 - "Community 5"
 Cohesion: 0.09
 Nodes (8): CameraReader, Stop and restart the camera capture thread., Persistent background camera capture with thread-safe frame buffer.      When pr, Fetch single JPEG from ESP32 GET /capture (port 80).          One-shot request —, One-shot Jetson camera frame for fallback mode., Thread-safe ring buffer of recent VLM scene descriptions., Apply video config changes at runtime. Returns True if restart is needed., SceneDescriptionBuffer
 
-### Community 5 - "Episodic Memory"
-Cohesion: 0.1
-Nodes (11): EpisodicMemory, _parse_ts(), Persistence-слой для эпизодической памяти + semantic markdown + gate-логи., Append одного эпизода в jsonl за день ts_end., Идёт по всем jsonl, отдаёт Episode по одному., Возвращает {id: last_ts} для быстрого cooldown lookup., Помечает эпизоды consolidated=True. Возвращает кол-во затронутых., Удаляет старые записи. Возвращает stats {dropped, kept, files_removed}. (+3 more)
+### Community 6 - "Community 6"
+Cohesion: 0.07
+Nodes (33): ctranslate2 (aarch64 CUDA build), Exhibition AI Agent (multimodal), GGUF Quantization (AWQ/INT4), JetPack SDK, Jetson AGX Orin 64GB, Jetson Containers Project (dusty-nv), Jetson Orin Nano, Jetson Orin NX 16GB (+25 more)
 
-### Community 6 - "Legacy Host UI Server"
+### Community 7 - "Community 7"
+Cohesion: 0.09
+Nodes (16): _debug_scene_updates(), _module_flags(), # NOTE: runtime_state["speaking"] и event "tts_started" больше НЕ ставятся здесь, _result_or_raise(), ui_audio(), ui_camera(), ui_camera_preset(), ui_pca_channel() (+8 more)
+
+### Community 8 - "Community 8"
 Cohesion: 0.11
 Nodes (14): BaseHTTPRequestHandler, dashboard_page(), HostUIHandler, page_shell(), vision_live_page(), _eager_load(), _extract_text(), _infer() (+6 more)
 
-### Community 7 - "Core Module Contracts"
+### Community 9 - "Community 9"
 Cohesion: 0.09
 Nodes (31): System/adam Module Map (CLAUDE.md), __ADAM_CONFIG__ (server-injected config object), EventBus (events.py), graphify-out/GRAPH_REPORT.md (auto-generated dep graph), inference.py — LLM/TTS/ASR/VLM gateway, tuning.py values must be read per-turn, not cached, No print()/logging — use EventBus only, Settings.load() — Config access contract (+23 more)
 
-### Community 8 - "Web UI JavaScript Core"
+### Community 10 - "Community 10"
+Cohesion: 0.09
+Nodes (21): data_dir(), _deep_merge(), load(), mode(), persona_paths(), _resolve_path(), Settings, collect_noise_profile() (+13 more)
+
+### Community 11 - "Community 11"
 Cohesion: 0.13
 Nodes (23): appendEventToSide(), bootstrap(), buildNav(), buildSide(), buildTopbar(), el(), MODES, NAV_STRUCTURE (+15 more)
 
-### Community 9 - "ESP32 MCU Client"
+### Community 12 - "Community 12"
 Cohesion: 0.11
 Nodes (6): _decode_json(), DeviceResult, MCUClient, Restart port-81 stream server — clears stale camera/audio/speaker connections., Return ESP32 heap/uptime diagnostics., Soft-reset ESP32. Returns immediately — device reboots after ~300ms.
 
-### Community 10 - "Wake Word Config Schema"
-Cohesion: 0.08
-Nodes (25): default, description, type, default, description, enum, type, debounce_hits (+17 more)
+### Community 13 - "Community 13"
+Cohesion: 0.12
+Nodes (10): Episode, EpisodicMemory, Persistence-слой для эпизодической памяти + semantic markdown + gate-логи., Append одного эпизода в jsonl за день ts_end., Идёт по всем jsonl, отдаёт Episode по одному., Помечает эпизоды consolidated=True. Возвращает кол-во затронутых., Удаляет старые записи. Возвращает stats {dropped, kept, files_removed}., Применяет transform(ep) -> ep ко всем записям. Возвращает кол-во изменённых. (+2 more)
 
-### Community 11 - "Audio & Media Config Schema"
+### Community 14 - "Community 14"
 Cohesion: 0.08
-Nodes (24): description, type, properties, audio, scene_buffer_maxlen, scene_context_count, scene_interval_sec, scene_stale_after_sec (+16 more)
+Nodes (24): default, description, type, default, description, type, default, description (+16 more)
 
-### Community 12 - "WhisperX ASR Service"
+### Community 15 - "Community 15"
+Cohesion: 0.08
+Nodes (24): description, properties, type, media, scene_buffer_maxlen, scene_context_count, scene_interval_sec, scene_stale_after_sec (+16 more)
+
+### Community 16 - "Community 16"
 Cohesion: 0.14
 Nodes (19): _dependency_errors(), _get_model(), health(), _load_model_with_fallback(), WhisperX ASR microservice — CUDA-optimized speech recognition for Jetson Orin., Transcribe a numpy array (float32, 16kHz) directly — used for warmup and interna, # NOTE: whisperx uses avg_logprob (NOT no_speech_prob which is faster-whisper on, Decode WAV bytes to float32 numpy array at 16kHz without requiring ffmpeg. (+11 more)
 
-### Community 13 - "Audio Runtime Config"
-Cohesion: 0.09
-Nodes (22): channels, esp32_mic_profile, esp_health, esp_mic_fail_threshold, esp_mic_retry_interval_sec, frame_ms, input_device, max_command_segment_ms (+14 more)
-
-### Community 14 - "Hot-Reload Tuning Engine"
+### Community 17 - "Community 17"
 Cohesion: 0.14
 Nodes (11): _deep_merge(), get_store(), Корневая модель runtime-настроек персоны., Singleton-обёртка над Tuning. Перечитывает файл при изменении mtime.      Исполь, Reload from disk if mtime changed. Returns new Tuning if listeners should fire,, Возвращает актуальный Tuning, перечитывая файл если он изменился., Применяет частичное обновление, валидирует, сохраняет на диск.          Patch —, Полная замена настроек (без deep merge). Для UI-формы Restore defaults / Import. (+3 more)
 
-### Community 15 - "Config Loader"
-Cohesion: 0.15
-Nodes (13): data_dir(), _deep_merge(), load(), mode(), persona_paths(), _resolve_path(), Settings, el() (+5 more)
-
-### Community 16 - "MCU Channels Schema"
+### Community 18 - "Community 18"
 Cohesion: 0.1
 Nodes (21): default, description, properties, type, default, description, type, default (+13 more)
 
-### Community 17 - "ASR Config Schema"
-Cohesion: 0.1
-Nodes (21): properties, default, description, type, command_endpointing_ms, reply_absolute_deadline_sec, reply_window_sec, wake_word_required (+13 more)
-
-### Community 18 - "TTS Config Schema"
-Cohesion: 0.1
-Nodes (21): default, description, items, type, default, description, type, default (+13 more)
-
-### Community 19 - "Prompt Builder"
-Cohesion: 0.16
-Nodes (13): _build_context_body(), is_leading_noise(), _is_other_noise(), _is_sensors_header(), _is_vision_header(), LeadingNoiseFilter, PromptBuilder, Strip leading system-info echo lines from a full reply.      Returns (cleaned_te (+5 more)
-
-### Community 20 - "OpenWakeWord Engine"
+### Community 19 - "Community 19"
 Cohesion: 0.12
 Nodes (8): create_engine(), OpenWakeWordEngine, PorcupineEngine, Local wake word detection — runs entirely on CPU, <5ms per 80ms frame., Build from config. engine="openwakeword" → OpenWakeWordEngine with built-in VAD., Uses adam.onnx directly with built-in Silero VAD.      Debounced: requires N con, Picovoice Porcupine detector — requires a .ppn file and API key., WakeWordEngine
 
-### Community 21 - "Jetson Power Config Schema"
+### Community 20 - "Community 20"
 Cohesion: 0.1
 Nodes (20): default, description, type, description, properties, type, enforce_in_exhibition, power (+12 more)
 
-### Community 22 - "LLM Config Schema"
+### Community 21 - "Community 21"
 Cohesion: 0.1
 Nodes (20): description, properties, type, default, description, type, default, description (+12 more)
 
-### Community 23 - "Persona Tuning Profiles"
+### Community 22 - "Community 22"
+Cohesion: 0.1
+Nodes (20): description, properties, type, default, description, type, asr, command_endpointing_ms (+12 more)
+
+### Community 23 - "Community 23"
+Cohesion: 0.16
+Nodes (13): _build_context_body(), is_leading_noise(), _is_other_noise(), _is_sensors_header(), _is_vision_header(), LeadingNoiseFilter, PromptBuilder, Strip leading system-info echo lines from a full reply.      Returns (cleaned_te (+5 more)
+
+### Community 24 - "Community 24"
 Cohesion: 0.18
 Nodes (16): ChineseTuning, ConsolidatorTuning, DiagnosticsTuning, EchoesTuning, EpisodicTuning, EpisodicWeights, LLMTuning, MemoryTuning (+8 more)
 
-### Community 24 - "Episode Data Model"
-Cohesion: 0.15
-Nodes (12): _clamp01(), Episode, from_dict(), _from_iso(), Highlight, Episodic memory primitives для Адама.  `Episode` — одна запись на диалоговую сес, Rule-based salience-формула из Memory_Schema.md.      Возвращает float в [0..1]., Триггер записи: salience >= threshold OR introduced_name OR pinned. (+4 more)
+### Community 25 - "Community 25"
+Cohesion: 0.14
+Nodes (11): _clamp01(), from_dict(), _from_iso(), Highlight, Episodic memory primitives для Адама.  `Episode` — одна запись на диалоговую сес, Rule-based salience-формула из Memory_Schema.md.      Возвращает float в [0..1]., Триггер записи: salience >= threshold OR introduced_name OR pinned., salience_score() (+3 more)
 
-### Community 25 - "Config Schema Root"
+### Community 26 - "Community 26"
 Cohesion: 0.12
-Nodes (16): description, type, description, $id, description, type, properties, asr (+8 more)
+Nodes (18): _commit_session_locked(), dialogue_turn(), _execute_action(), _extract_visitor_name(), _format_recent_episodic(), Returns full name (first + last/patronymic) or None.      Single-word names are, Простая эвристика для mood-метки gate-фильтра.      Возвращает один из: 'neutral, Закрывает текущую сессию, пишет эпизод если salience прошёл фильтр.      Должна (+10 more)
 
-### Community 26 - "Session Accumulator"
+### Community 27 - "Community 27"
+Cohesion: 0.12
+Nodes (17): default, description, type, default, description, enum, type, default (+9 more)
+
+### Community 28 - "Community 28"
+Cohesion: 0.12
+Nodes (17): default, description, items, type, default, description, type, available_speakers (+9 more)
+
+### Community 29 - "Community 29"
 Cohesion: 0.12
 Nodes (4): _question_signature(), Растёт по ходу сессии, финализируется в Episode., Нормализованная сигнатура для дедупликации вопросов в рамках сессии., SessionAccumulator
 
-### Community 27 - "Dialogue Turn Handler"
-Cohesion: 0.13
-Nodes (16): dialogue_turn(), _execute_action(), _extract_visitor_name(), _format_recent_episodic(), Returns full name (first + last/patronymic) or None.      Single-word names are, Простая эвристика для mood-метки gate-фильтра.      Возвращает один из: 'neutral, Stream LLM tokens → sentence queue → TTS concurrently.     Returns (reply, llm_m, LLM-generated wakeup monologue on first boot. No history, no memory write. (+8 more)
-
-### Community 28 - "ESP32 Audio Health Monitor"
-Cohesion: 0.14
-Nodes (10): _audio_level_monitor(), _commit_session_locked(), lifespan(), listen_start(), listen_stop(), Read Jetson ALSA mic and emit audio_level SSE events for the UI equalizer.     Y, Закрывает текущую сессию, пишет эпизод если salience прошёл фильтр.      Должна, Fire one silent request to absorb WhisperX cold-start before any real user turn. (+2 more)
-
-### Community 29 - "MCU API Config Schema"
-Cohesion: 0.12
-Nodes (16): default, description, type, default, description, type, description, properties (+8 more)
-
-### Community 30 - "VLM Config Schema"
-Cohesion: 0.12
-Nodes (16): default, description, type, default, description, type, max_new_tokens, prompt (+8 more)
-
-### Community 31 - "Chat Panel & API"
+### Community 30 - "Community 30"
 Cohesion: 0.23
 Nodes (10): subscribeEvents(), bubble(), CAMERA_LABELS, el(), fmtMs(), mount(), buildWakeWordExtras(), createCalibrateButton() (+2 more)
 
-### Community 32 - "Runtime API & Audio Devices"
+### Community 31 - "Community 31"
+Cohesion: 0.12
+Nodes (16): default, description, type, description, properties, type, idle_scene, mcu (+8 more)
+
+### Community 32 - "Community 32"
+Cohesion: 0.14
+Nodes (6): _decode(), Synthesize text and return raw WAV bytes without triggering playback., Play WAV bytes locally. Blocks until playback completes.          Uses Popen (no, Kill the active aplay process (barge-in). Safe to call from any thread., split_sentences(), TTSClient
+
+### Community 33 - "Community 33"
 Cohesion: 0.18
 Nodes (12): _aplay_devices(), _arecord_devices(), _decode_to_pcm(), _filter_alsa_devices(), _load_calibration_profile(), Runtime API extensions for the Adam Chip orchestrator.  Exposes config read/writ, Save per-source OWW threshold to wake_calibration_profiles.json., Load per-source OWW threshold from wake_calibration_profiles.json. (+4 more)
 
-### Community 33 - "Inference Helpers"
+### Community 34 - "Community 34"
 Cohesion: 0.15
-Nodes (5): Synthesize text and return raw WAV bytes without triggering playback., Play WAV bytes locally. Blocks until playback completes.          Uses Popen (no, Kill the active aplay process (barge-in). Safe to call from any thread., split_sentences(), TTSClient
+Nodes (14): gate_summary(), _audio_level_monitor(), _compact_mcu(), _exhibition_gate(), gate(), lifespan(), listen_start(), listen_stop() (+6 more)
 
-### Community 34 - "Python Dependencies"
-Cohesion: 0.19
-Nodes (13): Jetson-compatible PyTorch must install before Silero, FastAPI, httpx (async HTTP client), numpy, onnxruntime, OpenWakeWord, Pydantic v2, PyYAML (+5 more)
-
-### Community 35 - "Startup & Sound Cues"
+### Community 35 - "Community 35"
 Cohesion: 0.18
-Nodes (13): cue(), _orchestrated_startup(), _play_error_sound(), _play_success_sound(), Poll expected AI services until all healthy or 120 s deadline. Returns True if a, Sequential boot: wait for services → sound → warmup greeting → voice loop., Prime llama.cpp KV cache with the exact system prefix real voice turns use., _schedule_success_sound() (+5 more)
+Nodes (5): create_llm_client(), EspAudioHealthMonitor, Polls ESP32 /api/audio periodically and auto-switches mic profile when a channel, Recreate service clients after a Config.json patch.      Called from the /api/co, _rebuild_clients()
 
-### Community 36 - "Silero TTS Service"
-Cohesion: 0.27
-Nodes (10): _dependency_errors(), _ensure_loaded(), health(), _load_model(), _play_wav(), _playback_commands(), speak(), synthesize() (+2 more)
+### Community 36 - "Community 36"
+Cohesion: 0.22
+Nodes (3): EventLog, Convert ISO-8601 timestamp string to Unix milliseconds, or 0.0 on error., _ts_to_ms()
 
-### Community 37 - "Video Runtime Config"
-Cohesion: 0.15
-Nodes (13): video, camera_capture_interval_sec, camera_height, camera_quality, camera_width, esp_fail_threshold, esp_mjpeg_url, esp_retry_interval_sec (+5 more)
-
-### Community 38 - "ASR Runtime Config"
-Cohesion: 0.15
-Nodes (13): base_url, command_endpointing_ms, language, model, provider, reply_absolute_deadline_sec, reply_window_expired_action, reply_window_sec (+5 more)
-
-### Community 39 - "Model Management Panel"
+### Community 37 - "Community 37"
 Cohesion: 0.24
 Nodes (9): applyPatch(), el(), modelCard(), mount(), el(), mount(), saveConfigField(), ensureStack() (+1 more)
 
-### Community 40 - "Event Log"
-Cohesion: 0.24
-Nodes (3): EventLog, Convert ISO-8601 timestamp string to Unix milliseconds, or 0.0 on error., _ts_to_ms()
+### Community 38 - "Community 38"
+Cohesion: 0.19
+Nodes (13): Jetson-compatible PyTorch must install before Silero, FastAPI, httpx (async HTTP client), numpy, onnxruntime, OpenWakeWord, Pydantic v2, PyYAML (+5 more)
 
-### Community 41 - "Log Viewer Service"
-Cohesion: 0.23
-Nodes (9): events(), journal(), metrics(), adam-logviewer: read-only HTTP service for logs.  Runs independently from adam-o, Try fetching from orchestrator; return parsed JSON or None on any error., _run(), services(), tail_jsonl() (+1 more)
+### Community 39 - "Community 39"
+Cohesion: 0.27
+Nodes (10): _dependency_errors(), _ensure_loaded(), health(), _load_model(), _play_wav(), _playback_commands(), speak(), synthesize() (+2 more)
 
-### Community 42 - "Echo Entry Data"
+### Community 40 - "Community 40"
 Cohesion: 0.21
 Nodes (8): _clean_body(), EchoEntry, InjectedEcho, parse_echoes_file(), _parse_text(), Gate для пулов Echoes / Chinese.  Парсит файлы пула (`About/Echoes.md`, `About/C, То, что gate возвращает оркестратору для инжекта в prompt., Парсит .md-файл с блоками ```yaml --- frontmatter --- ``` + текст после.      Во
 
-### Community 43 - "Echo Gate (Reply Pool)"
+### Community 41 - "Community 41"
 Cohesion: 0.23
 Nodes (6): EchoGate, Singleton-инстанс, который дёргается из оркестратора каждый turn., Перечитать файл если изменился. Возвращает число загруженных entries., Главная точка вызова. None или InjectedEcho.          Side-effect: при инжекте —, Просто увеличить счётчик turn'ов без попытки инжекта.          Используется когд, Tag-based матч: считаем сколько тегов entry присутствуют в transcript.
 
-### Community 44 - "Power Runtime Config"
-Cohesion: 0.17
-Nodes (11): power, enforce_in_exhibition, require_jetson_clocks, required_mode_id, required_mode_name, safety, half_duplex_mute, motor_cooldown_ms (+3 more)
+### Community 43 - "Community 43"
+Cohesion: 0.2
+Nodes (5): create_asr_client(), HTTP client for a Whisper-compatible ASR microservice (POST /transcribe → {"tran, HTTP client for ASR_WhisperX.py microservice (whisperx + CUDA).      API contrac, WhisperASRClient, WhisperXASRClient
 
-### Community 45 - "TTS Runtime Config"
-Cohesion: 0.17
-Nodes (12): tts, available_speakers, base_url, filler_delay_ms, filler_enabled, filler_phrase, model, output_device (+4 more)
+### Community 44 - "Community 44"
+Cohesion: 0.23
+Nodes (9): events(), journal(), metrics(), adam-logviewer: read-only HTTP service for logs.  Runs independently from adam-o, Try fetching from orchestrator; return parsed JSON or None on any error., _run(), services(), tail_jsonl() (+1 more)
 
-### Community 46 - "Metrics Logger"
+### Community 45 - "Community 45"
+Cohesion: 0.2
+Nodes (12): cue(), _orchestrated_startup(), _play_error_sound(), _play_success_sound(), Poll expected AI services until all healthy or 120 s deadline. Returns True if a, Sequential boot: wait for services → sound → warmup greeting → voice loop., Prime llama.cpp KV cache with the exact system prefix real voice turns use., _schedule_success_sound() (+4 more)
+
+### Community 46 - "Community 46"
+Cohesion: 0.25
+Nodes (3): _extract_chat_text(), _is_chinese_dominant(), VLMClient
+
+### Community 47 - "Community 47"
 Cohesion: 0.27
 Nodes (5): MetricsLog, _p95(), Per-turn inference metrics log.  Append-only JSONL at ``<data_dir>/inference_met, Read last *n* newline-delimited lines from *path* without loading the whole file, _tail_lines()
 
-### Community 47 - "VLM Client & Text Extraction"
-Cohesion: 0.22
-Nodes (3): _extract_chat_text(), _is_chinese_dominant(), VLMClient
-
-### Community 48 - "MCU Channel Config"
-Cohesion: 0.18
-Nodes (11): max, min, value_max, value_min, mcu, allowed_scenes, base_url, channels (+3 more)
-
-### Community 49 - "Metrics Dashboard Panel"
+### Community 48 - "Community 48"
 Cohesion: 0.4
 Nodes (10): badge(), buildDetailContent(), el(), fmtMs(), injectionsBadges(), kv(), mount(), promptTurnRow() (+2 more)
 
-### Community 50 - "Settings Panel"
+### Community 49 - "Community 49"
 Cohesion: 0.33
 Nodes (9): buildDeviceSelect(), buildVoiceSelect(), el(), fieldInput(), mount(), renderFieldRow(), saveTuningField(), SCHEMA (+1 more)
 
-### Community 51 - "Action Layer"
+### Community 50 - "Community 50"
 Cohesion: 0.36
 Nodes (3): Action, ActionLayer, _mood()
 
-### Community 52 - "Service Control"
+### Community 52 - "Community 52"
 Cohesion: 0.29
 Nodes (8): all_services_status(), CommandStatus, docker_health(), Return {active, enabled, detail} for a systemd unit., Start or stop a systemd unit via sudo -n (requires NOPASSWD sudoers)., service_action(), service_status(), _systemctl()
 
-### Community 53 - "UI Page Router"
+### Community 53 - "Community 53"
+Cohesion: 0.2
+Nodes (9): description, type, description, $id, properties, agent, $schema, title (+1 more)
+
+### Community 54 - "Community 54"
 Cohesion: 0.33
 Nodes (9): agent_page(), dash_page(), debug_page(), _json_script_value(), _load(), legacy_agent(), legacy_dash(), legacy_debug() (+1 more)
 
-### Community 54 - "Media Health Checker"
-Cohesion: 0.31
-Nodes (6): _alsa_device_available(), _extract_v4l2_device(), MediaHealth, MediaStatus, _probe_http_url(), _run()
-
-### Community 55 - "Subsystem Config Panel"
+### Community 55 - "Community 55"
 Cohesion: 0.33
 Nodes (9): addrRow(), configKv(), configSection(), dot(), el(), MODULE_LABELS, MODULE_ORDER, moduleGrid() (+1 more)
 
-### Community 57 - "Wake Word Calibration"
-Cohesion: 0.28
-Nodes (8): collect_noise_profile(), compute_recommendation(), _percentile(), persist_noise_profile(), Wake-word calibration helpers.  Two entry points:    * :func:`collect_noise_prof, Append a calibration record to wake_word_noise_profile.json (JSONL).      Each c, Compute a noise profile and a recommended OWW threshold.      scores: every oww_, Subscribe to oww_score events for `duration_sec`, return profile + recommendatio
+### Community 56 - "Community 56"
+Cohesion: 0.31
+Nodes (6): _alsa_device_available(), _extract_v4l2_device(), MediaHealth, MediaStatus, _probe_http_url(), _run()
 
-### Community 58 - "LLM Runtime Config"
-Cohesion: 0.22
-Nodes (9): base_url, max_tokens, model, model_path, num_ctx, provider, temperature, timeout_sec (+1 more)
-
-### Community 59 - "Prompt History Panel"
+### Community 57 - "Community 57"
 Cohesion: 0.47
 Nodes (8): badge(), buildDetailContent(), el(), fmtTime(), injectionsBadges(), inlineList(), mount(), turnRow()
 
-### Community 61 - "Inference Service Factory"
-Cohesion: 0.32
-Nodes (7): create_asr_client(), create_llm_client(), _decode(), HTTP client for ASR_WhisperX.py microservice (whisperx + CUDA).      API contrac, WhisperXASRClient, Recreate service clients after a Config.json patch.      Called from the /api/co, _rebuild_clients()
-
-### Community 62 - "Agent Runtime Config"
+### Community 58 - "Community 58"
 Cohesion: 0.25
-Nodes (8): agent, data_dir, history_turns, language, mode, name, persona_paths, prompt_trace_max
+Nodes (8): default, description, type, half_duplex_mute, safety, description, properties, type
 
-### Community 63 - "UI State Store"
+### Community 59 - "Community 59"
+Cohesion: 0.25
+Nodes (8): threshold, wake_word, default, description, type, description, properties, type
+
+### Community 60 - "Community 60"
 Cohesion: 0.36
 Nodes (6): state, store, subs, el(), mount(), placeholder()
 
-### Community 64 - "Services Status Panel"
+### Community 61 - "Community 61"
 Cohesion: 0.46
 Nodes (7): buildServiceCard(), buildVlmCard(), dot(), el(), mount(), SERVICE_META, STATE_STYLE
 
-### Community 65 - "Voice Pipeline Panel"
+### Community 62 - "Community 62"
 Cohesion: 0.39
 Nodes (5): el(), mount(), encodeWav(), float32ToWav(), mixToMono()
 
-### Community 66 - "Jetson Power Gate"
-Cohesion: 0.38
-Nodes (3): PowerGate, PowerStatus, _run()
-
-### Community 68 - "Wake Word Runtime Config"
-Cohesion: 0.29
-Nodes (7): wake_word, debounce_hits, engine, model_path, threshold, vad_threshold, wake_silence_timeout_sec
-
-### Community 69 - "Web UI Styles"
+### Community 63 - "Community 63"
 Cohesion: 0.29
 Nodes (7): /ui/static/css/animations.css, /ui/static/css/base.css, /ui/static/css/components.css, /ui/static/css/layout.css, /ui/static/css/tokens.css, WebUI/index.html (Operator UI entry point), /ui/static/js/main.js (ES module bundle)
 
-### Community 75 - "Riva ASR (Legacy)"
+### Community 68 - "Community 68"
 Cohesion: 0.33
 Nodes (3): Health adapter for the external NVIDIA Riva streaming ASR service.      Streamin, RivaASRConfig, RivaASRService
 
-### Community 76 - "Scene Media Config"
-Cohesion: 0.33
-Nodes (6): media, scene_buffer_maxlen, scene_context_count, scene_interval_sec, scene_stale_after_sec, scene_worker_enabled
-
-### Community 77 - "VLM Runtime Config"
-Cohesion: 0.33
-Nodes (6): vlm, base_url, max_new_tokens, model, prompt, timeout_sec
-
-### Community 78 - "Sounds Runtime Config"
-Cohesion: 0.33
-Nodes (6): sounds, enabled, error_path, esp_boot_note, local_output_device, success_path
-
-### Community 79 - "Local Sound Playback"
+### Community 69 - "Community 69"
 Cohesion: 0.6
 Nodes (3): _local_playback_command(), play_local_sound(), SoundResult
 
-### Community 80 - "Exhibition Mode Gate"
+### Community 70 - "Community 70"
 Cohesion: 0.4
-Nodes (5): gate_summary(), _compact_mcu(), _exhibition_gate(), gate(), _status_payload()
+Nodes (5): default, description, enum, type, engine
 
-### Community 81 - "ESP Mic Profile Schema"
-Cohesion: 0.4
-Nodes (5): properties, default, description, type, esp32_mic_profile
-
-### Community 82 - "VAD Frame Duration Schema"
+### Community 71 - "Community 71"
 Cohesion: 0.4
 Nodes (5): default, description, enum, type, frame_ms
 
-### Community 83 - "Mic Source Schema"
+### Community 72 - "Community 72"
 Cohesion: 0.4
 Nodes (5): default, description, enum, type, mic_source
 
-### Community 84 - "WebRTC Aggressiveness Schema"
+### Community 73 - "Community 73"
 Cohesion: 0.4
 Nodes (5): webrtc_vad_aggressiveness, default, description, enum, type
 
-### Community 85 - "Video Primary Source Schema"
-Cohesion: 0.4
-Nodes (5): default, description, enum, type, primary
-
-### Community 86 - "ASR Model Schema"
-Cohesion: 0.4
-Nodes (5): default, description, enum, type, model
-
-### Community 87 - "Service Provider Schema"
+### Community 74 - "Community 74"
 Cohesion: 0.4
 Nodes (5): provider, default, description, enum, type
 
-### Community 88 - "Reply Timeout Action Schema"
+### Community 75 - "Community 75"
 Cohesion: 0.4
 Nodes (5): reply_window_expired_action, default, description, enum, type
 
-### Community 89 - "TTS Filler Prewarm"
+### Community 76 - "Community 76"
+Cohesion: 0.4
+Nodes (5): default, description, enum, type, primary
+
+### Community 77 - "Community 77"
+Cohesion: 0.5
+Nodes (4): default, description, type, motor_default_duration_ms
+
+### Community 78 - "Community 78"
+Cohesion: 0.5
+Nodes (4): default, description, type, debounce_hits
+
+### Community 79 - "Community 79"
+Cohesion: 0.5
+Nodes (4): default, description, type, motor_cooldown_ms
+
+### Community 80 - "Community 80"
+Cohesion: 0.5
+Nodes (4): default, description, type, motor_max_duration_ms
+
+### Community 81 - "Community 81"
+Cohesion: 0.5
+Nodes (4): vad_threshold, default, description, type
+
+### Community 82 - "Community 82"
+Cohesion: 0.5
+Nodes (4): wake_silence_timeout_sec, default, description, type
+
+### Community 83 - "Community 83"
 Cohesion: 0.5
 Nodes (4): _apply_wav_speed(), _prewarm_filler(), Rewrite WAV header to play `speed`x faster. Pitch shifts up proportionally     (, Pre-synthesize the configured filler phrase at the current playback speed     so
 
-### Community 90 - "ESP Mic Fail Threshold Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, esp_mic_fail_threshold
-
-### Community 91 - "ESP Mic Retry Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, esp_mic_retry_interval_sec
-
-### Community 92 - "Max Command Segment Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, max_command_segment_ms
-
-### Community 93 - "Audio Normalize Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, normalize_factor
-
-### Community 94 - "ESP Health Monitor Schema"
-Cohesion: 0.5
-Nodes (4): description, properties, type, esp_health
-
-### Community 95 - "Input Device Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, input_device
-
-### Community 96 - "Max Segment Duration Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, max_segment_ms
-
-### Community 97 - "Min Speech Duration Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, min_speech_ms
-
-### Community 98 - "Camera Capture Interval Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, camera_capture_interval_sec
-
-### Community 99 - "Camera Quality Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, camera_quality
-
-### Community 100 - "ESP Camera Fail Threshold Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, esp_fail_threshold
-
-### Community 101 - "ESP MJPEG Stream Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, esp_mjpeg_url
-
-### Community 102 - "Camera Preview Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, preview_enabled
-
-### Community 103 - "Camera Height Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, camera_height
-
-### Community 104 - "Camera Width Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, camera_width
-
-### Community 105 - "ESP Camera Retry Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, esp_retry_interval_sec
-
-### Community 106 - "GStreamer Pipeline Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, gstreamer_pipeline
-
-### Community 107 - "RTSP URL Schema"
-Cohesion: 0.5
-Nodes (4): remote_rtsp_url, default, description, type
-
-### Community 108 - "Video Device Schema"
-Cohesion: 0.5
-Nodes (4): video_device, default, description, type
-
-### Community 109 - "Video Config Object Schema"
-Cohesion: 0.5
-Nodes (4): video, description, properties, type
-
-### Community 110 - "TTS Filler Phrase Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, filler_phrase
-
-### Community 111 - "Output Device Schema"
-Cohesion: 0.5
-Nodes (4): default, description, type, output_device
-
-### Community 112 - "Sample Rate Schema"
-Cohesion: 0.5
-Nodes (4): sample_rate, default, description, type
-
-### Community 113 - "Logs Panel & API"
+### Community 84 - "Community 84"
 Cohesion: 0.67
 Nodes (3): api, el(), mount()
 
+### Community 85 - "Community 85"
+Cohesion: 0.5
+Nodes (4): description, properties, type, audio
+
+### Community 86 - "Community 86"
+Cohesion: 0.5
+Nodes (4): default, description, type, esp_mic_retry_interval_sec
+
+### Community 87 - "Community 87"
+Cohesion: 0.5
+Nodes (4): default, description, type, max_segment_ms
+
+### Community 88 - "Community 88"
+Cohesion: 0.5
+Nodes (4): default, description, type, normalize_factor
+
+### Community 89 - "Community 89"
+Cohesion: 0.5
+Nodes (4): default, description, type, esp32_mic_profile
+
+### Community 90 - "Community 90"
+Cohesion: 0.5
+Nodes (4): description, properties, type, esp_health
+
+### Community 91 - "Community 91"
+Cohesion: 0.5
+Nodes (4): default, description, type, esp_mic_fail_threshold
+
+### Community 92 - "Community 92"
+Cohesion: 0.5
+Nodes (4): default, description, type, input_device
+
+### Community 93 - "Community 93"
+Cohesion: 0.5
+Nodes (4): default, description, type, max_command_segment_ms
+
+### Community 94 - "Community 94"
+Cohesion: 0.5
+Nodes (4): default, description, type, min_speech_ms
+
+### Community 95 - "Community 95"
+Cohesion: 0.5
+Nodes (4): default, description, type, filler_phrase
+
+### Community 96 - "Community 96"
+Cohesion: 0.5
+Nodes (4): default, description, type, filler_enabled
+
+### Community 97 - "Community 97"
+Cohesion: 0.5
+Nodes (4): default, description, type, output_device
+
+### Community 98 - "Community 98"
+Cohesion: 0.5
+Nodes (4): services, description, properties, type
+
+### Community 99 - "Community 99"
+Cohesion: 0.5
+Nodes (4): speaker, default, description, type
+
+### Community 100 - "Community 100"
+Cohesion: 0.5
+Nodes (4): default, description, type, base_url
+
+### Community 101 - "Community 101"
+Cohesion: 0.5
+Nodes (4): wake_words, default, description, type
+
+### Community 102 - "Community 102"
+Cohesion: 0.5
+Nodes (4): default, description, type, camera_capture_interval_sec
+
+### Community 103 - "Community 103"
+Cohesion: 0.5
+Nodes (4): default, description, type, camera_quality
+
+### Community 104 - "Community 104"
+Cohesion: 0.5
+Nodes (4): default, description, type, esp_fail_threshold
+
+### Community 105 - "Community 105"
+Cohesion: 0.5
+Nodes (4): default, description, type, esp_mjpeg_url
+
+### Community 106 - "Community 106"
+Cohesion: 0.5
+Nodes (4): default, description, type, preview_enabled
+
+### Community 107 - "Community 107"
+Cohesion: 0.5
+Nodes (4): default, description, type, camera_height
+
+### Community 108 - "Community 108"
+Cohesion: 0.5
+Nodes (4): default, description, type, camera_width
+
+### Community 109 - "Community 109"
+Cohesion: 0.5
+Nodes (4): default, description, type, esp_retry_interval_sec
+
+### Community 110 - "Community 110"
+Cohesion: 0.5
+Nodes (4): default, description, type, gstreamer_pipeline
+
+### Community 111 - "Community 111"
+Cohesion: 0.5
+Nodes (4): remote_rtsp_url, default, description, type
+
+### Community 112 - "Community 112"
+Cohesion: 0.5
+Nodes (4): video_device, default, description, type
+
+### Community 113 - "Community 113"
+Cohesion: 0.5
+Nodes (4): video, description, properties, type
+
+### Community 114 - "Community 114"
+Cohesion: 0.67
+Nodes (3): get_prompt_trace(), Список последних prompt-trace записей.      full=false — только метаданные (tran, _summarize_trace()
+
 ## Knowledge Gaps
-- **558 isolated node(s):** `name`, `language`, `mode`, `data_dir`, `persona_paths` (+553 more)
+- **577 isolated node(s):** `name`, `language`, `mode`, `data_dir`, `persona_paths` (+572 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **18 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **17 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `load()` connect `Config Loader` to `Model Management Panel`?**
-  _High betweenness centrality (0.091) - this node is a cross-community bridge._
-- **Why does `Settings` connect `Config Loader` to `Runtime API & Audio Devices`, `Scene Analysis Worker`, `WebRTC VAD Engine`, `Session Watcher`, `ESP32 Audio Health Init`?**
-  _High betweenness centrality (0.077) - this node is a cross-community bridge._
-- **Why does `mount()` connect `Model Management Panel` to `Config Loader`?**
-  _High betweenness centrality (0.054) - this node is a cross-community bridge._
+- **Why does `SessionAccumulator` connect `Community 29` to `Community 24`, `Community 25`?**
+  _High betweenness centrality (0.001) - this node is a cross-community bridge._
+- **Why does `_run_dialogue_turn_locked()` connect `Community 26` to `Community 51`, `Community 29`, `Community 23`?**
+  _High betweenness centrality (0.001) - this node is a cross-community bridge._
+- **Why does `_rebuild_clients()` connect `Community 35` to `Community 0`, `Community 32`, `Community 33`, `Community 43`, `Community 12`, `Community 46`, `Community 50`, `Community 23`?**
+  _High betweenness centrality (0.001) - this node is a cross-community bridge._
 - **Are the 23 inferred relationships involving `VoiceLoopController` (e.g. with `ActionLayer` and `RuntimeDeps`) actually correct?**
   _`VoiceLoopController` has 23 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 23 inferred relationships involving `EspAudioHealthMonitor` (e.g. with `ActionLayer` and `RuntimeDeps`) actually correct?**

@@ -65,6 +65,8 @@
 
 Граф доступен после `/graphify System/ --mode deep` (строит `graphify-out/graph.json`).
 
+**MCP режим:** если MCP сервер активен (`graphify` в `~/.claude/settings.json`), граф доступен как инструмент в каждой сессии без явного вызова скилла — агент сам вызывает `query_graph`, `shortest_path`, `god_nodes` и др.
+
 | Скилл | Пример для Adam-Chip | Когда использовать |
 | ----- | -------------------- | ------------------ |
 | `/graphify query "..."` | `"что импортирует inference.py"` | Перед правкой shared infrastructure |
