@@ -30,7 +30,11 @@ function buildTopbar() {
 
   const onlineDot = statusDot("warn", "online");
   onlineDot.id = "topbar-online-dot";
-  const services = el("div", { class: "row", id: "topbar-services" });
+  const services = el("div", { id: "topbar-services", style: "display:flex; align-items:center; gap:0" }, [
+    el("div", { id: "topbar-svc-left",  style: "display:flex; align-items:center; gap:12px" }),
+    el("span", { class: "topbar-svc-sep" }),
+    el("div", { id: "topbar-svc-right", style: "display:flex; align-items:center; gap:12px" }),
+  ]);
 
   const modeSelect = el("select", {
     class: "select",
@@ -199,7 +203,7 @@ function overallKind(services, mcu) {
 }
 
 function paintTopbarStatus(status) {
-  const root = document.getElementById("topbar-services");
+  const root = document.getElementById("topbar-svc-left");
   if (!root) return;
   root.innerHTML = "";
   const services = status?.services || {};
@@ -214,14 +218,49 @@ function paintTopbarStatus(status) {
     const detail = h?.detail || h?.error || (h?.ok ? "ok" : "—");
     root.appendChild(statusDot(kindFromHealth(h), label, `${label}: ${detail}`));
   });
-  const mcu = status?.mcu;
-  root.appendChild(statusDot(kindFromHealth(mcu), "ESP", `ESP32: ${mcu?.error || (mcu?.ok ? "ok" : "—")}`));
 
   const onlineWrap = document.getElementById("topbar-online-dot");
   if (onlineWrap) {
+    const mcu = status?.mcu;
     const dot = onlineWrap.querySelector(".dot");
     if (dot) dot.className = `dot ${overallKind(services, mcu)}`;
   }
+}
+
+function paintEspModules(uiData) {
+  const svc = document.getElementById("topbar-svc-right");
+  if (!svc) return;
+  svc.innerHTML = "";
+  if (!uiData) return;
+
+  const mod = uiData.modules || {};
+  const vl  = uiData.voice_loop || {};
+
+  function modKind(ok) {
+    if (ok === undefined || ok === null) return "";
+    return ok ? "ok" : "bad";
+  }
+
+  function micKind() {
+    if (mod.mic === undefined) return "";
+    if (!mod.mic) return "bad";
+    return vl.esp_mic_fallback ? "warn" : "ok";
+  }
+
+  function micTitle() {
+    if (!mod.mic) return "E-Mic: аппаратная ошибка";
+    if (vl.esp_mic_fallback) return "E-Mic: ESP32 недоступен, используется pulse";
+    return "E-Mic: INMP441 активен";
+  }
+
+  const dots = [
+    statusDot(modKind(mod.cam),     "E-Cam",   `E-Cam: ${mod.cam ? "ok" : "error"}`),
+    statusDot(micKind(),            "E-Mic",   micTitle()),
+    statusDot(modKind(mod.pca9685), "Motility",`Motility: ${mod.pca9685 ? "ok" : "error"}`),
+    statusDot(modKind(mod.temt600), "Light",   `Light: ${mod.temt600 ? "ok" : "no signal"}`),
+    statusDot(modKind(mod.pir),     "Motion",  `Motion: ${mod.pir ? "ok" : "no signal"}`),
+  ];
+  dots.forEach((d) => svc.appendChild(d));
 }
 
 function paintMode(status) {
@@ -257,6 +296,8 @@ const SIDE_EVENTS = new Set([
   "esp32_health_poll_failed",
   "esp32_audio_health",
   "esp32_audio_health_auto_switch",
+  "esp32_mic_fallback_start",
+  "esp32_mic_restored",
   // ── Pipeline nodes ───────────────────────
   "wake_word_detected",     // 1. wake word
   "asr_final",              // 2. ASR
@@ -312,6 +353,18 @@ async function refreshStatus() {
   }
 }
 
+let _espModulesData = null;
+
+async function refreshEspModules() {
+  try {
+    const data = await api.get("/api/ui/status");
+    _espModulesData = data;
+    paintEspModules(data);
+  } catch (_) {
+    paintEspModules(null);
+  }
+}
+
 function bootstrap() {
   try {
     const boot = document.getElementById("boot");
@@ -333,6 +386,9 @@ function bootstrap() {
 
     refreshStatus();
     setInterval(refreshStatus, 4000);
+
+    refreshEspModules();
+    setInterval(refreshEspModules, 8000);
 
     subscribeEvents(
       (event) => {

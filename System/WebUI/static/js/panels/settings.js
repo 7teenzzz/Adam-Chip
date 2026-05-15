@@ -1,4 +1,5 @@
 import { api } from "../api.js";
+import { state } from "../state.js";
 import { toast } from "../widgets/toast.js";
 import { createWakeMeter, createCalibrateButton } from "../widgets/wakeMeter.js";
 
@@ -204,12 +205,25 @@ const SCHEMA = [
     ],
   },
 
+  // ── Camera ────────────────────────────────────────────────────────────────────
+  {
+    source: "config", section: "media.video", title: "Камера",
+    fields: [
+      { key: "primary", label: "Источник камеры", type: "select",
+        choices: ["esp_mjpeg", "jetson_gstreamer"],
+        hint: "esp_mjpeg = ESP32 CAM · авто-переключение на Jetson при недоступности" },
+    ],
+  },
+
   // ── Audio ─────────────────────────────────────────────────────────────────────
   {
     source: "config", section: "media.audio", title: "Микрофон и VAD",
     fields: [
-      { key: "input_device", label: "Микрофон (ALSA)", type: "audiodevice",
-        hint: "pulse = PulseAudio · hw:1,0 = I2S ADMAIF1" },
+      { key: "mic_source", label: "Источник микрофона", type: "select",
+        choices: ["esp32", "local"],
+        hint: "esp32 = INMP441 dual mic · авто-переключение на pulse при недоступности" },
+      { key: "input_device", label: "Микрофон (ALSA, резерв)", type: "audioinput",
+        hint: "pulse = PulseAudio · hw:X,Y = аппаратное устройство · используется при недоступности ESP32" },
       { key: "sample_rate", label: "Частота дискретизации (Гц)", type: "select",
         choices: ["8000", "16000", "22050", "44100"],
         hint: "рекомендуется 16000",
@@ -414,7 +428,7 @@ function buildVoiceSelect(voices, currentValue, onChange) {
 }
 
 function fieldInput(field, value, onChange, ctx) {
-  const { audioDevices = [], ttsVoices = [] } = ctx || {};
+  const { audioDevices = [], inputDevices = [], ttsVoices = [] } = ctx || {};
   const type = field.type;
 
   if (type === "csv_array") {
@@ -428,6 +442,7 @@ function fieldInput(field, value, onChange, ctx) {
   }
 
   if (type === "audiodevice") return buildDeviceSelect(audioDevices, value ?? "", onChange);
+  if (type === "audioinput")  return buildDeviceSelect(inputDevices, value ?? "", onChange);
   if (type === "voices")      return buildVoiceSelect(ttsVoices, value ?? "", onChange);
 
   if (type === "bool") {
@@ -610,6 +625,7 @@ function renderFieldRow(field, value, buildInput) {
 
 export function mount(target) {
   let audioDevices = [];
+  let inputDevices = [];
   let ttsVoices    = [];
 
   const container  = el("div", { class: "col" });
@@ -628,9 +644,35 @@ export function mount(target) {
     },
   }, "Список аудиоустройств");
 
+  const deviceStatusBar = el("div", {
+    style: "display:flex; gap:16px; flex-wrap:wrap; padding:2px 0; font-size:11px; font-family:var(--font-mono); min-height:16px",
+  });
+
+  function paintDeviceStatus() {
+    const s = state.get("status");
+    deviceStatusBar.innerHTML = "";
+    const camPrimary = s?.media?.video?.primary;
+    if (camPrimary === "esp_mjpeg") {
+      const isFallback = s?.camera?.active_source === "jetson_fallback";
+      deviceStatusBar.appendChild(el("span", {
+        style: `color:${isFallback ? "var(--warn)" : "var(--accent)"}`,
+      }, isFallback ? "ESP32 CAM ↓ fallback: Jetson" : "ESP32 CAM ✓"));
+    }
+    const micCfg = s?.voice_loop?.mic_source;
+    if (micCfg === "esp32") {
+      const isFallback = s?.voice_loop?.esp_mic_fallback;
+      deviceStatusBar.appendChild(el("span", {
+        style: `color:${isFallback ? "var(--warn)" : "var(--accent)"}`,
+      }, isFallback ? "INMP441 ↓ fallback: pulse" : "INMP441 ✓"));
+    }
+  }
+  state.subscribe("status", paintDeviceStatus);
+  paintDeviceStatus();
+
   target.appendChild(el("section", { class: "col" }, [
-    el("div", { class: "row" }, [
+    el("div", { class: "row", style: "flex-wrap:wrap; gap:8px" }, [
       el("div", { class: "caps" }, "Настройки · изменения сохраняются сразу"),
+      deviceStatusBar,
       el("span", { class: "spacer" }),
       audioDevicesBtn,
       refreshBtn,
@@ -642,14 +684,16 @@ export function mount(target) {
     container.innerHTML = "";
     container.appendChild(el("div", { class: "muted" }, [el("span", { class: "spinner" }), " загрузка…"]));
 
-    const [devicesRes, speakersRes, configRes, tuningRes] = await Promise.allSettled([
+    const [devicesRes, inputDevicesRes, speakersRes, configRes, tuningRes] = await Promise.allSettled([
       api.get("/api/audio/devices"),
+      api.get("/api/audio/input_devices"),
       api.get("/api/models/tts"),
       api.get("/api/config"),
       api.get("/api/tuning"),
     ]);
 
-    if (devicesRes.status  === "fulfilled") audioDevices = devicesRes.value?.devices || [];
+    if (devicesRes.status      === "fulfilled") audioDevices = devicesRes.value?.devices || [];
+    if (inputDevicesRes.status === "fulfilled") inputDevices = inputDevicesRes.value?.devices || [];
     if (speakersRes.status === "fulfilled") {
       ttsVoices = (speakersRes.value?.available || []).map((v) => (typeof v === "string" ? v : v.name));
     }
@@ -662,7 +706,7 @@ export function mount(target) {
 
     const config  = configRes.value;
     const tuning  = tuningRes.status === "fulfilled" ? tuningRes.value : {};
-    const ctx     = { audioDevices, ttsVoices };
+    const ctx     = { audioDevices, inputDevices, ttsVoices };
     container.innerHTML = "";
 
     const cardGrid = el("div", { class: "card-grid" });

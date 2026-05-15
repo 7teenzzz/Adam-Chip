@@ -43,7 +43,7 @@ inline constexpr uint8_t kWifiGateway[4] = {192, 168, kWifiSubnetOctet3, kWifiGa
 inline constexpr uint8_t kWifiSubnet[4] = {kWifiSubnetMask[0], kWifiSubnetMask[1], kWifiSubnetMask[2], kWifiSubnetMask[3]};
 
 inline constexpr bool kEthernetUseStaticIp = true;
-inline constexpr uint8_t kEthernetStaticIp[4] = {192, 168, 0, 172};
+inline constexpr uint8_t kEthernetStaticIp[4] = {192, 168, 0, 171};
 inline constexpr uint8_t kEthernetGateway[4] = {192, 168, 0, 1};
 inline constexpr uint8_t kEthernetSubnet[4] = {255, 255, 255, 0};
 inline constexpr uint8_t kEthernetDns1[4] = {192, 168, 0, 1};
@@ -96,7 +96,7 @@ inline constexpr uint8_t kAudioI2sStdFormat = 2;   // 1 = Philips, 2 = MSB
 inline constexpr uint8_t kAudioCaptureShift = 0;
 inline constexpr size_t kAudioRingBufferBytes = 262144;  // 4s stereo @ 16kHz 16-bit
 inline constexpr size_t kAudioReadChunkBytes = 1024;
-inline constexpr size_t kSpeakerRingBufferBytes = 65536;
+inline constexpr size_t kSpeakerRingBufferBytes = 32768;
 inline constexpr size_t kSpeakerReadChunkBytes = 1024;
 inline constexpr size_t kSpeakerTxChunkSamples = 256;
 inline constexpr size_t kSpeakerHttpChunkBytes = 1024;

@@ -4,6 +4,7 @@ PLAN.md
 .mcp.json
 
 # Temp staff
+.tmp/
 Subsystem/AdamsServer/artifacts/
 Subsystem/AdamsServer/config/PrivateConfig.h
 Subsystem/Models/

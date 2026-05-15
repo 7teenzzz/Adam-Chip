@@ -306,6 +306,14 @@ class VoiceLoopController:
         self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
         self._wake_detected_at: float = 0.0
         self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
+        self.esp_mic_fail_threshold: int = int(audio_config.get("esp_mic_fail_threshold", 3))
+        self.esp_mic_retry_interval_sec: float = float(audio_config.get("esp_mic_retry_interval_sec", 30.0))
+        self._esp_mic_fallback: bool = False
+        self._esp_mic_fail_count: int = 0
+        self._esp_mic_last_retry: float = 0.0
+        self._raw_is_stereo: bool = False
+        self._raw_level_l: float = 0.0
+        self._raw_level_r: float = 0.0
 
     @property
     def device_in_use(self) -> bool:
@@ -330,6 +338,8 @@ class VoiceLoopController:
             "wake_words": self.wake_words,
             "last_wake_skip": self.last_wake_skip,
             "voice_state": self._voice_state,
+            "esp_mic_fallback": self._esp_mic_fallback,
+            "mic_active_source": "local_fallback" if (self.mic_source == "esp32" and self._esp_mic_fallback) else self.mic_source,
         }
 
     def _set_voice_state(self, state: str, reason: str = "") -> None:
@@ -429,62 +439,96 @@ class VoiceLoopController:
             await self._run_local(frame_bytes)
 
     async def _run_local(self, frame_bytes: int) -> None:
-        try:
-            self._process = self._start_arecord()
-            stdout = self._process.stdout
-            if stdout is None:
-                raise RuntimeError("arecord stdout unavailable")
-            await self._vad_loop(stdout.read, frame_bytes)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            self.running = False
-            self.vad_state = "error"
-            self.last_asr_error = str(exc)
-            runtime_state["last_error"] = f"voice_loop:{exc}"
-            event_log.append("voice_loop_error", {"error": str(exc)})
-            event_log.append("voice_loop_stopped", self.status())
-        finally:
-            self._stop_process()
-            self.running = False
+        _delays = [1.0, 2.0, 4.0]
+        for attempt, delay in enumerate([0.0] + _delays):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                self._process = self._start_arecord()
+                stdout = self._process.stdout
+                if stdout is None:
+                    raise RuntimeError("arecord stdout unavailable")
+                await self._vad_loop(stdout.read, frame_bytes)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.vad_state = "error"
+                self.last_asr_error = str(exc)
+                runtime_state["last_error"] = f"voice_loop:{exc}"
+                event_log.append("voice_loop_error", {
+                    "error": str(exc),
+                    "attempt": attempt + 1,
+                    "retrying": attempt < len(_delays),
+                })
+            finally:
+                self._stop_process()
+        self.running = False
+        event_log.append("voice_loop_stopped", self.status())
 
     async def _run_esp32(self, frame_bytes: int) -> None:
         if self._mcu is None:
             raise RuntimeError("mic_source=esp32 requires mcu client — not configured")
         url = self._mcu.mic_stream_url()
+        _session_fail_count = 0
         while self.running:
             profile = self.esp32_mic_profile
             is_stereo = profile.endswith("stereo")
             await self._mcu.request("POST", "/api/audio", {"profile": profile})
             try:
                 resp = await asyncio.to_thread(urllib.request.urlopen, url, timeout=10)
-                await asyncio.to_thread(resp.read, 44)  # skip WAV header
-                read_fn = self._stereo_to_mono_reader(resp.read) if is_stereo else resp.read
+                header = await asyncio.to_thread(resp.read, 44)
+                if len(header) < 44:
+                    raise RuntimeError(f"ESP32 WAV header truncated ({len(header)}/44 bytes)")
+                if is_stereo:
+                    self._raw_is_stereo = True
+                    read_fn = self._make_stereo_reader(resp.read)
+                else:
+                    self._raw_is_stereo = False
+                    read_fn = resp.read
+                _session_fail_count = 0
+                self._esp_mic_fail_count = 0
                 await self._vad_loop(read_fn, frame_bytes)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._raw_is_stereo = False
                 self.vad_state = "error"
                 self.last_asr_error = str(exc)
                 event_log.append("voice_loop_error", {"stage": "esp32_mic", "error": str(exc)})
+                _session_fail_count += 1
+                self._esp_mic_fail_count += 1
+                if _session_fail_count >= self.esp_mic_fail_threshold:
+                    self._esp_mic_fallback = True
+                    self._esp_mic_last_retry = time.perf_counter()
+                    event_log.append("esp32_mic_fallback_start", {
+                        "fail_count": _session_fail_count, "error": str(exc),
+                    })
+                    break
                 if self.running:
                     await asyncio.sleep(2.0)
+        if self._esp_mic_fallback and self.running:
+            fb_frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
+            await self._run_local(fb_frame_bytes)
         self.running = False
         self.vad_state = "idle"
 
-    @staticmethod
-    def _stereo_to_mono_reader(read_fn: Callable[[int], bytes]) -> Callable[[int], bytes]:
+    def _make_stereo_reader(self, read_fn: Callable[[int], bytes]) -> Callable[[int], bytes]:
         """Wraps a stereo PCM read_fn to return downmixed mono (L+R)/2.
 
+        Also tracks per-channel RMS in self._raw_level_l / _raw_level_r for UI diagnostics.
         read_fn is expected to produce interleaved 16-bit stereo (2× the mono byte count).
         Partial reads return empty bytes to trigger reconnect in _run_esp32.
         """
+        normalize = self.normalize_factor
         def _read(n: int) -> bytes:
             raw = read_fn(n * 2)
-            if not raw:
+            if not raw or len(raw) < n * 2:
                 return b""
-            if len(raw) < n * 2:
-                return b""
+            rms_l = audioop.rms(audioop.tomono(raw, 2, 1.0, 0.0), 2)
+            rms_r = audioop.rms(audioop.tomono(raw, 2, 0.0, 1.0), 2)
+            self._raw_level_l = round(min(1.0, (rms_l / normalize) ** 0.5), 3)
+            self._raw_level_r = round(min(1.0, (rms_r / normalize) ** 0.5), 3)
             return audioop.tomono(raw, 2, 0.5, 0.5)
         return _read
 
@@ -495,11 +539,18 @@ class VoiceLoopController:
         silence_ms = 0
         level_tick = 0
         _reader = [read_fn]  # mutable ref — updated when arecord restarts during transcription
+        _empty_streak = 0
+        _was_endpointing = False
         try:
             while self.running:
                 chunk = await asyncio.to_thread(_reader[0], frame_bytes)
                 if not chunk:
-                    raise RuntimeError("audio source ended unexpectedly")
+                    _empty_streak += 1
+                    if _empty_streak >= 3:
+                        raise RuntimeError("audio source ended: 3 consecutive empty reads")
+                    await asyncio.sleep(0.005)
+                    continue
+                _empty_streak = 0
 
                 _rms = audioop.rms(chunk, 2)
                 voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
@@ -507,7 +558,12 @@ class VoiceLoopController:
                 if level_tick >= 5:
                     level_tick = 0
                     norm = round(min(1.0, (_rms / self.normalize_factor) ** 0.5), 3)
-                    event_log.append("audio_level", {"level": norm, "state": self._voice_state})
+                    payload: dict[str, Any] = {"level": norm, "state": self._voice_state}
+                    if self._raw_is_stereo:
+                        payload["channels"] = 2
+                        payload["level_l"] = self._raw_level_l
+                        payload["level_r"] = self._raw_level_r
+                    event_log.append("audio_level", payload)
 
                 # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
                 if self._voice_state == "standby":
@@ -534,7 +590,7 @@ class VoiceLoopController:
                                     "threshold": getattr(self._wake_engine, "_threshold", None),
                                 })
                             if triggered:
-                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None})
+                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None, "silence_timeout_sec": self._wake_silence_timeout_sec})
                                 self._set_voice_state("listening", "wake_word")
                                 self._webrtc_vad.reset_states()
                                 self._wake_detected_at = time.perf_counter()
@@ -579,24 +635,49 @@ class VoiceLoopController:
                         self._ww_buf.clear()
                         continue
 
-                # ── LISTENING + REPLY: unified accumulation + endpointing ────────
-                # Every frame is appended unconditionally; WebRTC VAD only drives
-                # speech_ms / silence_ms counters and vad_state display. This keeps
-                # leading syllables intact and treats reply identically to listening,
-                # so the visitor can speak naturally after Adam finishes without an
-                # RMS gate filtering quieter voices.
-                if voiced:
-                    # speech_started fires on the first voiced frame after state
-                    # entry or after a silent endpointing recovery (speech_ms == 0).
-                    # We can't use `not speech_frames` because ambient frames are
-                    # always appended.
-                    if speech_ms == 0:
+                # ── LISTENING + REPLY: accumulation + endpointing ────────────────
+                # LISTENING: ALL frames are accumulated unconditionally — voiced
+                # controls only speech_ms/silence_ms counters and vad_state display.
+                # This ensures no leading syllables are clipped if they start below
+                # the RMS threshold.
+                # WebRTC VAD drives speech_ms/silence_ms counters in LISTENING and REPLY.
+                # In REPLY, also apply an RMS noise gate to prevent low-level room noise
+                # from inflating speech_ms when WebRTC VAD fires on ambient sound.
+                if self._voice_state == "reply" and self._reply_noise_gate > 0:
+                    effective_voiced = voiced and _rms >= self._reply_noise_gate
+                else:
+                    effective_voiced = voiced
+
+                if self._voice_state == "listening":
+                    # Always accumulate in listening — VAD only drives counters.
+                    if effective_voiced:
+                        if not speech_frames:
+                            event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
+                        speech_ms += self.frame_ms
+                        silence_ms = 0
+                        self.vad_state = "speech"
+                        _was_endpointing = False
+                    elif speech_frames:
+                        silence_ms += self.frame_ms
+                        if not _was_endpointing:
+                            _was_endpointing = True
+                            event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms})
+                        self.vad_state = "endpointing"
+                    else:
+                        self.vad_state = "silence"
+                    speech_frames.append(chunk)
+                elif effective_voiced:
+                    if not speech_frames:
                         event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
                     speech_ms += self.frame_ms
                     silence_ms = 0
                     self.vad_state = "speech"
+                    _was_endpointing = False
                 elif speech_frames:
                     silence_ms += self.frame_ms
+                    if not _was_endpointing:
+                        _was_endpointing = True
+                        event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms})
                     self.vad_state = "endpointing"
                 else:
                     self.vad_state = "silence"
@@ -611,22 +692,27 @@ class VoiceLoopController:
                     speech_frames.clear()
                     speech_ms = 0
                     silence_ms = 0
-                    if enough_speech:
-                        # Stop mic — processing + TTS runs with mic off
+                    _was_endpointing = False
+                    if enough:
+                        # In local ALSA mode self._process is set; in ESP32 mode it is None.
+                        _using_process = self._process is not None
+                        if _using_process:
+                            self._stop_process()
                         self.muted_by_tts = True
-                        self._stop_process()
                         event_log.append("mic_muted", {"reason": "asr_transcribing"})
                         self.vad_state = "transcribing"
 
                         spoke = await self._transcribe_and_dispatch(pcm)
 
-                        # TTS done → restart mic; update _reader so next reads go to the new process
-                        self._process = self._start_arecord()
+                        # Local mode: restart arecord and update _reader.
+                        # ESP32 mode: stream was never stopped, reader stays valid.
+                        if _using_process:
+                            self._process = self._start_arecord()
+                            stdout = self._process.stdout
+                            if stdout is None:
+                                raise RuntimeError("arecord restart failed")
+                            _reader[0] = stdout.read
                         event_log.append("mic_unmuted", {"reason": "transcription_complete"})
-                        stdout = self._process.stdout
-                        if stdout is None:
-                            raise RuntimeError("arecord restart failed")
-                        _reader[0] = stdout.read
                         self.muted_by_tts = False
                         speech_frames.clear()
                         speech_ms = 0
@@ -975,9 +1061,23 @@ class EspAudioHealthMonitor:
             await asyncio.sleep(self.poll_interval_s)
 
     async def _check(self) -> None:
+        if voice_loop._esp_mic_fallback:
+            elapsed = time.perf_counter() - voice_loop._esp_mic_last_retry
+            if elapsed < voice_loop.esp_mic_retry_interval_sec:
+                return
+
         result = await mcu.request("GET", "/api/audio")
         if not result.ok:
             event_log.append("esp32_health_poll_failed", {"status": result.status, "error": result.error})
+            return
+
+        if voice_loop._esp_mic_fallback:
+            voice_loop._esp_mic_fallback = False
+            voice_loop._esp_mic_fail_count = 0
+            voice_loop._esp_mic_last_retry = 0.0
+            event_log.append("esp32_mic_restored", {})
+            if voice_loop.running:
+                asyncio.ensure_future(voice_loop.restart())
             return
 
         cap = result.data.get("capture", {})
@@ -2642,7 +2742,11 @@ def _rebuild_clients(section_path: str) -> list[str]:
         restarted.append("mcu")
     if section_path.startswith("media.audio") or section_path == "media":
         audio_cfg = settings.section("media").get("audio", {})
-        voice_loop.mic_source = str(audio_cfg.get("mic_source", "local"))
+        new_mic_source = str(audio_cfg.get("mic_source", "local"))
+        if new_mic_source != voice_loop.mic_source:
+            voice_loop._esp_mic_fallback = False
+            voice_loop._esp_mic_fail_count = 0
+        voice_loop.mic_source = new_mic_source
         voice_loop.esp32_mic_profile = str(audio_cfg.get("esp32_mic_profile", "inmp441_philips32_left"))
         voice_loop.vad_threshold = int(audio_cfg.get("vad_threshold", 650))
         if voice_loop.running:
