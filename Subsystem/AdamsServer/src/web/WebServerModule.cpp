@@ -382,6 +382,13 @@ void buildStatusJson(String &json) {
   portENTER_CRITICAL(&gRuntimeStateMux);
   const uint32_t videoClients = gRuntimeState.videoClients;
   const uint32_t audioClients = gRuntimeState.audioClients;
+  // T17 fix #11 — audio diagnostic counters (snapshot under the same lock).
+  const uint32_t audioSessionsTotal          = gRuntimeState.audioSessionsTotal;
+  const uint32_t audioSessionsActive         = gRuntimeState.audioSessionsActive;
+  const uint32_t audioSessionsTimedOut       = gRuntimeState.audioSessionsTimedOut;
+  const uint32_t audioSessionsKeepaliveDeath = gRuntimeState.audioSessionsKeepaliveDeath;
+  const uint32_t audioChunkAllocFailures     = gRuntimeState.audioChunkAllocFailures;
+  const uint32_t audioHeaderSendFailures     = gRuntimeState.audioHeaderSendFailures;
   const uint32_t websocketClients = gRuntimeState.websocketClients;
   const uint32_t frameTimeMs = gRuntimeState.frameTimeMs;
   const uint32_t frameRateTimes10 = gRuntimeState.frameRateTimes10;
@@ -490,6 +497,24 @@ void buildStatusJson(String &json) {
   json += videoClients;
   json += ",\"audio_clients\":";
   json += audioClients;
+  // T17 fix #11 — operator-visible diagnostics for the /audio:81 endpoint.
+  // heap_free_min lets us see the lowest watermark since boot (proxy for
+  // "did we leak heap during the test"). The session counters bucket exit
+  // reasons so we can tell zombie-cleanup mode at a glance.
+  json += ",\"heap_free_min\":";
+  json += String(static_cast<uint32_t>(esp_get_minimum_free_heap_size()));
+  json += ",\"audio_sessions_total\":";
+  json += audioSessionsTotal;
+  json += ",\"audio_sessions_active\":";
+  json += audioSessionsActive;
+  json += ",\"audio_sessions_timed_out\":";
+  json += audioSessionsTimedOut;
+  json += ",\"audio_sessions_keepalive_death\":";
+  json += audioSessionsKeepaliveDeath;
+  json += ",\"audio_chunk_alloc_failures\":";
+  json += audioChunkAllocFailures;
+  json += ",\"audio_header_send_failures\":";
+  json += audioHeaderSendFailures;
   json += ",\"websocket_clients\":";
   json += websocketClients;
   json += ",\"camera_ready\":";
@@ -2413,16 +2438,31 @@ esp_err_t audioHandler(httpd_req_t *req) {
   const WavHeader header = makeWavHeader();
   esp_err_t result = httpd_resp_send_chunk(req, reinterpret_cast<const char *>(&header), sizeof(header));
   if (result != ESP_OK) {
+    // T17 fix #11 — count header-send failures so we can correlate with
+    // /audio hangs after the firmware fix is deployed. A growing counter
+    // here means the LRU-purge cleanup window is too tight.
+    portENTER_CRITICAL(&gRuntimeStateMux);
+    gRuntimeState.audioHeaderSendFailures = gRuntimeState.audioHeaderSendFailures + 1;
+    portEXIT_CRITICAL(&gRuntimeStateMux);
     return result;
   }
 
   auto *chunk = static_cast<uint8_t *>(malloc(kAudioReadChunkBytes));
   if (chunk == nullptr) {
+    // T17 fix #11 — counter for the heap-exhaustion signature that bricked
+    // the stream server during the original zombie-session pile-up.
+    portENTER_CRITICAL(&gRuntimeStateMux);
+    gRuntimeState.audioChunkAllocFailures = gRuntimeState.audioChunkAllocFailures + 1;
+    portEXIT_CRITICAL(&gRuntimeStateMux);
     return sendError(req, "503 Service Unavailable", "{\"error\":\"audio_chunk_alloc_failed\"}");
   }
 
   portENTER_CRITICAL(&gRuntimeStateMux);
   gRuntimeState.audioClients = gRuntimeState.audioClients + 1;
+  // T17 fix #11 — cumulative + active session counters for the regression
+  // smoke test (scripts/adam_esp32_stream_stress.sh) and operator UI.
+  gRuntimeState.audioSessionsTotal = gRuntimeState.audioSessionsTotal + 1;
+  gRuntimeState.audioSessionsActive = gRuntimeState.audioSessionsActive + 1;
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
   uint64_t cursor = getAudioWriteSequence();
@@ -2442,8 +2482,10 @@ esp_err_t audioHandler(httpd_req_t *req) {
     return (errno == EAGAIN || errno == EWOULDBLOCK);
   };
 
+  bool exitedViaKeepalive = false;
   while (result == ESP_OK) {
     if (!clientStillAlive()) {
+      exitedViaKeepalive = true;
       result = ESP_FAIL;
       break;
     }
@@ -2467,6 +2509,17 @@ esp_err_t audioHandler(httpd_req_t *req) {
   portENTER_CRITICAL(&gRuntimeStateMux);
   if (gRuntimeState.audioClients > 0) {
     gRuntimeState.audioClients = gRuntimeState.audioClients - 1;
+  }
+  if (gRuntimeState.audioSessionsActive > 0) {
+    gRuntimeState.audioSessionsActive = gRuntimeState.audioSessionsActive - 1;
+  }
+  // Bucket the exit reason so we can tell at a glance whether sessions
+  // are dying via keepalive/peek (good — fast cleanup) or via the slower
+  // send_wait_timeout fallback path.
+  if (exitedViaKeepalive) {
+    gRuntimeState.audioSessionsKeepaliveDeath = gRuntimeState.audioSessionsKeepaliveDeath + 1;
+  } else if (result != ESP_OK) {
+    gRuntimeState.audioSessionsTimedOut = gRuntimeState.audioSessionsTimedOut + 1;
   }
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
