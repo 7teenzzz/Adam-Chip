@@ -45,8 +45,6 @@
       "max_segment_ms": 9000,
       "mic_source": "local",
       "esp32_mic_profile": "inmp441_philips32_stereo",
-      "esp_mic_fail_threshold": 2,
-      "esp_mic_retry_interval_sec": 30.0,
       "esp_health": {
         "poll_interval_s": 60,
         "silence_threshold": 24,
@@ -54,6 +52,8 @@
         "clip_burst_threshold": 20,
         "restore_threshold_polls": 5
       },
+      "esp_mic_fail_threshold": 2,
+      "esp_mic_retry_interval_sec": 30.0,
       "webrtc_vad_aggressiveness": 2,
       "max_command_segment_ms": 15000,
       "normalize_factor": 8000
@@ -69,10 +69,10 @@
       "provider": "openai",
       "base_url": "http://127.0.0.1:8081/v1",
       "model": "gemma-4-E2B-it-UD-Q4_K_XL",
-      "model_path": "Subsystem/Models/gguf/gemma-4-E2B-it-UD-Q4_K_XL.gguf",
       "timeout_sec": 60,
       "temperature": 0.7,
       "max_tokens": 40,
+      "model_path": "Subsystem/Models/gguf/gemma-4-E2B-it-UD-Q4_K_XL.gguf",
       "num_ctx": 8192
     },
     "vlm": {
@@ -113,7 +113,7 @@
       ],
       "output_device": "plughw:1,3",
       "filler_enabled": true,
-      "filler_phrase": "Хм...",
+      "filler_phrase": "Хм",
       "filler_delay_ms": 800
     }
   },
@@ -150,7 +150,7 @@
   "wake_word": {
     "engine": "openwakeword",
     "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.20,
+    "threshold": 0.15,
     "debounce_hits": 2,
     "vad_threshold": 0,
     "wake_silence_timeout_sec": 3
