@@ -43,7 +43,7 @@
       "vad_threshold": 650,
       "min_speech_ms": 200,
       "max_segment_ms": 9000,
-      "mic_source": "esp32",
+      "mic_source": "local",
       "esp32_mic_profile": "inmp441_philips32_stereo",
       "esp_mic_fail_threshold": 2,
       "esp_mic_retry_interval_sec": 30.0,
