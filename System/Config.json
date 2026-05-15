@@ -78,7 +78,7 @@
       "model": "Efficient-Large-Model/VILA1.5-3b",
       "timeout_sec": 20,
       "max_new_tokens": 48,
-      "prompt": "Отвечай только по-русски. Не используй китайские иероглифы. Кратко опиши сцену в одном предложении: люди, движения, заметные объекты."
+      "prompt": "Describe the scene in one brief sentence: people, movements, notable objects. No Chinese characters."
     },
     "asr": {
       "provider": "whisperx",
