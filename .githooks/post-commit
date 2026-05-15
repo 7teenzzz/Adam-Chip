@@ -1,0 +1,9 @@
+#!/bin/sh
+# post-commit: rebuild graphify graph when System/ changes
+
+if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q "^System/"; then
+    echo "[hook] System/ changed — rebuilding graphify graph..."
+    graphify System/ --update
+fi
+
+exit 0

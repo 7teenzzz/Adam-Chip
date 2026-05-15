@@ -15,6 +15,7 @@ See @README.md for project overview and @System/Config.json + @System/Config.sch
 | 2 — Status | [.planning/STATE.md](.planning/STATE.md) | Что сейчас активно, текущая фаза |
 | 3 — Plan | [ROADMAP.md](.planning/ROADMAP.md) · [REQUIREMENTS.md](.planning/REQUIREMENTS.md) | История фаз, бэклог |
 | 4 — Detail | `.planning/phases/NN-*/NN-SUMMARY.md` | Итоги конкретных фаз |
+| 4+ — Graph | [graphify-out/GRAPH_REPORT.md](graphify-out/GRAPH_REPORT.md) | Граф модулей System/ (автогенерация) |
 
 Числовые параметры — только в `System/Config.json` и `System/Config.schema.json`.
 
@@ -65,4 +66,13 @@ git config core.hooksPath .githooks
 chmod +x .githooks/*
 ```
 
-После этого `post-checkout` автоматически создаст `BRANCH.md` при переходе на новую ветку.
+После этого `post-checkout` автоматически создаст `BRANCH.md` при переходе на новую ветку, а `post-commit` будет перестраивать graphy-граф при изменениях в `System/`.
+
+Первый запуск графа (после установки `graphify install`):
+
+```bash
+# Linux/macOS — разрешить исполнение новых хуков:
+chmod +x .githooks/post-commit
+# Затем в Claude Code:
+# /graphify System/ --mode deep
+```
