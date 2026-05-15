@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import deque
-from typing import Any
+from typing import Any, Callable
 
 _MJPEG_JPEG_SOI = b"\xff\xd8"
 _MJPEG_JPEG_EOI = b"\xff\xd9"
@@ -24,7 +24,7 @@ class CameraReader:
     Otherwise: tries cv2+GStreamer backend first (native on Jetson), then gst subprocess.
     """
 
-    def __init__(self, video_config: dict[str, Any]) -> None:
+    def __init__(self, video_config: dict[str, Any], on_event: Callable[[str, dict[str, Any]], None] | None = None) -> None:
         self.primary = str(video_config.get("primary", "jetson_gstreamer"))
         self.device = str(video_config.get("video_device", "/dev/video0"))
         self.width = int(video_config.get("camera_width", 640))
@@ -34,6 +34,7 @@ class CameraReader:
         self.esp_mjpeg_url = str(video_config.get("esp_mjpeg_url", ""))
         self.esp_fail_threshold = int(video_config.get("esp_fail_threshold", 3))
         self.esp_retry_interval_sec = float(video_config.get("esp_retry_interval_sec", 30.0))
+        self._on_event = on_event  # callback(event_type, payload) for event logging
 
         self._latest: bytes = b""
         self._lock = threading.Lock()
@@ -45,6 +46,13 @@ class CameraReader:
         self._active_source: str = "esp" if self.primary == "esp_mjpeg" else "jetson"
         self._esp_fail_count: int = 0
         self._esp_last_retry: float = 0.0
+
+    def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
+        if self._on_event is not None:
+            try:
+                self._on_event(event_type, payload)
+            except Exception:
+                pass
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -136,16 +144,21 @@ class CameraReader:
                     self._last_error = ""
                     if self._active_source == "esp":
                         self._esp_fail_count = 0
+                    if self._frame_count % 30 == 0:
+                        self._emit("camera_frame_ok", {"source": self._active_source, "frame_count": self._frame_count})
                 else:
                     raise RuntimeError("empty frame")
 
             except Exception as exc:
                 self._last_error = str(exc)
+                self._emit("camera_error", {"source": self._active_source, "error": str(exc)})
                 if self._active_source == "esp":
                     self._esp_fail_count += 1
                     if self._esp_fail_count >= self.esp_fail_threshold:
+                        prev = self._active_source
                         self._active_source = "jetson_fallback"
                         self._esp_last_retry = time.perf_counter()
+                        self._emit("camera_fallback_start", {"from": prev, "to": "jetson_fallback", "error": str(exc)})
 
             elapsed = time.perf_counter() - t
             time.sleep(max(0.0, self.capture_interval - elapsed))
@@ -157,6 +170,7 @@ class CameraReader:
         if self._esp_probe():
             self._active_source = "esp"
             self._esp_fail_count = 0
+            self._emit("camera_restored", {"source": "esp"})
 
     def _esp_probe(self) -> bool:
         try:

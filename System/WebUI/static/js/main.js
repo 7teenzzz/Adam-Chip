@@ -300,6 +300,15 @@ const SIDE_EVENTS = new Set([
   "esp32_mic_restored",
   "esp32_mic_stream_opened",
   "esp32_mic_wav_header",
+  // ── Camera / VLM ─────────────────────────
+  "camera_frame_ok",
+  "camera_error",
+  "camera_fallback_start",
+  "camera_restored",
+  "scene_updated",
+  "scene_stale",
+  "vlm_request_started",
+  "vlm_request_failed",
   // ── Pipeline nodes ───────────────────────
   "wake_word_detected",     // 1. wake word
   "asr_final",              // 2. ASR

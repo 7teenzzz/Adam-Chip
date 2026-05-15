@@ -71,7 +71,7 @@ if not _video_cfg.get("esp_mjpeg_url"):
     _mcu_base = settings.section("mcu").get("base_url", "http://192.168.0.171").rstrip("/")
     _parsed = _urlparse(_mcu_base)
     _video_cfg["esp_mjpeg_url"] = f"{_parsed.scheme}://{_parsed.hostname}:81/stream"
-camera_reader = CameraReader(_video_cfg)
+camera_reader = CameraReader(_video_cfg, on_event=lambda t, p: event_log.append(t, p))
 scene_buffer = SceneDescriptionBuffer(int(_media_cfg.get("scene_buffer_maxlen", 8)))
 prompt_builder = PromptBuilder(
     settings.persona_paths,
@@ -940,9 +940,11 @@ class SceneWorker:
                 if not jpeg:
                     await asyncio.sleep(0.2)
                     continue
+                event_log.append("vlm_request_started", {"frame_bytes": len(jpeg), "camera_source": self._cam.active_source})
                 t_vlm = time.perf_counter()
                 summary = (await self.vlm_client.describe_jpeg(jpeg)).strip()
                 vlm_ms = round((time.perf_counter() - t_vlm) * 1000, 1)
+                event_log.append("vlm_request_finished", {"vlm_ms": vlm_ms, "text_len": len(summary)})
                 runtime_state["last_vlm_ms"] = vlm_ms
                 self._buf.push(summary)
                 updated = scene_cache.update(
@@ -957,10 +959,14 @@ class SceneWorker:
             except Exception as exc:
                 self._consecutive_errors += 1
                 self.last_error = str(exc)
+                event_log.append("vlm_request_failed", {"error": str(exc), "camera_source": self._cam.active_source})
                 stale = scene_cache.mark_stale(str(exc))
                 # Only log to stream on first error and every 10th after — avoid flood.
                 if self._consecutive_errors == 1 or self._consecutive_errors % 10 == 0:
-                    event_log.append("scene_stale", stale)
+                    event_log.append("scene_stale", {
+                        **stale,
+                        "camera_active_source": self._cam.active_source,
+                    })
             elapsed = time.perf_counter() - t_iter
             # Exponential backoff when VLM is down: 2s → 4s → 8s → … → 60s cap.
             backoff = min(self.interval_sec * (2 ** min(self._consecutive_errors - 1, 5)), 60.0)
