@@ -21,7 +21,7 @@
     },
     "semantic": {
       "enabled": true,
-      "max_chars": 4000
+      "max_chars": 2000
     },
     "recent_injection": {
       "enabled": true,
@@ -74,15 +74,15 @@
   "llm": {
     "temperature": 0.7,
     "max_tokens": 100,
-    "response_word_target": 20
+    "response_word_target": 14
   },
   "voice": {
     "speaker": "eugene",
-    "speed_multiplier": 1.0,
+    "speed_multiplier": 1.10,
     "volume": 1.0
   },
   "prompt": {
-    "history_turns": 8,
+    "history_turns": 4,
     "include_scene": true,
     "include_sensors": true
   },

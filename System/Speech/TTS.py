@@ -36,7 +36,10 @@ async def _lifespan(application):  # noqa: ARG001
 app = FastAPI(title="Adam Chip Silero TTS", version="0.1.0", lifespan=_lifespan)
 _MODEL: Any = None
 _MODEL_DEVICE = "cpu"
-_SAMPLE_RATE = 48000
+# N5: 24000 default (was 48000) — half the WAV bytes, ~150ms less transport
+# from TTS service to orchestrator. Silero v5_5_ru supports 8000/24000/48000.
+# Override via ADAM_TTS_SAMPLE_RATE env var.
+_SAMPLE_RATE = int(os.environ.get("ADAM_TTS_SAMPLE_RATE", "24000"))
 _MODEL_ID = "v5_5_ru"
 _DEFAULT_SPEAKER = "eugene"
 _PLAYBACK_ENABLED = os.environ.get("ADAM_TTS_PLAYBACK", "1") != "0"

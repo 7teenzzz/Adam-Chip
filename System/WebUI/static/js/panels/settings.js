@@ -104,8 +104,9 @@ const SCHEMA = [
     fields: [
       { key: "speaker",          label: "Диктор",        type: "string",
         hint: "aidar · baya · kseniya · xenia · eugene · random" },
-      { key: "speed_multiplier", label: "Скорость речи", type: "float", min: 0.5, max: 2, step: 0.05,
-        hint: "1.0 = нормально · 1.1–1.15 = живее" },
+      { key: "speed_multiplier", label: "Скорость речи", type: "float", min: 0.8, max: 1.6, step: 0.05,
+        slider: true,
+        hint: "1.0 = нормально · 1.25 = живее (рекомендуется) · 1.5 = быстро" },
       { key: "volume",           label: "Громкость",     type: "float", min: 0, max: 2, step: 0.05,
         hint: "1.0 = нормально" },
     ],
@@ -472,6 +473,36 @@ function fieldInput(field, value, onChange, ctx) {
 
   // number | int | float | text | string
   const isNum = type === "number" || type === "int" || type === "float";
+
+  // ── Slider variant (opt-in via `slider: true` on numeric field) ────────────
+  if (isNum && field.slider) {
+    const slider = el("input", {
+      class: "input slider",
+      type: "range",
+      min: field.min ?? 0,
+      max: field.max ?? 1,
+      step: field.step ?? (type === "int" ? "1" : "0.01"),
+      style: "flex:1; min-width:120px; cursor:pointer",
+    });
+    const init = value ?? field.min ?? 0;
+    slider.value = init;
+    const valueLabel = el("span", {
+      class: "mono",
+      style: "min-width:48px; text-align:right; color:var(--accent); font-size:12px; font-weight:600",
+    }, Number(init).toFixed(2));
+    slider.addEventListener("input", () => {
+      valueLabel.textContent = Number(slider.value).toFixed(2);
+    });
+    slider.addEventListener("change", () => {
+      const v = type === "int" ? parseInt(slider.value, 10) : parseFloat(slider.value);
+      if (Number.isNaN(v)) { toast(`${field.label}: ожидалось число`, "bad"); return; }
+      onChange(v);
+    });
+    return el("div", { style: "display:flex; align-items:center; gap:10px; padding:4px 0" }, [
+      slider, valueLabel,
+    ]);
+  }
+
   const attrs = { class: "input", type: isNum ? "number" : "text" };
   if (isNum) {
     if (field.min != null)  attrs.min  = field.min;
