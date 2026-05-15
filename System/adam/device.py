@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener, ProxyHandler
+
+# Bypass any system HTTP proxy (v2ray on this Jetson hijacks LAN traffic via
+# env vars; routing ESP32 calls through the proxy leaks half-open sockets and
+# eventually exhausts ESP32's 4-slot socket pool on port 81).
+_NO_PROXY_OPENER = build_opener(ProxyHandler({}))
 
 
 @dataclass
@@ -114,7 +119,7 @@ class MCUClient:
         if body is not None:
             req.add_header("Content-Type", "application/json")
         try:
-            with urlopen(req, timeout=self.timeout) as resp:
+            with _NO_PROXY_OPENER.open(req, timeout=self.timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
                 return DeviceResult(True, resp.status, self._decode_json(raw))
         except HTTPError as exc:
@@ -128,7 +133,7 @@ class MCUClient:
         req.add_header("Accept", "application/json")
         req.add_header("Content-Type", content_type)
         try:
-            with urlopen(req, timeout=max(self.timeout, 20.0)) as resp:
+            with _NO_PROXY_OPENER.open(req, timeout=max(self.timeout, 20.0)) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
                 return DeviceResult(True, resp.status, self._decode_json(raw))
         except HTTPError as exc:

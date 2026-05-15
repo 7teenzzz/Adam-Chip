@@ -62,7 +62,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "max_segment_ms": 9000,
             "mic_source": "esp32",
             "esp32_mic_profile": "inmp441_philips32_stereo",
-            "esp_mic_fail_threshold": 6,
+            "esp_mic_fail_threshold": 3,
             "esp_mic_retry_interval_sec": 10.0,
             "esp_health": {
                 "poll_interval_s": 60,
@@ -110,6 +110,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "timeout_sec": 30,
             "wake_words": "адам",
             "wake_word_required": True,
+            "reply_window_expired_action": "standby",
         },
         "tts": {
             "provider": "silero",

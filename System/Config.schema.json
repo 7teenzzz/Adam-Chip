@@ -208,8 +208,8 @@
             },
             "esp_mic_fail_threshold": {
               "type": "integer",
-              "description": "Consecutive ESP32 mic fetch failures before falling back to local microphone.",
-              "default": 6
+              "description": "Consecutive ESP32 mic fetch failures before falling back to local microphone. Lower = faster fallback when ESP32 stream-server hangs (3 means ~90 s of timeout retries before switching to local ALSA).",
+              "default": 3
             },
             "esp_mic_retry_interval_sec": {
               "type": "number",
@@ -434,6 +434,12 @@
               "type": "boolean",
               "description": "When true, ASR will not activate unless the wake word was detected by OpenWakeWord. In maintenance mode this is bypassed regardless.",
               "default": true
+            },
+            "reply_window_expired_action": {
+              "type": "string",
+              "enum": ["standby", "stop"],
+              "description": "Action when the reply window expires (soft or hard cutoff with no qualifying speech). 'standby' (default) — return voice loop to STANDBY, keep mic running, ready for next wake word. 'stop' — fully stop the voice loop (mic off, no OWW); requires explicit /api/voice/start to resume. Use 'stop' for exhibition power-saving when long idle periods are expected.",
+              "default": "standby"
             }
           }
         },

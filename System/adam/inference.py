@@ -13,7 +13,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener, urlopen, ProxyHandler
+
+# Bypass system HTTP proxy for ESP32 LAN traffic (v2ray on this Jetson hijacks
+# urllib via env vars and leaks sockets back to ESP32:81 port pool of 4).
+_NO_PROXY_OPENER = build_opener(ProxyHandler({}))
 
 
 # ESP32 PCM5102A speaker contract (Subsystem/AdamsServer/config/AdamsConfig.h:91 →
@@ -369,7 +373,9 @@ class TTSClient:
         req.add_header("Content-Type", "audio/wav")
         t0 = time.perf_counter()
         try:
-            with urlopen(req, timeout=post_timeout) as resp:
+            # Bypass system proxy — env HTTP proxy (v2ray) hijacks LAN traffic
+            # and leaks sockets to ESP32:81, blocking subsequent connects.
+            with _NO_PROXY_OPENER.open(req, timeout=post_timeout) as resp:
                 body = resp.read().decode("utf-8", errors="replace")
                 ok = resp.status < 400
         except HTTPError as exc:

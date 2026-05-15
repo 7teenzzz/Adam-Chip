@@ -13,6 +13,13 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 import urllib.request
+
+# v2ray (port 10808) on this Jetson hijacks LAN HTTP via env proxies. The default
+# urllib opener honours those env vars and routes ESP32 traffic through xray,
+# which then leaks half-open sockets back to ESP32:81. Each leaked socket eats
+# one of the firmware's 4 max_open_sockets slots → ESP32 stops accepting.
+# Use an opener with an empty ProxyHandler to talk to ESP32 directly.
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -273,6 +280,9 @@ class VoiceLoopController:
         self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
         self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
         self._reply_absolute_deadline_sec: float = float(asr_cfg.get("reply_absolute_deadline_sec", 12.0))
+        # 'standby' returns to listening for next wake word; 'stop' fully stops
+        # the voice loop and requires explicit restart.
+        self._reply_window_expired_action: str = str(asr_cfg.get("reply_window_expired_action", "standby"))
         self._voice_state: str       = "standby"   # standby | listening | reply
         self._reply_start: float     = 0.0
         self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
@@ -328,7 +338,6 @@ class VoiceLoopController:
         self._raw_is_stereo: bool = False
         self._raw_level_l: float = 0.0
         self._raw_level_r: float = 0.0
-        self._reply_noise_gate: int = int(audio_config.get("reply_noise_gate", 0))
         self._utterance_id: str | None = None  # set on wake_word_detected, cleared on standby
 
     def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
@@ -343,7 +352,6 @@ class VoiceLoopController:
         self.mic_source = new_mic_source
         self.esp32_mic_profile = str(audio_cfg.get("esp32_mic_profile", self.esp32_mic_profile))
         self.vad_threshold = int(audio_cfg.get("vad_threshold", self.vad_threshold))
-        self._reply_noise_gate = int(audio_cfg.get("reply_noise_gate", self._reply_noise_gate))
         self.min_speech_ms = int(audio_cfg.get("min_speech_ms", self.min_speech_ms))
         self.max_segment_ms = int(audio_cfg.get("max_command_segment_ms", self.max_segment_ms))
         new_sr = int(audio_cfg.get("sample_rate", self.sample_rate))
@@ -499,8 +507,12 @@ class VoiceLoopController:
             event_log.append("esp32_mic_profile_applied", {"profile": profile})
             await self._mcu.request("POST", "/api/audio", {"profile": profile})
             _stream_open_t = 0.0
+            resp = None
             try:
-                resp = await asyncio.to_thread(urllib.request.urlopen, url, timeout=30)
+                # Use no-proxy opener — env HTTP proxy (v2ray) hijacks LAN
+                # connections to ESP32 and leaks sockets on long-poll mic stream
+                # disconnects. _NO_PROXY_OPENER guarantees direct TCP to ESP32:81.
+                resp = await asyncio.to_thread(_NO_PROXY_OPENER.open, url, None, 30)
                 event_log.append("esp32_mic_stream_opened", {"url": url, "profile": profile})
                 header = await asyncio.to_thread(resp.read, 44)
                 if len(header) < 44:
@@ -515,8 +527,16 @@ class VoiceLoopController:
                 _stream_open_t = time.perf_counter()
                 await self._vad_loop(read_fn, frame_bytes)
             except asyncio.CancelledError:
+                # Closing resp on cancel is critical: ESP32:81 has only 4 socket
+                # slots — leaked half-open sockets there block reconnect.
+                if resp is not None:
+                    try: resp.close()
+                    except Exception: pass
                 raise
             except Exception as exc:
+                if resp is not None:
+                    try: resp.close()
+                    except Exception: pass
                 self._raw_is_stereo = False
                 self.vad_state = "error"
                 self.last_asr_error = str(exc)
@@ -543,6 +563,14 @@ class VoiceLoopController:
                     break
                 if self.running:
                     await asyncio.sleep(2.0)
+            finally:
+                # Catch the normal-exit path too (vad_loop returned without
+                # exception, e.g. self.running flipped to False during shutdown).
+                # Without this the underlying TCP socket leaks until GC, which
+                # under v2ray's hood means an extra ESP32 socket slot stays held.
+                if resp is not None:
+                    try: resp.close()
+                    except Exception: pass
         if self._esp_mic_fallback and self.running:
             fb_frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
             await self._run_local(fb_frame_bytes)
@@ -687,11 +715,19 @@ class VoiceLoopController:
                     no_speech_expired = elapsed >= self._reply_window_sec and speech_ms < self.min_speech_ms
                     hard_cutoff = elapsed >= absolute_deadline
                     if no_speech_expired or hard_cutoff:
+                        # Action policy: 'standby' (default) keeps mic running,
+                        # OWW listens for next wake word. 'stop' fully halts the
+                        # loop — operator/UI must call /api/voice/start to resume.
+                        action = self._reply_window_expired_action
+                        reason = "absolute_deadline" if hard_cutoff else "no_speech"
                         event_log.append("reply_window_expired", {
-                            "action": "standby",
+                            "action": action,
                             "elapsed_sec": round(elapsed, 1),
-                            "reason": "absolute_deadline" if hard_cutoff else "no_speech",
+                            "reason": reason,
                         })
+                        if action == "stop":
+                            asyncio.create_task(self.stop(), name="reply_window_stop")
+                            return
                         self._set_voice_state("standby", "reply_expired")
                         self._standby_entry_time = time.perf_counter()
                         speech_frames.clear()
@@ -721,12 +757,7 @@ class VoiceLoopController:
                 # This ensures no leading syllables are clipped if they start below
                 # the RMS threshold.
                 # WebRTC VAD drives speech_ms/silence_ms counters in LISTENING and REPLY.
-                # In REPLY, also apply an RMS noise gate to prevent low-level room noise
-                # from inflating speech_ms when WebRTC VAD fires on ambient sound.
-                if self._voice_state == "reply" and self._reply_noise_gate > 0:
-                    effective_voiced = voiced and _rms >= self._reply_noise_gate
-                else:
-                    effective_voiced = voiced
+                effective_voiced = voiced
 
                 if self._voice_state == "listening":
                     # VAD drives speech_ms/silence_ms counters only — accumulation
