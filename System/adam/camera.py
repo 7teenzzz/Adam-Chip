@@ -9,9 +9,7 @@ import urllib.request
 from collections import deque
 from typing import Any, Callable
 
-_MJPEG_JPEG_SOI = b"\xff\xd8"
-_MJPEG_JPEG_EOI = b"\xff\xd9"
-_MJPEG_BUF_LIMIT = 512 * 1024  # 512 KB safety cap per frame scan
+_MJPEG_JPEG_SOI = b"\xff\xd8"  # JPEG start marker — used to validate /capture response
 
 
 class CameraReader:
@@ -32,6 +30,12 @@ class CameraReader:
         self.quality = int(video_config.get("camera_quality", 75))
         self.capture_interval = float(video_config.get("camera_capture_interval_sec", 0.5))
         self.esp_mjpeg_url = str(video_config.get("esp_mjpeg_url", ""))
+        # Derive snapshot URL (port 80 /capture) from MJPEG URL for per-frame requests.
+        # Using /capture avoids keeping the MJPEG stream open, which caused send_frame_fail
+        # errors on ESP32 and port-81 conflicts between camera and audio streams.
+        from urllib.parse import urlparse as _urlparse
+        _p = _urlparse(self.esp_mjpeg_url)
+        self.esp_snapshot_url: str = f"{_p.scheme}://{_p.hostname}/capture" if _p.hostname else ""
         self.esp_fail_threshold = int(video_config.get("esp_fail_threshold", 3))
         self.esp_retry_interval_sec = float(video_config.get("esp_retry_interval_sec", 30.0))
         self._on_event = on_event  # callback(event_type, payload) for event logging
@@ -94,6 +98,9 @@ class CameraReader:
         new_primary = str(video_cfg.get("primary", self.primary))
         new_url = str(video_cfg.get("esp_mjpeg_url", self.esp_mjpeg_url))
         self.esp_mjpeg_url = new_url
+        from urllib.parse import urlparse as _urlparse
+        _p = _urlparse(new_url)
+        self.esp_snapshot_url = f"{_p.scheme}://{_p.hostname}/capture" if _p.hostname else ""
         self.capture_interval = float(video_cfg.get("camera_capture_interval_sec", self.capture_interval))
         if new_primary != self.primary:
             self.primary = new_primary
@@ -174,29 +181,23 @@ class CameraReader:
 
     def _esp_probe(self) -> bool:
         try:
-            with urllib.request.urlopen(self.esp_mjpeg_url, timeout=2):
+            with urllib.request.urlopen(self.esp_snapshot_url or self.esp_mjpeg_url, timeout=2):
                 return True
         except Exception:
             return False
 
     def _fetch_esp_jpeg(self) -> bytes:
-        """Open ESP32 MJPEG stream, extract one JPEG frame by SOI/EOI markers, close."""
-        req = urllib.request.Request(self.esp_mjpeg_url)
+        """Fetch single JPEG from ESP32 GET /capture (port 80).
+
+        One-shot request — no persistent connection, no port-81 conflicts with
+        audio/speaker streams. The /capture endpoint returns plain image/jpeg.
+        """
+        req = urllib.request.Request(self.esp_snapshot_url)
         with urllib.request.urlopen(req, timeout=3) as resp:
-            buf = b""
-            soi = -1
-            while len(buf) < _MJPEG_BUF_LIMIT:
-                chunk = resp.read(4096)
-                if not chunk:
-                    break
-                buf += chunk
-                if soi == -1:
-                    soi = buf.find(_MJPEG_JPEG_SOI)
-                if soi != -1:
-                    eoi = buf.find(_MJPEG_JPEG_EOI, soi)
-                    if eoi != -1:
-                        return buf[soi : eoi + 2]
-        raise RuntimeError("MJPEG: JPEG frame not found in stream")
+            data = resp.read()
+        if not data or data[:2] != _MJPEG_JPEG_SOI:
+            raise RuntimeError(f"ESP32 /capture: invalid JPEG ({len(data)} bytes)")
+        return data
 
     def _jetson_snap_once(self) -> bytes:
         """One-shot Jetson camera frame for fallback mode."""
