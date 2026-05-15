@@ -210,6 +210,21 @@ Plans:
 Условие запуска: VRAM ≥ 4 GB свободно при работающем Gemma 4 E4B (Q4_K_XL ≈ 8 GB → остаток ~8 GB на Jetson 16 GB).
 Интерфейс не меняется (`.build()` / `.search()` / `.save()` / `.load()`), только векторизация.
 
+### AIIM → Motor Layer Integration
+
+После стабилизации Dynamic AIIM (ветка `dynamic-aiim`) — связать эмоциональное состояние
+с физическим слоем (techflora, scene_director, ActionLayer).
+
+**Концепция:** emotion=warm → плавные движения; emotion=sharp → резкий импульс → тишина;
+emotion=unease → быстрые нерегулярные паттерны. SceneDirector получает `EmotionState` из
+AIIM вместо текущего keyword-based `Mood`.
+
+**Условие запуска:** Dynamic AIIM стабильно работает на Jetson ≥2 недели без ошибок в логах.
+
+**Затрагивает:** `System/adam/action.py`, `scene_director`, `Orchestrator.py`, возможно новый `System/adam/motor_director.py`.
+
+---
+
 ### UI: Пересборка интерфейса управления
 
 - Перегруппировка параметров по логическим блокам: ESP (камера, mic, PCA9685, PCM5102A, сенсоры) / Agent (ASR, VLM, LLM, TTS) / Adam Identity
