@@ -2,6 +2,9 @@
 Description=Adam Chip Silero TTS Service
 After=network-online.target sound.target user@1000.service
 Wants=network-online.target sound.target user@1000.service
+# StartLimit must live in [Unit] — systemd silently ignores it under [Service].
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -27,9 +30,7 @@ ExecStartPre=/usr/bin/test -x /home/i17jet/Agents/Adam-Chip/.venv/bin/python
 ExecStartPre=-/usr/bin/pulseaudio --start --daemonize=yes
 ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python -m Speech.TTS
 Restart=on-failure
-StartLimitIntervalSec=120
-StartLimitBurst=5
-RestartSec=3
+RestartSec=5
 TimeoutStartSec=60
 
 [Install]

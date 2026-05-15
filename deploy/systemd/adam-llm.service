@@ -3,6 +3,9 @@ Description=Adam Chip · llama-server (LLM inference, OpenAI-compatible API :808
 Documentation=https://github.com/ggerganov/llama.cpp
 After=network-online.target
 Wants=network-online.target
+# StartLimit must live in [Unit] — systemd silently ignores it under [Service].
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -30,8 +33,6 @@ ExecStartPre=/usr/bin/test -f ${ADAM_CONFIG}
 ExecStart=/home/i17jet/Agents/Adam-Chip/scripts/adam_llm_run.sh
 
 Restart=on-failure
-StartLimitIntervalSec=120
-StartLimitBurst=5
 RestartSec=5
 TimeoutStartSec=180
 # llama-server loads the model into GPU memory on startup — can take 30–120s.

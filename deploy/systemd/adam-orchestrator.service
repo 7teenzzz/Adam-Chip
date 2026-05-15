@@ -2,6 +2,12 @@
 Description=Adam Chip Orchestrator
 After=network-online.target adam-llm.service docker.service
 Wants=network-online.target adam-llm.service docker.service
+# StartLimit must live in [Unit], not [Service] (systemd silently ignores it
+# under [Service]). Without this, a port-collision crashloop (EADDRINUSE on
+# 8080 after stale process holds the socket) was running 27+ restarts in 6 min
+# during T14c, each cycle re-triggering boot-time audio side effects.
+StartLimitIntervalSec=120
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -23,9 +29,9 @@ ExecStartPre=/usr/bin/test -x /home/i17jet/Agents/Adam-Chip/.venv/bin/python
 ExecStartPre=/bin/sh -c 'until curl --noproxy "*" -fsS http://127.0.0.1:8081/health >/dev/null 2>&1; do sleep 5; done'
 ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python /home/i17jet/Agents/Adam-Chip/System/Orchestrator.py
 Restart=on-failure
-StartLimitIntervalSec=120
-StartLimitBurst=5
-RestartSec=3
+# RestartSec=10 gives the kernel time to release port 8080 from TIME_WAIT
+# after a SIGTERM'd previous process. Previously 3s caused EADDRINUSE loops.
+RestartSec=10
 TimeoutStartSec=300
 TimeoutStopSec=15
 KillMode=mixed

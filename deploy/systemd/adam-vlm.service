@@ -2,6 +2,9 @@
 Description=Adam Chip VLM HTTP Service (VILA1.5-3b via nano_llm)
 After=network-online.target docker.service
 Wants=network-online.target docker.service
+# StartLimit must live in [Unit] — systemd silently ignores it under [Service].
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -20,8 +23,6 @@ ExecStartPre=-/usr/bin/docker rm adam-live-vlm
 ExecStart=/home/i17jet/Agents/Adam-Chip/scripts/adam_live_vlm.sh fg
 ExecStop=/usr/bin/docker stop adam-live-vlm
 Restart=on-failure
-StartLimitIntervalSec=120
-StartLimitBurst=5
 RestartSec=10
 # VILA model load inside container takes 60-120 seconds.
 TimeoutStartSec=300
