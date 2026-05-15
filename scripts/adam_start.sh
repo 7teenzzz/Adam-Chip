@@ -39,6 +39,19 @@ LIVE_VLM_CONTAINER="adam-live-vlm"
 LIVE_VLM_CAMERA="${ADAM_VLM_CAMERA:-/dev/video0}"
 LLAMACPP_DIR="${ADAM_LLM_LLAMACPP_DIR:-${ROOT_DIR}/Subsystem/llama.cpp}"
 LLM_PORT="${ADAM_LLM_PORT:-8081}"
+# Resolve model path: Config.json → env var → default
+_cfg_model_path=$(python3 -c "
+import json, pathlib, sys
+try:
+    d = json.load(open('${ROOT_DIR}/System/Config.json'))
+    mp = d.get('services',{}).get('llm',{}).get('model_path','')
+    if mp and not mp.startswith('/'):
+        mp = str(pathlib.Path('${ROOT_DIR}') / mp)
+    print(mp)
+except Exception:
+    print('')
+" 2>/dev/null)
+LLM_GGUF_PATH="${_cfg_model_path:-${ADAM_LLM_GGUF_PATH:-${ROOT_DIR}/Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf}}"
 
 # --------- argument parsing --------------------------------------------------
 EXPLICIT_NODES=false
@@ -194,7 +207,7 @@ if ${START_LLM}; then
     fi
     if systemctl is-active --quiet adam-llm 2>/dev/null; then
       echo "  ✓ adam-llm.service (llama-server :${LLM_PORT})"
-      echo "    модель: $(basename "${ADAM_LLM_GGUF_PATH:-unknown}")"
+      echo "    модель: $(basename "${LLM_GGUF_PATH:-unknown}")"
     else
       echo "  ✗ adam-llm.service (см. journalctl -u adam-llm -n 30)"
     fi

@@ -699,7 +699,8 @@ class VoiceLoopController:
                     effective_voiced = voiced
 
                 if self._voice_state == "listening":
-                    # Always accumulate in listening — VAD only drives counters.
+                    # VAD drives speech_ms/silence_ms counters only — accumulation
+                    # happens unconditionally at the outer speech_frames.append below.
                     if effective_voiced:
                         if not speech_frames:
                             event_log.append("asr_partial", {"state": "speech_started", "level": _rms, "utterance_id": self._utterance_id})
@@ -715,7 +716,6 @@ class VoiceLoopController:
                         self.vad_state = "endpointing"
                     else:
                         self.vad_state = "silence"
-                    speech_frames.append(chunk)
                 elif effective_voiced:
                     if not speech_frames:
                         event_log.append("asr_partial", {"state": "speech_started", "level": _rms, "utterance_id": self._utterance_id})

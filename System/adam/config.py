@@ -165,42 +165,12 @@ class Settings:
             with config_path.open("r", encoding="utf-8") as handle:
                 raw = _deep_merge(raw, json.load(handle))
 
+        # Only deployment-specific overrides — Config.json is the primary source
+        # for all service config (LLM, TTS, ASR, VLM, MCU).
         if value := os.environ.get("ADAM_DATA_DIR"):
             raw["agent"]["data_dir"] = value
         if value := os.environ.get("ADAM_MODE"):
             raw["agent"]["mode"] = value
-        if value := os.environ.get("ESP_BASE_URL"):
-            raw["mcu"]["base_url"] = value
-        if value := os.environ.get("ESP_SPEAKER_URL"):
-            raw["mcu"]["speaker_url"] = value
-        if value := os.environ.get("ADAM_LLM_BASE_URL"):
-            raw["services"]["llm"]["base_url"] = value
-        if value := os.environ.get("ADAM_LLM_PROVIDER"):
-            raw["services"]["llm"]["provider"] = value
-        if value := os.environ.get("ADAM_LLM_MODEL"):
-            raw["services"]["llm"]["model"] = value
-        if value := os.environ.get("ADAM_TTS_BASE_URL"):
-            raw["services"]["tts"]["base_url"] = value
-        if value := os.environ.get("ADAM_ASR_HOST"):
-            raw["services"]["asr"]["host"] = value
-        if value := os.environ.get("ADAM_ASR_PORT"):
-            raw["services"]["asr"]["port"] = int(value)
-        if value := os.environ.get("ADAM_VLM_BASE_URL"):
-            raw["services"]["vlm"]["base_url"] = value
-        if value := os.environ.get("ADAM_VLM_MODEL"):
-            raw["services"]["vlm"]["model"] = value
-        if value := os.environ.get("ADAM_VIDEO_DEVICE"):
-            raw["media"]["video"]["gstreamer_pipeline"] = str(raw["media"]["video"]["gstreamer_pipeline"]).replace(
-                "device=/dev/video0",
-                f"device={value}",
-            )
-        if value := os.environ.get("ADAM_AUDIO_INPUT_DEVICE"):
-            raw["media"]["audio"]["input_device"] = value
-        if value := os.environ.get("ADAM_AUDIO_OUTPUT_DEVICE"):
-            raw["media"]["audio"]["output_device"] = value
-            raw["sounds"]["local_output_device"] = value
-        if value := os.environ.get("ADAM_SUCCESS_SOUND"):
-            raw["sounds"]["success_path"] = value
         if value := os.environ.get("ADAM_SOUNDS_ENABLED"):
             raw["sounds"]["enabled"] = value.strip().lower() not in {"0", "false", "no", "off"}
 
