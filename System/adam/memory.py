@@ -115,13 +115,20 @@ class EpisodicMemory:
     def __init__(self, data_dir: Path) -> None:
         self.root = Path(data_dir) / "memory"
         self.episodes_dir = self.root / "episodes"
-        self.semantic_path = self.root / "semantic.md"
+        self.diary_path = self.root / "diary.md"
         self.echoes_used_path = self.root / "echoes_used.jsonl"
         self.chinese_used_path = self.root / "chinese_used.jsonl"
         self.state_path = self.root / "consolidator_state.json"
         self.consolidator_log = self.root / "consolidator.log"
         self.episodes_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._migrate_semantic_to_diary()
+
+    def _migrate_semantic_to_diary(self) -> None:
+        old = self.root / "semantic.md"
+        if old.exists() and not self.diary_path.exists():
+            old.rename(self.diary_path)
+            log.info("migrated semantic.md → diary.md")
 
     # ----- write -----
 
@@ -167,15 +174,15 @@ class EpisodicMemory:
         matches.sort(key=lambda e: e.ts_end, reverse=True)
         return matches[: max(0, limit)]
 
-    def read_semantic(self) -> str:
-        if not self.semantic_path.exists():
+    def read_diary(self) -> str:
+        if not self.diary_path.exists():
             return ""
-        return self.semantic_path.read_text(encoding="utf-8")
+        return self.diary_path.read_text(encoding="utf-8")
 
-    def write_semantic(self, text: str) -> None:
-        self.semantic_path.parent.mkdir(parents=True, exist_ok=True)
+    def write_diary(self, text: str) -> None:
+        self.diary_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
-            self.semantic_path.write_text(text, encoding="utf-8")
+            self.diary_path.write_text(text, encoding="utf-8")
 
     # ----- gate use logs -----
 

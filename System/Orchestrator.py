@@ -2067,9 +2067,9 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     semantic_text = ""
     if tuning.memory.semantic.enabled:
         try:
-            semantic_text = episodic_memory.read_semantic()[: tuning.memory.semantic.max_chars]
+            semantic_text = episodic_memory.read_diary()[: tuning.memory.semantic.max_chars]
         except Exception as exc:
-            event_log.append("semantic_read_error", {"error": str(exc)})
+            event_log.append("diary_read_error", {"error": str(exc)})
 
     history_turns = tuning.prompt.history_turns
     history = memory.recent_dialogue(history_turns)

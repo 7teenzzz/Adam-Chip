@@ -10,7 +10,7 @@
 |------|-----------|------------|-------------------|
 | Working | RAM оркестратора (`dialogue_history`) | до конца сессии | да, всегда (last 8 turns) |
 | Episodic | `{ADAM_DATA_DIR}/memory/episodes/YYYY-MM-DD.jsonl` | rolling 14 дней + pin | через retrieval по имени, max 1–2 |
-| Semantic | `{ADAM_DATA_DIR}/memory/semantic.md` | растёт, обновляется ночью | да, всегда (если файл есть) |
+| Semantic | `{ADAM_DATA_DIR}/memory/diary.md` | растёт, обновляется ночью | да, всегда (если файл есть) |
 | Echoes pool | `Agent Adam Chip/About/Echoes.md` (статика) | бессрочно | через gate, 0–1 фрагмент per turn |
 | Chinese pool | `Agent Adam Chip/About/Chinese_lines.md` (статика) | бессрочно | через gate, более жёсткий cooldown |
 
@@ -51,7 +51,7 @@
 - `adam_state` — фиксируется AIIM-сигнатурой в момент закрытия сессии (например `Ac-Or`, `Pa-Ch`)
 - `highlights` — отобранные оркестратором реплики; не весь diaglogue_history, только примечательные
 - `pinned: true` — защита от декея (выставляется консолидатором или вручную через UI)
-- `consolidated: true` — попало в semantic.md, можно удалять при следующем декее
+- `consolidated: true` — попало в diary.md, можно удалять при следующем декее
 
 ## Salience formula
 
@@ -105,7 +105,7 @@ def decay(now: datetime, decay_days: int = 14):
 
 ## Semantic schema
 
-`semantic.md` — markdown с фиксированными секциями (для детерминированного merge):
+`diary.md` — markdown с фиксированными секциями (для детерминированного merge):
 
 ```markdown
 ## Постоянные посетители
@@ -146,7 +146,7 @@ def main():
 
     if not validate_patch_schema(patch):
         log.error("consolidator: invalid patch", patch)
-        return  # никаких изменений, semantic.md не трогаем
+        return  # никаких изменений, diary.md не трогаем
 
     apply_patch(semantic_md, patch)
     mark_episodes_consolidated([ep.id for ep in patch.consumed])
@@ -257,7 +257,7 @@ class SessionAccumulator:
     2026-05-05.jsonl        # одна строка на эпизод
     2026-05-06.jsonl
     ...
-  semantic.md                # markdown с фиксированными секциями
+  diary.md                # markdown с фиксированными секциями
   echoes_used.jsonl          # {"id": "echo_07", "ts": "...", "pool": "echoes"}
   chinese_used.jsonl         # отдельный файл для китайского пула
   consolidator.log           # текстовый лог

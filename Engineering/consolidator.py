@@ -3,7 +3,7 @@
 
 Читает свежие эпизоды (`{ADAM_DATA_DIR}/memory/episodes/*.jsonl`),
 просит локальный LLM (qwen2.5:7b через Ollama) сгенерировать JSON-патч
-для `semantic.md`, применяет патч, помечает эпизоды consolidated, делает декей.
+для `diary.md`, применяет патч, помечает эпизоды consolidated, делает декей.
 
 Запускается systemd-таймером ночью (см. `deploy/systemd/adam-consolidator.{service,timer}`).
 
@@ -11,7 +11,7 @@ Usage:
     python Engineering/consolidator.py [--dry-run] [--since=24h] [--decay-only]
 
 Принципы:
-  - Любая ошибка валидации патча — semantic.md остаётся как есть, лог пишем в consolidator.log.
+  - Любая ошибка валидации патча — diary.md остаётся как есть, лог пишем в consolidator.log.
   - Failure mode не блокирует утренний запуск Adam'а.
   - Без зависимостей от FastAPI/Orchestrator. Импортируется только System/adam/*.
 """
@@ -49,7 +49,7 @@ CONSOLIDATOR_SYSTEM_PROMPT = textwrap.dedent(
     смотрителя выставки, чтобы агент и операторы понимали контекст последних дней.
 
     Тебе подаются:
-      1. Текущая памятка (semantic.md) — markdown с фиксированными секциями:
+      1. Текущая памятка (diary.md) — markdown с фиксированными секциями:
          «Постоянные посетители», «Цепляющие темы», «Опорные факты», «Нерешённые загадки».
       2. Список новых эпизодов диалогов за прошедшие сутки (JSON), каждый с salience,
          темами, именем посетителя, репликами-highlights, использованными echoes/chinese.
@@ -320,7 +320,7 @@ def main() -> int:
     base_url = os.environ.get("ADAM_LLM_BASE_URL") or \
         settings.section("services").get("llm", {}).get("base_url", "http://127.0.0.1:11434")
     user_msg = (
-        f"Текущая памятка (semantic.md):\n```\n{memory.read_semantic() or '(пусто)'}\n```\n\n"
+        f"Текущая памятка (diary.md):\n```\n{memory.read_diary() or '(пусто)'}\n```\n\n"
         f"Новые эпизоды:\n```json\n{episodes_payload(new_episodes)}\n```"
     )
 
@@ -347,12 +347,12 @@ def main() -> int:
     # 4. Применение
     if args.dry_run:
         log.info("dry-run patch:\n%s", json.dumps(patch, ensure_ascii=False, indent=2))
-        new_text = apply_patch(memory.read_semantic(), patch)
-        log.info("dry-run new semantic:\n%s", new_text)
+        new_text = apply_patch(memory.read_diary(), patch)
+        log.info("dry-run new diary:\n%s", new_text)
         return 0
 
-    new_text = apply_patch(memory.read_semantic(), patch)
-    memory.write_semantic(new_text)
+    new_text = apply_patch(memory.read_diary(), patch)
+    memory.write_diary(new_text)
     consolidated_count = memory.mark_consolidated([ep.id for ep in new_episodes])
     pinned_count = memory.pin_episodes(patch.get("pin_episodes", []))
     log.info("applied: consolidated=%d pinned=%d", consolidated_count, pinned_count)
