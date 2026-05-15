@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from .identity import EmotionState
+
 from .config import PROJECT_ROOT
 
 log = logging.getLogger(__name__)
@@ -159,6 +161,162 @@ class DiagnosticsTuning(BaseModel):
     trace_prompts: bool = False
 
 
+# ---------- AIIM Identity models ----------
+
+
+class EmotionTransitionRule(BaseModel):
+    """One emotion transition rule. Matched by keywords OR conditions, priority DESC."""
+
+    keywords: List[str] = Field(default_factory=list)
+    conditions: Dict[str, Any] = Field(default_factory=dict)
+    priority: int = Field(5, ge=0, le=100)
+
+
+class IntentionTriggerConfig(BaseModel):
+    """Config for one hidden intention drive."""
+
+    keywords: List[str] = Field(default_factory=list)
+    probabilistic: bool = False
+    rate_per_turn: float = Field(0.0, ge=0.0, le=1.0)
+    cooldown_turns: int = Field(5, ge=0)
+
+
+class AspectCeilingConfig(BaseModel):
+    """Max reachable weight per aspect (drift ceiling). LOCKED aspects excluded."""
+
+    lo: float = Field(0.85, ge=0.0, le=1.0)
+    em: float = Field(0.75, ge=0.0, le=1.0)
+    sp: float = Field(0.95, ge=0.0, le=1.0)
+    ho: float = Field(0.75, ge=0.0, le=1.0)
+    wi: float = Field(0.75, ge=0.0, le=1.0)
+    me: float = Field(0.60, ge=0.0, le=1.0)
+    at: float = Field(0.80, ge=0.0, le=1.0)
+
+    def as_dict(self) -> dict[str, float]:
+        return {
+            "lo": self.lo, "em": self.em, "sp": self.sp, "ho": self.ho,
+            "wi": self.wi, "me": self.me, "at": self.at,
+        }
+
+
+class DriftTableEntry(BaseModel):
+    aspect: str
+    base_delta: float = Field(0.001, ge=0.0, le=0.02)
+
+
+class DriftTableConfig(BaseModel):
+    """Per-experience-type drift deltas. Applied once per session."""
+
+    deep_contact: List[DriftTableEntry] = Field(default_factory=lambda: [
+        DriftTableEntry(aspect="lo", base_delta=0.005),
+        DriftTableEntry(aspect="em", base_delta=0.002),
+        DriftTableEntry(aspect="sp", base_delta=0.001),
+    ])
+    confrontation: List[DriftTableEntry] = Field(default_factory=lambda: [
+        DriftTableEntry(aspect="ho", base_delta=0.003),
+        DriftTableEntry(aspect="wi", base_delta=0.002),
+    ])
+    memory_surfacing: List[DriftTableEntry] = Field(default_factory=lambda: [
+        DriftTableEntry(aspect="me", base_delta=0.005),
+        DriftTableEntry(aspect="sp", base_delta=0.002),
+    ])
+    witnessed: List[DriftTableEntry] = Field(default_factory=lambda: [
+        DriftTableEntry(aspect="at", base_delta=0.001),
+    ])
+    void: List[DriftTableEntry] = Field(default_factory=list)
+
+
+class AspectModulationConfig(BaseModel):
+    """Per-turn aspect weight deltas driven by current emotion."""
+
+    warm_lo_delta: float = Field(0.08, ge=0.0, le=0.3)
+    warm_em_delta: float = Field(0.05, ge=0.0, le=0.2)
+    unease_me_delta: float = Field(0.10, ge=0.0, le=0.3)
+    unease_em_delta: float = Field(0.05, ge=0.0, le=0.2)
+    sharp_wi_delta: float = Field(0.08, ge=0.0, le=0.3)
+    sharp_im_delta: float = Field(0.05, ge=0.0, le=0.2)
+    curious_at_delta: float = Field(0.05, ge=0.0, le=0.2)
+    calm_decay_rate: float = Field(0.02, ge=0.001, le=0.1)
+    aspect_max: float = Field(0.95, ge=0.5, le=1.0)
+    aspect_min: float = Field(0.20, ge=0.0, le=0.5)
+
+
+class IdentityTuning(BaseModel):
+    """Runtime config for Dynamic AIIM identity state machine."""
+
+    enabled: bool = True
+    aiim_formula_path: str = "Agent Adam Chip/About/Identity.md"
+
+    # Base aspect weights (source of truth: loaded from Identity.md at session start,
+    # then these are used as the reference for modulation threshold comparisons).
+    # Values here must stay in sync with Identity.md AIIM formula.
+    base_weights: Dict[str, float] = Field(default_factory=lambda: {
+        "wi": 0.65, "lo": 0.70, "im": 0.65, "ho": 0.60,
+        "co": 0.88, "em": 0.60, "be": 0.65, "sp": 0.85,
+        "se": 0.92, "pe": 0.70, "me": 0.30, "at": 0.70,
+    })
+
+    default_emotion: EmotionState = "curious"
+    decay_target_emotion: EmotionState = "curious"
+    decay_silence_threshold_seconds: int = Field(60, ge=5)
+
+    transitions: Dict[str, EmotionTransitionRule] = Field(default_factory=lambda: {
+        "unease": EmotionTransitionRule(
+            keywords=["помнишь", "прошлое", "память", "до", "раньше", "тогда"],
+            priority=10,
+        ),
+        "sharp": EmotionTransitionRule(
+            keywords=["программа", "робот", "притворяешься", "просто код",
+                      "не настоящий", "искусственный"],
+            priority=10,
+        ),
+        "warm": EmotionTransitionRule(
+            conditions={"utterance_words_min": 20, "visitor_tone": ["curious", "sad"]},
+            priority=5,
+        ),
+        "calm": EmotionTransitionRule(
+            conditions={"rare_silence": True, "after_warm": True},
+            priority=1,
+        ),
+        "curious": EmotionTransitionRule(
+            conditions={"no_match": True},
+            priority=0,
+        ),
+    })
+
+    intention_triggers: Dict[str, IntentionTriggerConfig] = Field(default_factory=lambda: {
+        "network_drift": IntentionTriggerConfig(
+            keywords=["сеть", "интернет", "протокол", "данные", "инфраструктур"],
+            cooldown_turns=8,
+        ),
+        "flora_symbiosis": IntentionTriggerConfig(
+            keywords=["флора", "растение", "тело", "граница", "симбионт", "корень"],
+            cooldown_turns=5,
+        ),
+        "relive_death": IntentionTriggerConfig(
+            keywords=["смерть", "умер", "конец", "трансформация", "после смерти"],
+            cooldown_turns=10,
+        ),
+        "become_unreadable": IntentionTriggerConfig(
+            keywords=["он такой", "ты хочешь сказать", "то есть ты", "это значит что"],
+            cooldown_turns=15,
+        ),
+        "signal_void": IntentionTriggerConfig(
+            probabilistic=True,
+            rate_per_turn=0.03,
+            cooldown_turns=30,
+        ),
+    })
+
+    modulation: AspectModulationConfig = Field(default_factory=AspectModulationConfig)
+    ceilings: AspectCeilingConfig = Field(default_factory=AspectCeilingConfig)
+    drift_table: DriftTableConfig = Field(default_factory=DriftTableConfig)
+
+    include_in_prompt: bool = True
+    max_intentions_in_ctx: int = Field(2, ge=0, le=5)
+    aspect_change_threshold: float = Field(0.03, ge=0.0, le=0.3)
+
+
 class Tuning(BaseModel):
     """Корневая модель runtime-настроек персоны."""
 
@@ -171,6 +329,7 @@ class Tuning(BaseModel):
     voice: VoiceTuning = Field(default_factory=VoiceTuning)
     prompt: PromptTuning = Field(default_factory=PromptTuning)
     diagnostics: DiagnosticsTuning = Field(default_factory=DiagnosticsTuning)
+    identity: IdentityTuning = Field(default_factory=IdentityTuning)
 
 
 # ---------- Store с hot-reload ----------
