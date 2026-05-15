@@ -26,6 +26,15 @@
 
 set -euo pipefail
 
+# ─── Proxy hard-clear ───────────────────────────────────────────────────────
+# Adam НИКОГДА не должен идти через v2ray/xray — ESP подключён напрямую через
+# crossover (eno1, 10.10.10.0/24). NO_PROXY="*" гарантирует что любой
+# urllib/httpx/requests вызов идёт direct, даже если что-то забыло trust_env=False.
+unset http_proxy https_proxy ftp_proxy all_proxy socks_proxy
+unset HTTP_PROXY HTTPS_PROXY FTP_PROXY ALL_PROXY SOCKS_PROXY
+export NO_PROXY="*"
+export no_proxy="*"
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PYTHON="${ROOT_DIR}/.venv/bin/python"
 LOG_DIR="${ROOT_DIR}/data/adam"
@@ -173,6 +182,45 @@ if ! ${EXPLICIT_NODES} && ! ${EMPTY_MODE}; then
   [[ "${MIC_OK}" != "1" ]] && echo "  · ASR пропущен (нет микрофона). Принудительно: ADAM_FORCE_ASR=1"
 fi
 echo
+
+# --------- 0a. Crossover network sanity (eno1 + ESP) -------------------------
+# Adam подключается к ESP через crossover-cable Jetson eno1 ↔ ESP W5500.
+# Подсеть 10.10.10.0/24 (Jetson .1, ESP .171). НЕ идёт через Wi-Fi/router.
+#
+# nmcli profile adam-esp-crossover настроен один раз и поднимается auto
+# при cold boot. Этот блок — только проверка + быстрая попытка поднять
+# если NetworkManager не успел.
+ESP_BASE_URL="$(python3 -c "import json; print(json.load(open('${ROOT_DIR}/System/Config.json'))['mcu']['base_url'])" 2>/dev/null || echo "http://10.10.10.171")"
+
+eno1_state="$(cat /sys/class/net/eno1/operstate 2>/dev/null || echo unknown)"
+eno1_ip="$(ip -4 -o addr show eno1 2>/dev/null | awk '{print $4}' | head -1)"
+if [[ "${eno1_state}" != "up" ]] || [[ -z "${eno1_ip}" ]]; then
+  echo "⏵ Поднимаю eno1 (adam-esp-crossover)…"
+  sudo nmcli connection up adam-esp-crossover >/dev/null 2>&1 || \
+    echo "  ! Не удалось поднять adam-esp-crossover — проверь: nmcli connection show"
+  sleep 2
+  eno1_ip="$(ip -4 -o addr show eno1 2>/dev/null | awk '{print $4}' | head -1)"
+fi
+echo "  eno1: state=${eno1_state} ip=${eno1_ip:-none}"
+
+# Wait for ESP (max 90s, poll every 5s). Adam должен использовать ESP-микрофоны
+# по умолчанию — пробуем дать ESP время подняться перед стартом orchestrator.
+echo "⏵ Ожидание ESP на ${ESP_BASE_URL} (до 90с)…"
+ESP_OK=false
+for i in $(seq 1 18); do
+  if curl --noproxy '*' -fsS --max-time 2 "${ESP_BASE_URL}/api/status" >/dev/null 2>&1; then
+    echo "  ✓ ESP отвечает (через ${i}×5с = $((i*5))с)"
+    ESP_OK=true
+    break
+  fi
+  printf "  · попытка %d/18 (timeout 2s)…\r" "${i}"
+  sleep 5
+done
+echo
+if ! ${ESP_OK}; then
+  echo "  ! ESP не отвечает за 90с — orchestrator запустится с local mic fallback"
+  echo "    (orchestrator продолжит 20 background-retry × 15s в течение 5 минут)"
+fi
 
 # --------- 0. Log Viewer (always-on, independent of AI services) -------------
 if systemctl cat adam-logviewer.service >/dev/null 2>&1; then
@@ -343,6 +391,8 @@ if ${START_ORCH}; then
     ADAM_EXPECTED_SERVICES="${EXPECTED_SERVICES}" \
     HF_HOME="${MODELS_DIR}/hf" \
     HF_HUB_CACHE="${MODELS_DIR}/hf/hub" \
+    NO_PROXY="*" no_proxy="*" \
+    http_proxy="" https_proxy="" HTTP_PROXY="" HTTPS_PROXY="" \
     nohup "${VENV_PYTHON}" "${ROOT_DIR}/System/Orchestrator.py" >>"${LOG_FILE}" 2>&1 &
   ORCH_PID=$!
   echo "${ORCH_PID}" > "${PID_FILE}"
