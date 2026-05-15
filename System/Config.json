@@ -156,7 +156,7 @@
   "wake_word": {
     "engine": "openwakeword",
     "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.35,
+    "threshold": 0.20,
     "debounce_hits": 2,
     "vad_threshold": 0,
     "wake_silence_timeout_sec": 3
