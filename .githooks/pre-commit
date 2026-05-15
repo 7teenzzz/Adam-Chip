@@ -1,0 +1,14 @@
+#!/bin/sh
+# pre-commit: warn if committing on a non-main branch without BRANCH.md
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# Skip for main and detached HEAD
+[ "$BRANCH" = "main" ] && exit 0
+[ "$BRANCH" = "HEAD" ] && exit 0
+
+if [ ! -f BRANCH.md ]; then
+    echo "[warn] BRANCH.md not found on branch '$BRANCH'. Create it from docs/BRANCH-template.md."
+fi
+
+exit 0

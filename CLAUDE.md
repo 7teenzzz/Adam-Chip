@@ -1,8 +1,24 @@
 # Adam Chip — Claude Code Instructions
 
-See @README.md for project overview and @System/Config.json + @System/Config.schema.json for runtime parameters.
+See @README.md for project overview and @System/Config.json + @System/Config.schema.json for runtime parameters. Agent behavior protocol: @docs/AGENT-PROTOCOL.md
 
 **Язык общения с пользователем: русский.** Code comments: English.
+
+## Reading Order — с чего начать новому агенту
+
+Читать в порядке убывания детализации:
+
+| Уровень | Файл | Что даёт |
+| ------- | ---- | -------- |
+| 0 — Entry point | `CLAUDE.md` (этот файл) | Инварианты, gotchas, quick start |
+| 1 — Overview | [README.md](README.md) | Архитектура, inference stack, структура |
+| 2 — Status | [.planning/STATE.md](.planning/STATE.md) | Что сейчас активно, текущая фаза |
+| 3 — Plan | [ROADMAP.md](.planning/ROADMAP.md) · [REQUIREMENTS.md](.planning/REQUIREMENTS.md) | История фаз, бэклог |
+| 4 — Detail | `.planning/phases/NN-*/NN-SUMMARY.md` | Итоги конкретных фаз |
+
+Числовые параметры — только в `System/Config.json` и `System/Config.schema.json`.
+
+**Если вы не на ветке `main`:** первым делом прочитайте `BRANCH.md` в корне репозитория — там цель ветки, затрагиваемые файлы и условия мёржа. Шаблон и конвенция: `docs/BRANCH-template.md`.
 
 ## Non-obvious invariants — MUST NOT violate
 
@@ -40,3 +56,13 @@ PYTHONPATH=System ADAM_MODE=maintenance ./.venv/bin/python System/Orchestrator.p
 # Verify:
 curl --noproxy '*' -fsS http://127.0.0.1:8080/api/agent/status | python3 -m json.tool
 ```
+
+### Git hooks setup
+
+```bash
+git config core.hooksPath .githooks
+# Linux/macOS only:
+chmod +x .githooks/*
+```
+
+После этого `post-checkout` автоматически создаст `BRANCH.md` при переходе на новую ветку.

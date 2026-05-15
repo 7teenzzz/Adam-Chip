@@ -31,6 +31,11 @@ Jetson (inference node)             ESP32-S3 (peripheral node)
   Hot-reloadable tuning
 ```
 
+## Текущее состояние
+
+Актуальный статус проекта, активная фаза и история изменений:
+→ [`.planning/STATE.md`](.planning/STATE.md)
+
 ## Inference Stack
 
 | Компонент | Runtime | Модель | Порт |

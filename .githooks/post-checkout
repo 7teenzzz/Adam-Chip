@@ -1,0 +1,23 @@
+#!/bin/sh
+# post-checkout: scaffold BRANCH.md when switching to a new non-main branch
+
+# $3 = 1 means branch switch; $3 = 0 means file checkout
+[ "$3" = "1" ] || exit 0
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# Only act on non-main branches
+[ "$BRANCH" = "main" ] && exit 0
+
+# Skip if BRANCH.md already exists
+[ -f BRANCH.md ] && exit 0
+
+# Skip if template doesn't exist (Phase 3 not yet executed)
+[ -f docs/BRANCH-template.md ] || exit 0
+
+# Scaffold BRANCH.md from template, replacing {branch-name} placeholder
+sed "s/{branch-name}/$BRANCH/g" docs/BRANCH-template.md > BRANCH.md
+
+echo "[hook] BRANCH.md scaffolded — fill in Goal and Merge conditions"
+
+exit 0

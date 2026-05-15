@@ -2,6 +2,7 @@
 
 **Project:** Adam Chip — выставочный ИИ-агент на Jetson Orin NX
 **Goal:** Поддерживать систему в рабочем, документированном и выставочно-готовом состоянии
+**Requirements:** [REQUIREMENTS.md](REQUIREMENTS.md)
 
 ---
 
