@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "graphify": {
+      "command": "C:\\Users\\XVII\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+      "args": ["-m", "graphify.serve", "f:/Adam-Chip/graphify-out/graph.json"]
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:/Users/XVII/AppData/Local/Programs/Python/Python311/python.exe\" \"f:/Adam-Chip/scripts/adam_graph_brief.py\""
+          }
+        ]
+      }
+    ]
+  }
+}
