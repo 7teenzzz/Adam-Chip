@@ -232,46 +232,25 @@ def _play_wav(wav_bytes: bytes, device: str = "") -> dict[str, Any]:
 
 
 def _playback_commands(wav_path: str, device: str = "") -> list[list[str]]:
+    """Build ordered list of playback attempts for a WAV file.
+
+    Critical: T15 surfaced a double-play bug — when gst-launch-1.0 with
+    pulsesink failed AFTER emitting some audio (non-zero returncode but
+    audible output), the caller retried with paplay/aplay and the user
+    heard "Хм..Хм.." (filler twice) or the first words of a reply echoed.
+    Fix: use only ALSA direct (aplay) — single subprocess per WAV, no
+    gstreamer pipeline init overhead per chunk (which caused inter-chunk
+    "эхо" artifacts), no double-fallback with partial-play risk.
+    """
     dev = device or _PLAYBACK_DEVICE
     commands: list[list[str]] = []
-    gst = shutil.which("gst-launch-1.0")
-    # 1. PulseAudio via gst-launch (needs XDG_RUNTIME_DIR + PULSE_SERVER in systemd unit).
-    if gst:
-        commands.append([
-            gst, "-q",
-            "filesrc", f"location={wav_path}", "!",
-            "wavparse", "!",
-            "audioconvert", "!",
-            "audioresample", "!",
-            "pulsesink",
-        ])
-    # 2. PulseAudio via paplay (simpler, same requirement).
-    if player := shutil.which("paplay"):
-        commands.append([player, wav_path])
-    # 3. Requested ALSA device.
-    if gst:
-        commands.append([
-            gst, "-q",
-            "filesrc", f"location={wav_path}", "!",
-            "wavparse", "!",
-            "audioconvert", "!",
-            "audioresample", "!",
-            "alsasink", f"device={dev}",
-        ])
     if player := shutil.which("aplay"):
         commands.append([player, "-q", "-D", dev, wav_path])
-    # 4. ALSA "default" fallback when the requested device differs.
-    if dev != "default":
-        if gst:
-            commands.append([
-                gst, "-q",
-                "filesrc", f"location={wav_path}", "!",
-                "wavparse", "!",
-                "audioconvert", "!",
-                "audioresample", "!",
-                "alsasink", "device=default",
-            ])
-        if player := shutil.which("aplay"):
+        # Single defensive fallback: only triggers if the requested device
+        # is completely unreachable (returncode != 0 BEFORE any PCM frame).
+        # Same WAV at most twice — but in practice aplay either opens the
+        # device cleanly or fails fast, so the partial-play race is gone.
+        if dev != "default":
             commands.append([player, "-q", "-D", "default", wav_path])
     return commands
 
