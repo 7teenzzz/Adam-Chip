@@ -28,6 +28,66 @@
 
 ---
 
+### Test 12 — 2026-05-15 10:48 MSK ❌ FAILED (ESP32 mic timeout, fallback too slow)
+**Module:** Voice Pipeline (E2E voice — **первая попытка с реально применёнными H1+H2**) • **Commit:** [1dc0e64](https://github.com/7teenzzz/Adam-Chip/commit/1dc0e64) (`V-S06.3-opt_voice_pipe_3wave`) • **Phrases:** standard 7-phrase set (не дошёл до first turn)
+**Wall:** не применимо (тест прерван на стадии mic-fallback) • **Verdict:** ❌ pipeline не получал аудио от ESP32 mic; fallback на local не успел сработать
+
+#### Context
+T12 — **первый запуск где systemd реально загружает E2B + ngram_mod** (после правки `/etc/adam-chip/adam.env` и `/etc/systemd/system/adam-llm.service` через sudo). Ранее T10 декларировал H1+H2 но фактически шёл на E4B без ngram из-за двойного override-слоя systemd (см. T10 entry).
+
+Также применена Опция B: `prompt.history_turns=4→0` + `dialogue_turns` trim 1118→11.
+
+#### Timeline (UTC)
+| Time | Event | Comment |
+|---|---|---|
+| 07:47:45 | systemd boot adam-llm | E2B загружен (verified) |
+| 07:48:11 | tts_started + tts_filler | warmup turn started |
+| 07:48:26 | warmup_wakeup OK | LLM сгенерировал warmup reply |
+| 07:48:28 | warmup_llm_prefix latency=**1664ms** | E2B prefix warmup (vs E4B 12453ms — **−87% faster**!) |
+| 07:48:31 | voice_loop_started | mic_source=esp32, esp_mic_fallback=false |
+| 07:48:31 | voice_loop_boot_ready | |
+| 07:48:00 | **T_start (пользователь говорил)** | |
+| 07:48:45 | voice_loop_error stage=esp32_mic timed out | retry 1 |
+| 07:49:01 | timeout 2 | retry 2 |
+| 07:49:17 | timeout 3 | retry 3 |
+| 07:49:33 | timeout 4 | retry 4 |
+| 07:49:49 | timeout 5 | retry 5 |
+| 07:50:05 | timeout 6 + **esp32_mic_fallback_start** | **fallback наконец сработал на 6/6 = 96 секунд после старта** |
+| 07:50:05 | Пользователь остановил Адама | ровно в момент fallback |
+
+#### Root cause analysis
+
+1. **ESP32 mic streaming таймаутится** каждые ~16с с сообщением `voice_loop_error: timed out, stage: esp32_mic`
+2. **ESP32 как устройство — функционирует**: `/api/status` отвечает (audio_ready=true, ethernet_connected=true, IP=192.168.0.171), `/api/audio/clip?ms=500` возвращает корректный WAV. Проблема в streaming-endpoint (не в clip)
+3. **Fallback на local mic настроен** (`esp_mic_fail_threshold=6`, code в `Orchestrator.py:546-557`), но **96 секунд слишком долго** для UX-ожидания пользователя
+4. **`audio_level`-events не публиковались** с 07:48:26 до 07:50:06 — то есть voice loop **полностью не получал** audio frames между warmup-ом и fallback-ом
+
+#### Что НЕ удалось проверить
+- Качество персоны на E2B в голосовом режиме (только в API T9)
+- LLM/TTFV/TTS warm timings на E2B+ngram_mod в живом voice-pipeline
+- ngram-mod #acc_drafts на реальных голосовых turn'ах
+- Reply window stability на cap=11.25s
+
+#### Pre-T13 fix applied
+`System/Config.json: media.audio.esp_mic_fail_threshold 6→2`, `esp_mic_retry_interval_sec 10.0→30.0`.
+
+Эффект: fallback теперь срабатывает после 2 таймаутов (~32 секунды) вместо 6 (96s). Зритель не успеет уйти. После fallback orchestrator продолжает периодически проверять ESP32 каждые 30с — если mic восстановится, переключится назад.
+
+#### Observations on E2B from boot
+- `warmup_llm_prefix latency: 1664ms` (vs E4B baseline 12453ms) — **подтверждает H1 ускорение на cold prefill**
+- `ngram_mod initialized` в логах systemd — H2 реально активирован
+- TTS warmup сгенерировал 4 partial-предложения за ~6s → streaming работает
+
+T13 даст реальный замер E2B+ngram_mod в live-voice сценарии. Но требует устойчивого mic — поэтому **до T13 надо либо починить ESP32 mic stream, либо переключить mic_source=local**.
+
+#### Raw data filter
+```
+data/adam/events.jsonl: ts ∈ [2026-05-15T07:47:30Z, 2026-05-15T07:50:30Z]
+journalctl: -u adam-llm.service --since "2026-05-15 10:47:00" --until "2026-05-15 10:51:00"
+```
+
+---
+
 ### Test 11 — 2026-05-15 09:53 MSK
 **Module:** Voice Pipeline (E2E voice) • **Commit:** [8f57bb3](https://github.com/7teenzzz/Adam-Chip/commit/8f57bb3) (`V-S05.2-optim_voice_pipeline` — rollback после T10) • **Phrases:** standard 7-phrase set (с ASR-разбросом)
 **Wall:** ~6m (T_start не записан → ~09:53:00, T_end 09:59:33 MSK; standby детектится в 06:57:59 UTC) • **Verdict:** ⚠ regression vs T7/T8 baseline на той же ветке

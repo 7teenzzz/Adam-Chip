@@ -45,8 +45,8 @@
       "max_segment_ms": 9000,
       "mic_source": "esp32",
       "esp32_mic_profile": "inmp441_philips32_stereo",
-      "esp_mic_fail_threshold": 6,
-      "esp_mic_retry_interval_sec": 10.0,
+      "esp_mic_fail_threshold": 2,
+      "esp_mic_retry_interval_sec": 30.0,
       "esp_health": {
         "poll_interval_s": 60,
         "silence_threshold": 24,
