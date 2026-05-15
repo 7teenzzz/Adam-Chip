@@ -27,7 +27,7 @@ except ImportError as exc:  # pragma: no cover - exercised only on missing runti
     ) from exc
 
 from adam.action import ActionLayer
-from adam.api_runtime import RuntimeDeps, build_router
+from adam.api_runtime import RuntimeDeps, build_router, _load_calibration_profile
 from adam.config import Settings
 from adam.device import MCUClient
 from adam.echoes_gate import EchoGate
@@ -2808,6 +2808,17 @@ def _rebuild_clients(section_path: str) -> list[str]:
         changed = voice_loop.apply_audio_config(audio_cfg)
         if changed and voice_loop.running:
             asyncio.ensure_future(voice_loop.restart())
+        # Auto-apply per-source OWW calibration profile when mic source changes.
+        new_mic_source = str(audio_cfg.get("mic_source", "local"))
+        new_mic_profile = str(audio_cfg.get("esp32_mic_profile", ""))
+        input_device = str(audio_cfg.get("input_device", ""))
+        profile_key = (
+            f"esp32:{new_mic_profile}" if new_mic_source == "esp32" else f"local:{input_device}"
+        )
+        saved_threshold = _load_calibration_profile(settings.data_dir, profile_key)
+        if saved_threshold is not None and voice_loop._wake_engine is not None:
+            voice_loop._wake_engine.set_threshold(saved_threshold)
+            event_log.append("wake_profile_applied", {"key": profile_key, "threshold": saved_threshold})
         restarted.append("voice_loop")
         esp_audio_health.apply_config(audio_cfg.get("esp_health", {}))
         restarted.append("esp_audio_health")

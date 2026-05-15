@@ -30,6 +30,40 @@ from .events import EventLog
 from .memory import MemoryStore
 from .metrics import MetricsLog
 from .wake_calibration import collect_noise_profile, persist_noise_profile
+from pathlib import Path
+
+
+def _save_calibration_profile(data_dir: Any, profile_key: str, threshold: float) -> None:
+    """Save per-source OWW threshold to wake_calibration_profiles.json."""
+    target = Path(data_dir) / "wake_calibration_profiles.json"
+    profiles: dict[str, Any] = {}
+    if target.exists():
+        try:
+            profiles = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            profiles = {}
+    import time as _time
+    from datetime import datetime, timezone
+    profiles[profile_key] = {
+        "threshold": threshold,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    target.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_calibration_profile(data_dir: Any, profile_key: str) -> float | None:
+    """Load per-source OWW threshold from wake_calibration_profiles.json."""
+    target = Path(data_dir) / "wake_calibration_profiles.json"
+    if not target.exists():
+        return None
+    try:
+        profiles = json.loads(target.read_text(encoding="utf-8"))
+        entry = profiles.get(profile_key)
+        if entry and isinstance(entry.get("threshold"), (int, float)):
+            return float(entry["threshold"])
+    except Exception:
+        pass
+    return None
 
 
 WHISPER_SIZES = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
@@ -151,6 +185,15 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         result = await collect_noise_profile(
             deps.event_log, duration_sec=duration_sec, margin=margin
         )
+        vl = deps.get_voice_loop() if deps.get_voice_loop else None
+        audio_cfg = deps.settings.section("media").get("audio", {})
+        mic_source = getattr(vl, "mic_source", "local") if vl else "local"
+        mic_profile = getattr(vl, "esp32_mic_profile", "") if vl else ""
+        mic_active = getattr(vl, "mic_active_source", mic_source) if vl else mic_source
+        input_device = audio_cfg.get("input_device", "")
+        profile_key = (
+            f"esp32:{mic_profile}" if mic_source == "esp32" else f"local:{input_device}"
+        )
         # Archive for later diffing across sessions / rooms.
         record = {
             **result,
@@ -160,9 +203,19 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
                 "threshold_before": getattr(engine, "_threshold", None),
                 "debounce_hits": getattr(engine, "_debounce_hits", None),
             },
+            "mic_source": mic_source,
+            "mic_active_source": mic_active,
+            "esp32_mic_profile": mic_profile,
+            "input_device": input_device,
+            "profile_key": profile_key,
+            "audio_level_stats": {
+                "level_l": getattr(vl, "_raw_level_l", None) if vl else None,
+                "level_r": getattr(vl, "_raw_level_r", None) if vl else None,
+            },
         }
         try:
             persist_noise_profile(deps.settings.data_dir, record)
+            _save_calibration_profile(deps.settings.data_dir, profile_key, result["recommended_threshold"])
         except Exception as exc:  # pragma: no cover — best-effort archive
             deps.event_log.append("wake_calibrate_archive_error", {"error": str(exc)})
         deps.event_log.append("wake_calibrate_finished", record)

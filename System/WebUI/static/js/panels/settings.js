@@ -587,7 +587,33 @@ async function saveTuningField(tuningSectionPath, key, value, status) {
 // event that the orchestrator emits on every PATCH.
 function buildWakeWordExtras() {
   const meter = createWakeMeter({ draggable: true, height: 96 });
-  const { btn: calibrateBtn, status: calibStatus } = createCalibrateButton();
+  const { btn: calibrateBtn, status: calibStatus } = createCalibrateButton({
+    onComplete: (rec) => {
+      calibProfileEl.textContent = _describeCalibProfile(rec);
+    },
+  });
+  const calibProfileEl = el("span", {
+    style: "font-size:10px; color:var(--muted); font-family:var(--font-mono)",
+  }, "");
+
+  // Pull current calibration profile label from status on mount.
+  import("../api.js").then(({ api }) => {
+    api.get("/api/agent/status").then((s) => {
+      const vl = s?.voice_loop || {};
+      const src = vl.mic_active_source || vl.mic_source || "local";
+      const profile = vl.esp32_mic_profile || "";
+      const key = src.startsWith("esp") ? `esp32:${profile}` : `local:${s?.media?.audio?.input_device || "pulse"}`;
+      calibProfileEl.textContent = `Профиль: ${key}`;
+    }).catch(() => {});
+  });
+
+  function _describeCalibProfile(rec) {
+    if (!rec) return "";
+    const key = rec.profile_key || "?";
+    const ts = (rec.ts || "").slice(0, 16).replace("T", " ");
+    return `Профиль: ${key} — калибровано ${ts}`;
+  }
+
   return el("div", { style: "display:flex; flex-direction:column; gap:6px; margin-top:10px" }, [
     el("div", { style: "display:flex; align-items:center; gap:8px" }, [
       el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Уровень микрофона · порог OWW"),
@@ -601,6 +627,7 @@ function buildWakeWordExtras() {
       el("span", { class: "spacer" }),
       calibStatus,
     ]),
+    calibProfileEl,
   ]);
 }
 
