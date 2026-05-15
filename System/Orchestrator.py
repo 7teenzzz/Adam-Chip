@@ -68,6 +68,9 @@ tts = TTSClient(
     settings.section("services").get("tts", {}),
     mcu_speaker_url=mcu.speaker_endpoint_url(),
 )
+# Surface barge-in attempts that cannot stop ESP32 audio (PCM5102A has no stop
+# endpoint today). Lets operators see why interrupt didn't take effect.
+tts._barge_in_event_emitter = lambda t, p: event_log.append(t, p)
 scene_cache = SceneCache()
 _media_cfg = settings.section("media")
 _video_cfg = dict(_media_cfg.get("video", {}))
@@ -314,6 +317,8 @@ class VoiceLoopController:
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
         self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
         self._wake_detected_at: float = 0.0
+        # Fallback default 6.0 is only for missing-config startup; Config.json
+        # supplies the authoritative value (3 per reference logic).
         self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
         self.esp_mic_fail_threshold: int = int(audio_config.get("esp_mic_fail_threshold", 3))
         self.esp_mic_retry_interval_sec: float = float(audio_config.get("esp_mic_retry_interval_sec", 30.0))
@@ -555,18 +560,33 @@ class VoiceLoopController:
         ESP32 keeps writing PCM into the open TCP stream while the orchestrator is
         busy (transcribe → LLM → TTS). On unmute, the next read returns those
         accumulated frames, which include acoustic self-echo of the agent's own
-        TTS. Discarding ~mute_duration_ms (+200 ms jitter) of frames realigns the
+        TTS. Discarding ~mute_duration_ms (+200 ms jitter) of bytes realigns the
         reader with live audio.
+
+        Reads are coalesced byte-wise (HTTPResponse.read may return short reads
+        mid-stream) to keep frame alignment intact for downstream WebRTC VAD.
+        A wall-clock deadline of 2× expected drain prevents an indefinite hang
+        if the underlying socket died during the long mute.
         """
         mute_duration_ms = (time.perf_counter() - mute_start) * 1000.0 + 200.0
-        frames_to_drain = max(0, int(mute_duration_ms / self.frame_ms))
-        drained = 0
-        for _ in range(frames_to_drain):
-            chunk = await asyncio.to_thread(read_fn, frame_bytes)
+        bytes_to_drain = max(0, int(mute_duration_ms / self.frame_ms)) * frame_bytes
+        if bytes_to_drain <= 0:
+            return 0
+        deadline = time.perf_counter() + (mute_duration_ms / 1000.0) * 2.0
+        drained_bytes = 0
+        while drained_bytes < bytes_to_drain:
+            if time.perf_counter() > deadline:
+                event_log.append("esp32_mic_drain_timeout", {
+                    "drained_bytes": drained_bytes,
+                    "target_bytes": bytes_to_drain,
+                })
+                break
+            remaining = bytes_to_drain - drained_bytes
+            chunk = await asyncio.to_thread(read_fn, remaining)
             if not chunk:
                 break
-            drained += 1
-        return drained
+            drained_bytes += len(chunk)
+        return drained_bytes // frame_bytes
 
     def _make_stereo_reader(self, read_fn: Callable[[int], bytes]) -> Callable[[int], bytes]:
         """Wraps a stereo PCM read_fn to return downmixed mono (L+R)/2.
@@ -754,11 +774,17 @@ class VoiceLoopController:
                     silence_ms = 0
                     _was_endpointing = False
                     if enough_speech:
+                        # mute_start is the wall-clock anchor for ESP32 backlog
+                        # estimation. Take it BEFORE _stop_process() so its value
+                        # is independent of the ALSA branch (avoids a future bug
+                        # where the local _stop_process() inflates the drain
+                        # estimate). In ESP32 mode no process exists; the value
+                        # is set at the same logical moment as endpointing.
+                        mute_start = time.perf_counter()
                         # In local ALSA mode self._process is set; in ESP32 mode it is None.
                         _using_process = self._process is not None
                         if _using_process:
                             self._stop_process()
-                        mute_start = time.perf_counter()
                         self.muted_by_tts = True
                         event_log.append("mic_muted", {"reason": "asr_transcribing"})
                         self.vad_state = "transcribing"
@@ -2384,6 +2410,8 @@ async def _stream_llm_and_speak(
         if not tts_cfg.get("filler_enabled", False):
             filler_done_event.set()
             return
+        # Fallback default 1500 is only for missing-config startup; Config.json
+        # supplies the authoritative value (800 per reference logic).
         delay_s = float(tts_cfg.get("filler_delay_ms", 1500)) / 1000.0
         phrase = str(tts_cfg.get("filler_phrase", "Хм...")).strip()
         if not phrase:
@@ -2452,8 +2480,11 @@ async def _stream_llm_and_speak(
                 wav = _apply_wav_speed(wav, _playback_speed)
 
             if wav is None:
-                # /wav endpoint failed — fall back to /speak (blocks for synth+play).
-                # First play any pending chunk, then play this one synchronously.
+                # /wav endpoint failed. For jetson_hdmi target, fall back to /speak
+                # (Silero plays through its own ALSA device — same Jetson HDMI).
+                # For esp32_speaker target, /speak would route audio out of the
+                # WRONG speaker (Silero's local device, not the ESP32 PCM5102A),
+                # so mark the chunk as failed instead.
                 if pending_wav is not None:
                     if filler_playing[0]:
                         await filler_done_event.wait()
@@ -2461,6 +2492,14 @@ async def _stream_llm_and_speak(
                     result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                     tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
                     pending_wav = None
+                if tts.output_target == "esp32_speaker":
+                    event_log.append("tts_chunk_failed", {
+                        "reason": "wav_synth_failed",
+                        "target": "esp32_speaker",
+                        "chunk_preview": chunk[:60],
+                    }, turn_id=turn_id)
+                    tts_chunks.append({"ok": False, "error": "wav_synth_failed", "target": "esp32_speaker"})
+                    continue
                 if filler_playing[0]:
                     await filler_done_event.wait()
                 _mark_speaking_started()
@@ -2854,6 +2893,7 @@ def _rebuild_clients(section_path: str) -> list[str]:
         restarted.append("vlm")
     if section_path.startswith("services.tts") or section_path == "services":
         tts = TTSClient(services.get("tts", {}), mcu_speaker_url=mcu.speaker_endpoint_url())
+        tts._barge_in_event_emitter = lambda t, p: event_log.append(t, p)
         restarted.append("tts")
     if section_path.startswith("wake_word"):
         ww_cfg = settings.section("wake_word") or {}
@@ -2864,7 +2904,14 @@ def _rebuild_clients(section_path: str) -> list[str]:
     if section_path.startswith("mcu"):
         mcu = MCUClient(settings.section("mcu"))
         action_layer = ActionLayer(settings.section("mcu"), settings.section("safety"))
-        restarted.append("mcu")
+        # voice_loop._mcu and tts._mcu_speaker_url captured the previous mcu
+        # client at construction. Refresh them in-place so a hot-reload of
+        # mcu.base_url / mcu.speaker_url takes effect without orchestrator
+        # restart. Without this, mic stream and TTS POSTs continue against the
+        # stale URL silently.
+        voice_loop._mcu = mcu
+        tts._mcu_speaker_url = (mcu.speaker_endpoint_url() or "").strip() or None
+        restarted.extend(["mcu", "voice_loop", "tts"])
     if section_path.startswith("media.audio") or section_path == "media":
         audio_cfg = settings.section("media").get("audio", {})
         changed = voice_loop.apply_audio_config(audio_cfg)
