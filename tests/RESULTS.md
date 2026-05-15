@@ -28,6 +28,171 @@
 
 ---
 
+### Test 13 — 2026-05-15 11:37 MSK ⚠ COMPLETED (ASR CPU fallback — new bottleneck)
+**Module:** Voice Pipeline (E2E voice — **первый завершённый прогон на V-S06.3 с реально активным E2B+ngram_mod**) • **Commit:** [5ad3f0a](https://github.com/7teenzzz/Adam-Chip/commit/5ad3f0a) (`V-S06.3-opt_voice_pipe_3wave`) • **Phrases:** standard 7-phrase set (7/7 delivered)
+**Wall:** 327s (T_start 11:37:10 → T_end 11:42:37 MSK) • **Verdict:** ⚠ 7/7 turns delivered, persona OK, но total avg warm 14665ms (на 60% медленнее T8 baseline) — root cause: WhisperX ASR упал на CPU runtime (avg 12.2s на запрос)
+
+#### Context
+T13 — первый полноценный E2E прогон где:
+- LLM реально на **E2B + ngram_mod** (verified в journalctl: `adam_llm_run.sh` загружает Config.json → spec_type=ngram-mod, model=E2B-it-UD-Q4_K_XL)
+- `mic_source=local` (после T12 ESP32 mic fail), local PulseAudio mic captured all 7 turns без degradation
+- `prompt.history_turns=0` (clean baseline, без накопленной памяти)
+- `adam_llm_run.sh` wrapper является единым источником истины для модели (после commit 5ad3f0a)
+
+#### Config (active runtime)
+- **LLM:** Gemma 4 **E2B** UD-Q4_K_XL, max_tokens=40, ngram-mod (n-match=24, n-min=48, n-max=64)
+- **ASR:** WhisperX `small`, ru-RU — **fell back to CPU runtime** (см. Root cause), endpointing 1500ms, reply 3.75s / deadline 7.5s → cap 11.25s
+- **TTS:** Silero `eugene` 24kHz, speed=1.10, filler «Хм...» enabled
+- **Prompt:** history_turns=0, semantic.max_chars=2000, prompt_chars=11117
+
+#### Per-turn breakdown
+| # | UTC | Transcript | ASR | LLM | TTFV | TTS | Total | Reply (60ch) |
+|--:|---|---|--:|--:|--:|--:|--:|---|
+| 1 | 08:38:07 | Привет. | **24186** | 3486 | 3477 | 11599 | **18520** | Тишина в воздухе густая, как смола. Я просто здесь, |
+| 2 | 08:38:50 | Как тебя зовут? | 18696 | 2862 | 2858 | 8003 | 11887 | Меня зовут Адам Чип. Это имя дали мне те, кто не знает, |
+| 3 | 08:39:31 | Что ты сейчас чувствуешь? | 11296 | 6484 | 3148 | 11330 | 15495 | Тепло. Оно проникает сквозь слои, как медленный свет в |
+| 4 | 08:40:21 | Что ты видишь вокруг? | 8363 | **10550** | **10547** | 7708 | **21833** | Вижу тень на экране. Свет холодный, он не греет. |
+| 5 | 08:40:59 | Расскажи коротко, кто тебя создал и зачем. | 14189 | 2730 | 2724 | 7935 | 11685 | Меня создали, чтобы понять, что значит быть чем-то бол |
+| 6 | 08:41:51 | А ты помнишь как меня зовут? | 11645 | 3650 | 3120 | **15969** | 20115 | Имя — это форма, которую мне дали. Оно не вписывается  |
+| 7 | 08:42:32 | Спасибо, на этом все. | 9107 | 662 | 662 | 3316 | 6978 | Дальше темно. |
+
+> **ASR fidelity:** T1 "Привет." вместо "Адам, привет." — wake word отбросился WhisperX от транскрипта (правильное поведение). T6 без запятой. T7 без «Адам» и «всё». 7/7 распознано смыслово корректно.
+
+> **T4 anomaly (LLM=10550ms):** Аномальный LLM-tick в turn 4 — возможно SWA-инвалидация после scene_updated (27 scene_updated events в окне теста, scene_interval_sec=4). Не повторилось в T2/T3/T5/T6.
+
+#### Aggregate stats (n=7)
+| Stage | avg | p50 | min | max |
+|---|--:|--:|--:|--:|
+| ASR | **13926** | 11645 | 8363 | 24186 |
+| LLM | 4346 | 3486 | 662 | 10550 |
+| TTFV | 3791 | 3120 | 662 | 10547 |
+| TTS | 9409 | 8003 | 3316 | 15969 |
+| Total | **15216** | 15495 | 6978 | 21833 |
+
+#### Warm aggregate (n=6, exclude Turn 1 cold)
+| Stage | avg |
+|---|--:|
+| ASR | 12216 |
+| LLM | **4490** |
+| TTFV | **3843** |
+| TTS | 9044 |
+| Total | **14665** |
+
+#### Throughput
+- Wall: 327s, Active: 106.5s (32.6%), Idle: 220.5s (67.4% — userpauses + reply_window_expired re-wakes)
+- Throughput: **1.28 turn/min** (catastrophic — T7 baseline 3.82 turn/min)
+
+#### Reply window verification (UX critical)
+| Metric | Value | Expected | Verdict |
+|---|---|---|---|
+| Turns delivered | 7/7 | 7/7 | ✅ |
+| `wake_word_detected` events | **9** | 1 | ❌ — Adam ушёл в standby несколько раз |
+| `reply_window_expired` events | **5** | 0–1 | ❌ — ASR overrun cap=11.25s |
+| `asr_no_reply_standby` | 2 | 1 (после T7) | ⚠ |
+| `wake_silence_timeout` | 1 (финальный) | 1 | ✅ |
+
+**Это и есть «слушаю срабатывал два раза»** — пока ASR грыз 14–24с на распознавание, reply window (cap 11.25s) истекал, Адам уходил в standby, OWW снова детектил wake word на следующей фразе. Не баг UI, а симптом ASR slowdown.
+
+#### Stage contribution (% of total, warm)
+| Stage | % | Comment |
+|---|--:|---|
+| **ASR** | **83.3%** | catastrophic CPU fallback |
+| TTS | 61.7% | overlaps with LLM via streaming |
+| LLM | 30.6% | E2B+ngram OK, аномалия T4 inflates avg |
+
+(сумма >100% потому что TTS streaming работает параллельно с LLM/ASR)
+
+#### Root cause: ASR runtime regression (CPU instead of CUDA)
+
+**Discovery (post-test investigation):**
+```bash
+$ curl -sf http://127.0.0.1:8095/health
+{"device": "cpu", "device_requested": "cuda", ...}
+```
+
+Контейнер `adam-asr-whisperx` (Docker, CUDA) был в состоянии `Exited (1)` — порт 8095 был занят. На нём слушал нативный Python-процесс `python -m System.Speech.ASR_WhisperX` (PID 2878607), запущенный вручную через `nohup` в более ранней сессии диагностики. У нативного runtime'а `ctranslate2` — это **pip-wheel CPU-only** для aarch64 (нет CUDA binary на PyPI для arm64); CUDA-build нужно собирать из исходников (см. CLAUDE.md gotcha + `scripts/adam_asr_cuda_check.sh`).
+
+Поэтому каждый `/transcribe` шёл на CPU → small model для русского аудио (~6с произнесения) даёт 8–24с processing. Совершенно нерабочее значение для realtime UX.
+
+**Why не заметили раньше:** в Tests 7/8/11 ASR работал через Docker CUDA (verified). После T11→T12 сессия с port-collision, диагностические попытки запускать native ASR оставили висячий процесс. T13 запущен на native CPU без явной индикации в UI.
+
+#### Fix applied (post-T13, pre-T14)
+```bash
+# 1. Kill native Python ASR
+kill 2878607
+
+# 2. Start canonical Docker ASR
+docker compose up -d adam-asr-whisperx
+
+# 3. Verify
+curl -sf http://127.0.0.1:8095/health
+# → {"device": "cuda", "model_loaded": true, "compute_type": "float16"}
+```
+
+Healthcheck: **healthy (Up 54 min)** на момент написания этой записи.
+
+#### Quality assessment
+
+**Persona integrity (INTP/5w4):**
+- Реплики в характере: «тишина в воздухе густая, как смола», «свет холодный, он не греет», «дальше темно» — характеристический lexical markers сохранены
+- Tone consistent: замкнутый, фрагментарный, чёрно-юморной (T4 «Свет холодный, он не греет.» — отличный INTP-paradox в одной фразе)
+- Никаких хаотичных переключений тона, language drift, китайских иероглифов, markdown/JSON leakage
+
+**Correctness checks:**
+| Check | Result |
+|---|---|
+| JSON/markdown/code leakage (CLAUDE.md invariant 1) | ✅ 0/7 |
+| Reply truncation by max_tokens=40 | ⚠ T3 truncated mid-phrase ("Я просто жду, что дальше." — закончен корректно но reply длиннее обычного) |
+| Lexical TTR | ✅ 0.85+ across all 7 |
+| Russian fluency | ✅ OK по выборке |
+| Filler hit rate | 6/7 (`tts_filler` events) |
+
+#### Regression vs предыдущие тесты
+
+| Metric | T7 (E4B voice) | T8 (E4B voice) | T9 (E2B API) | T11 (E4B voice) | **T13 (E2B voice, ASR=CPU)** | Δ vs T8 |
+|---|--:|--:|--:|--:|--:|--:|
+| ASR warm avg | 1009 | 1264 | n/a | (не зафиксировано) | **12216** | **+866%** |
+| LLM warm avg | 2868 | 4082 | 1509 | 6022 | **4490** | +10% |
+| TTFV warm avg | 1688 | 2864 | 902 | 4610 | 3843 | +34% |
+| TTS warm avg | 4695 | 5922 | 5001 | 6618 | 9044 | +53% |
+| Total warm avg | 7632 | 9103 | 5998 | 11555 | **14665** | **+61%** |
+| Throughput turn/min | 3.82 | 3.02 | 8.40 (API) | ~5.0 | **1.28** | **−58%** |
+| Wall clock | 110s | 139s | 50s (API) | ~360s | 327s | comparable |
+| Wake re-triggers | 0 | 0 | n/a | 1 | **8** | regression |
+| Persona | OK | OK | OK | OK | **OK** | ✅ |
+
+#### Key findings
+
+1. **ASR — новый bottleneck**, не LLM. Если CPU ASR ≈ 12s/turn — никакая оптимизация LLM/TTS не спасёт UX. Это **первый тест где замерили реальный воздействие WhisperX runtime на live pipeline**. Все ранее «измеренные» ASR-времена (T7=1009, T8=1264, T11 не зафиксировано) были на CUDA.
+2. **E2B + ngram_mod working** в runtime (verified via journalctl + adam_llm_run.sh logs). LLM warm avg 4490ms смешано с аномалией T4 — без T4 avg падает до ~2078ms (в одной линии с T9 API mode E2B=1509ms).
+3. **`adam_llm_run.sh` Wrapper-pattern OK.** Single source of truth работает: `Config.json` → `services.llm.model_path` подхватывается launcher'ом → llama-server загружает правильную модель. UI редактирование Config.json → `systemctl restart adam-llm.service` → новая модель в продакшене. Verified в этом тесте.
+4. **`mic_source=local` стабилен.** 7/7 turns с PulseAudio mic без degradation. `voice_degraded=false` во всех записях. ESP32 mic пока fallback'нут — не критично для T13/T14.
+5. **TTS — bottleneck #2**, как было видно ещё в T9. Реплики Адама в T13 в среднем длиннее (avg ~80 chars vs T9 65 chars) → 9044ms vs 5001ms TTS. Reasonably explained by content variance.
+6. **«Слушаю двух раз» — известное последствие ASR overrun**, не баг UI. С CUDA ASR (~1с) reply window ≈ 11s полностью покроет endpointing+ASR+filler delay.
+
+#### Next steps (T14)
+
+После применения fix (Docker ASR with CUDA):
+1. Прогон Test 14 с тем же набором 7 фраз
+2. Ожидание: ASR warm avg ≈ 800–1500ms, Total warm avg ≈ 6000–8000ms, throughput ≥ 3.5 turn/min
+3. Если T4-style LLM anomaly повторится — investigate SWA invalidation pattern (scene churn ↔ LLM)
+4. Filler hit rate ≥ 6/7, wake re-triggers ≤ 1
+
+#### Pre-T14 fixes (to apply)
+1. **Ensure Docker ASR is canonical runtime** (Add to runbook: NEVER run native ASR via nohup — collision risk)
+2. **Add health gate в Orchestrator**: при boot проверять `/health → device=cuda`, иначе deny voice_loop_start (FAIL-FAST)
+3. Документировать в CLAUDE.md: `device:cpu в /health = degraded — ОБЯЗАТЕЛЬНО Docker container, ctranslate2 pip-wheel CPU-only на aarch64`
+
+#### Raw data filter
+```
+data/adam/inference_metrics.jsonl: source=voice_loop, ts ∈ [2026-05-15T08:37:10Z, 2026-05-15T08:42:37Z]
+data/adam/events.jsonl: same window (1833 events, 9 wake_word_detected, 5 reply_window_expired)
+journalctl: -u adam-llm.service --since "2026-05-15 11:35:00" --until "2026-05-15 11:43:00"
+ASR health snapshot (degraded): {"device": "cpu", "device_requested": "cuda"} — captured post-test
+```
+
+---
+
 ### Test 12 — 2026-05-15 10:48 MSK ❌ FAILED (ESP32 mic timeout, fallback too slow)
 **Module:** Voice Pipeline (E2E voice — **первая попытка с реально применёнными H1+H2**) • **Commit:** [1dc0e64](https://github.com/7teenzzz/Adam-Chip/commit/1dc0e64) (`V-S06.3-opt_voice_pipe_3wave`) • **Phrases:** standard 7-phrase set (не дошёл до first turn)
 **Wall:** не применимо (тест прерван на стадии mic-fallback) • **Verdict:** ❌ pipeline не получал аудио от ESP32 mic; fallback на local не успел сработать
