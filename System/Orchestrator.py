@@ -316,6 +316,44 @@ class VoiceLoopController:
         self._raw_level_r: float = 0.0
         self._reply_noise_gate: int = int(audio_config.get("reply_noise_gate", 0))
 
+    def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
+        """Apply audio config changes live. Returns list of fields that require loop restart."""
+        restart_triggers = {"input_device", "sample_rate", "channels", "frame_ms", "mic_source"}
+        needs_restart: list[str] = []
+        new_mic_source = str(audio_cfg.get("mic_source", self.mic_source))
+        if new_mic_source != self.mic_source:
+            self._esp_mic_fallback = False
+            self._esp_mic_fail_count = 0
+            needs_restart.append("mic_source")
+        self.mic_source = new_mic_source
+        self.esp32_mic_profile = str(audio_cfg.get("esp32_mic_profile", self.esp32_mic_profile))
+        self.vad_threshold = int(audio_cfg.get("vad_threshold", self.vad_threshold))
+        self._reply_noise_gate = int(audio_cfg.get("reply_noise_gate", self._reply_noise_gate))
+        self.min_speech_ms = int(audio_cfg.get("min_speech_ms", self.min_speech_ms))
+        self.max_segment_ms = int(audio_cfg.get("max_command_segment_ms", self.max_segment_ms))
+        new_sr = int(audio_cfg.get("sample_rate", self.sample_rate))
+        if new_sr != self.sample_rate:
+            self.sample_rate = new_sr
+            self.normalize_factor = float(audio_cfg.get("normalize_factor", new_sr / 2))
+            needs_restart.append("sample_rate")
+        new_ch = int(audio_cfg.get("channels", self.channels))
+        if new_ch != self.channels:
+            self.channels = new_ch
+            needs_restart.append("channels")
+        new_frame = int(audio_cfg.get("frame_ms", self.frame_ms))
+        if new_frame != self.frame_ms:
+            self.frame_ms = new_frame
+            needs_restart.append("frame_ms")
+        new_dev = str(audio_cfg.get("input_device", self.audio_device))
+        if new_dev != self.audio_device:
+            self.audio_device = new_dev
+            self.capture_device = self._capture_device_for(new_dev)
+            needs_restart.append("input_device")
+        new_agg = int(audio_cfg.get("webrtc_vad_aggressiveness", self._webrtc_vad.aggressiveness))
+        if new_agg != self._webrtc_vad.aggressiveness:
+            self._webrtc_vad.aggressiveness = new_agg
+        return needs_restart
+
     @property
     def device_in_use(self) -> bool:
         """True while the audio device is held — either running or in the process of stopping."""
@@ -854,6 +892,12 @@ class SceneWorker:
 
     def status(self) -> dict[str, Any]:
         return {"running": self.running, "enabled": self.enabled, "last_error": self.last_error}
+
+    def apply_config(self, media_config: dict[str, Any]) -> None:
+        """Apply media config changes to SceneWorker at runtime."""
+        self.interval_sec = float(media_config.get("scene_interval_sec", self.interval_sec))
+        self.stale_after_sec = float(media_config.get("scene_stale_after_sec", self.stale_after_sec))
+        self.enabled = bool(media_config.get("scene_worker_enabled", self.enabled))
 
     async def start(self) -> None:
         if not self.enabled or (self._task and not self._task.done()):
@@ -2743,18 +2787,19 @@ def _rebuild_clients(section_path: str) -> list[str]:
         restarted.append("mcu")
     if section_path.startswith("media.audio") or section_path == "media":
         audio_cfg = settings.section("media").get("audio", {})
-        new_mic_source = str(audio_cfg.get("mic_source", "local"))
-        if new_mic_source != voice_loop.mic_source:
-            voice_loop._esp_mic_fallback = False
-            voice_loop._esp_mic_fail_count = 0
-        voice_loop.mic_source = new_mic_source
-        voice_loop.esp32_mic_profile = str(audio_cfg.get("esp32_mic_profile", "inmp441_philips32_left"))
-        voice_loop.vad_threshold = int(audio_cfg.get("vad_threshold", 650))
-        if voice_loop.running:
+        changed = voice_loop.apply_audio_config(audio_cfg)
+        if changed and voice_loop.running:
             asyncio.ensure_future(voice_loop.restart())
         restarted.append("voice_loop")
         esp_audio_health.apply_config(audio_cfg.get("esp_health", {}))
         restarted.append("esp_audio_health")
+    if section_path.startswith("media.video") or section_path == "media":
+        video_cfg = settings.section("media").get("video", {})
+        scene_worker.apply_config(settings.section("media"))
+        needs_cam_restart = camera_reader.apply_config(video_cfg)
+        if needs_cam_restart and camera_reader._running:
+            camera_reader.restart()
+        restarted.append("camera")
     if section_path.startswith("agent"):
         prompt_builder = PromptBuilder(
             settings.persona_paths,

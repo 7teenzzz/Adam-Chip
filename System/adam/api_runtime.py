@@ -86,7 +86,7 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         target = deps.settings.save()
         restarted = deps.rebuild_clients(section)
-        deps.event_log.append("config_patched", {"section": section, "patch": patch, "restarted": restarted, "saved_to": str(target)})
+        deps.event_log.append("config_patched", {"section": section, "patch": patch, "restarted": restarted, "applied_runtime": bool(restarted), "saved_to": str(target)})
         return {"ok": True, "section": section, "applied": applied, "restarted": restarted, "saved_to": str(target)}
 
     # ── Wake-word sensitivity ─────────────────────────────────────────────

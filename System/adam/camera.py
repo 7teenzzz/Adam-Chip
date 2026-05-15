@@ -67,6 +67,10 @@ class CameraReader:
         with self._lock:
             return bool(self._latest)
 
+    @property
+    def active_source(self) -> str:
+        return self._active_source
+
     def status(self) -> dict[str, Any]:
         return {
             "running": self._running,
@@ -76,6 +80,27 @@ class CameraReader:
             "device": self.device,
             "active_source": self._active_source,
         }
+
+    def apply_config(self, video_cfg: dict[str, Any]) -> bool:
+        """Apply video config changes at runtime. Returns True if restart is needed."""
+        new_primary = str(video_cfg.get("primary", self.primary))
+        new_url = str(video_cfg.get("esp_mjpeg_url", self.esp_mjpeg_url))
+        self.esp_mjpeg_url = new_url
+        self.capture_interval = float(video_cfg.get("camera_capture_interval_sec", self.capture_interval))
+        if new_primary != self.primary:
+            self.primary = new_primary
+            self._active_source = "esp" if new_primary == "esp_mjpeg" else "jetson"
+            self._esp_fail_count = 0
+            self._esp_last_retry = 0.0
+            return True
+        return False
+
+    def restart(self) -> None:
+        """Stop and restart the camera capture thread."""
+        self.stop()
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="adam_camera")
+        self._thread.start()
 
     # ------------------------------------------------------------------
     # Internal loop dispatch
