@@ -78,7 +78,7 @@
   },
   "voice": {
     "speaker": "eugene",
-    "speed_multiplier": 1.15,
+    "speed_multiplier": 1.10,
     "volume": 1.0
   },
   "prompt": {
