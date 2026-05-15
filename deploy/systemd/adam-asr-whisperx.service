@@ -1,40 +1,37 @@
 [Unit]
-# NOTE: Production setup runs WhisperX in Docker via compose.yaml
-# (the canonical path — see `docker compose up -d adam-asr-whisperx`).
-# This native systemd unit is a fallback; it requires the i17jet user to be
-# in `video` and `render` groups so Tegra nvmap permits CUDA initialization
-# (without those groups, faster-whisper crashes with
-# `NvRmMemInitNvmap failed: Operation not permitted`).
-Description=Adam Chip WhisperX ASR Service (native fallback; prefer Docker)
-After=network.target
-Wants=network.target
+Description=Adam Chip · WhisperX ASR (Docker, CUDA on Jetson)
+Documentation=https://github.com/m-bain/whisperX
+# CRITICAL: This unit MUST run the Dockerized WhisperX container — it is the only
+# path with working CUDA on aarch64. The native Python ASR (Speech.ASR_WhisperX)
+# silently falls back to CPU because ctranslate2 pip-wheel has no CUDA build for
+# aarch64. CPU runtime gives ~12s/transcribe → realtime UX collapses (see Test 13
+# entry in tests/RESULTS.md).
+#
+# The compose service `adam-asr-whisperx` declares NVIDIA runtime + a healthcheck
+# that asserts `/health → device=cuda`. If the container ever falls back, Docker
+# will mark it unhealthy and the orchestrator will see the failure cleanly.
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
 User=i17jet
 Group=i17jet
-SupplementaryGroups=render video
 WorkingDirectory=/home/i17jet/Agents/Adam-Chip
-Environment=PYTHONPATH=System
-Environment=PATH=/home/i17jet/Agents/Adam-Chip/.venv/bin
-Environment=ADAM_ASR_PORT=8095
-Environment=ADAM_ASR_WHISPERX_MODEL=small
-Environment=ADAM_ASR_LANGUAGE=ru
-Environment=ADAM_ASR_DEVICE=cuda
-Environment=ADAM_ASR_COMPUTE_TYPE=float16
-Environment=HF_HOME=/home/i17jet/Agents/Adam-Chip/data/hf_cache
-ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python -m Speech.ASR_WhisperX
-Restart=always
-RestartSec=5
-TimeoutStartSec=600
-TimeoutStopSec=10
+
+# Idempotent: `docker compose up -d` is a no-op if container is already running.
+ExecStart=/usr/bin/docker compose -f /home/i17jet/Agents/Adam-Chip/compose.yaml up -d adam-asr-whisperx
+ExecStop=/usr/bin/docker compose -f /home/i17jet/Agents/Adam-Chip/compose.yaml stop adam-asr-whisperx
+
+# Container itself has restart: unless-stopped — Docker daemon handles per-process
+# restarts. Systemd only orchestrates lifecycle (up at boot, stop on shutdown).
+TimeoutStartSec=300
+TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=adam-asr-whisperx
-
-# GPU access
-DeviceAllow=/dev/nvidia0 rw
-DeviceAllow=/dev/nvidiactl rw
 
 [Install]
 WantedBy=multi-user.target
