@@ -262,8 +262,10 @@ class EmotionMachine:
             if conds:
                 if conds.get("no_match"):
                     continue  # handled in second pass
-                if conds.get("rare_silence") and conds.get("after_warm") and current == "warm":
-                    return "calm"
+                # calm only fires after genuine silence, not active utterances
+                if conds.get("rare_silence") and conds.get("after_warm"):
+                    if current == "warm" and silence_s >= 10.0:
+                        return "calm"
                 if "utterance_words_min" in conds and "visitor_tone" in conds:
                     min_words = conds["utterance_words_min"]
                     tones = conds["visitor_tone"]
@@ -272,12 +274,8 @@ class EmotionMachine:
                 if conds.get("has_question") and "?" in transcript:
                     return _to_emotion(target_name)
 
-        # Second pass: no_match conditions (lowest priority fallback)
-        for target_name, rule in sorted_rules:
-            if rule.conditions.get("no_match"):
-                return _to_emotion(target_name)
-
-        # Persistence: no trigger → keep current
+        # Persistence: no trigger → keep current state (do not reset to default).
+        # "curious" is achieved via session start default or silence decay, not via no_match.
         return current
 
 
