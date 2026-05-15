@@ -339,6 +339,15 @@ class VoiceLoopController:
         self._raw_level_l: float = 0.0
         self._raw_level_r: float = 0.0
         self._utterance_id: str | None = None  # set on wake_word_detected, cleared on standby
+        # Fine-grained mic-stream state for the UI badge / status dot. Replaces
+        # the inferred "esp32 vs local_fallback" guess that hid the connecting
+        # window. Values:
+        #   "n/a"          — mic_source != esp32 (local mic is canonical)
+        #   "connecting"   — _run_esp32 entered, no WAV header yet
+        #   "active"       — WAV header parsed, _vad_loop reading data
+        #   "failed"       — last attempt threw; next iteration will retry
+        #   "fallback"     — _esp_mic_fallback True; local mic is feeding audio
+        self._mic_stream_state: str = "n/a"
 
     def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
         """Apply audio config changes live. Returns list of fields that require loop restart."""
@@ -347,6 +356,9 @@ class VoiceLoopController:
         new_mic_source = str(audio_cfg.get("mic_source", self.mic_source))
         if new_mic_source != self.mic_source:
             self._esp_mic_fallback = False
+            # Reset stream-state — n/a is the canonical value when the user
+            # switches back to a local mic (no streaming in play).
+            self._mic_stream_state = "n/a" if new_mic_source != "esp32" else "connecting"
             self._esp_mic_fail_count = 0
             needs_restart.append("mic_source")
         self.mic_source = new_mic_source
@@ -382,6 +394,26 @@ class VoiceLoopController:
         """True while the audio device is held — either running or in the process of stopping."""
         return self.running or (self._task is not None and not self._task.done())
 
+    def _active_audio_source_label(self) -> str:
+        """Canonical short label of the mic feeding `audio_level` events.
+
+        Distinguishes the four runtime situations the UI cares about:
+          - 'esp32_stereo'   — INMP441 stereo profile, _vad_loop reading
+          - 'esp32_mono'     — INMP441 mono profile, _vad_loop reading
+          - 'local_fallback' — _esp_mic_fallback engaged, local mic feeds audio
+          - 'local'          — mic_source=local by configuration
+        """
+        if self.mic_source == "esp32":
+            if self._esp_mic_fallback:
+                return "local_fallback"
+            if self._mic_stream_state == "active":
+                return "esp32_stereo" if self._raw_is_stereo else "esp32_mono"
+            # Pre-stream-active window — UI should treat audio_level as local
+            # until WAV header arrives. _audio_level_monitor is the actual
+            # emitter here, but be defensive.
+            return "local_fallback"
+        return "local"
+
     def status(self) -> dict[str, Any]:
         return {
             "running": self.running,
@@ -402,6 +434,11 @@ class VoiceLoopController:
             "voice_state": self._voice_state,
             "esp_mic_fallback": self._esp_mic_fallback,
             "mic_active_source": "local_fallback" if (self.mic_source == "esp32" and self._esp_mic_fallback) else self.mic_source,
+            # Fine-grained mic-stream state for UI badge / status dot.
+            # Distinguishes "esp32 connecting" from "esp32 active" so the
+            # UI never shows a false-positive INMP441 ✓ during the open
+            # window before the WAV header arrives.
+            "mic_stream_state": self._mic_stream_state,
         }
 
     def _set_voice_state(self, state: str, reason: str = "") -> None:
@@ -508,6 +545,10 @@ class VoiceLoopController:
             await self._mcu.request("POST", "/api/audio", {"profile": profile})
             _stream_open_t = 0.0
             resp = None
+            # Mark "connecting" before the long-poll urlopen so the UI shows
+            # "ESP32 подключается" instead of the previous false-positive
+            # "ESP32 ✓" during the 0-30 s window before WAV header arrives.
+            self._mic_stream_state = "connecting"
             try:
                 # Use no-proxy opener — env HTTP proxy (v2ray) hijacks LAN
                 # connections to ESP32 and leaks sockets on long-poll mic stream
@@ -525,6 +566,13 @@ class VoiceLoopController:
                     self._raw_is_stereo = False
                     read_fn = resp.read
                 _stream_open_t = time.perf_counter()
+                # WAV header received → stream is truly live. Flip the state
+                # AFTER read_fn is bound so the first audio_level.source label
+                # already reflects "active".
+                self._mic_stream_state = "active"
+                event_log.append("esp32_mic_stream_active", {
+                    "profile": profile, "is_stereo": is_stereo,
+                })
                 await self._vad_loop(read_fn, frame_bytes)
             except asyncio.CancelledError:
                 # Closing resp on cancel is critical: ESP32:81 has only 4 socket
@@ -538,6 +586,7 @@ class VoiceLoopController:
                     try: resp.close()
                     except Exception: pass
                 self._raw_is_stereo = False
+                self._mic_stream_state = "failed"
                 self.vad_state = "error"
                 self.last_asr_error = str(exc)
                 # Reset failure counter only if the stream stayed alive long enough
@@ -556,6 +605,7 @@ class VoiceLoopController:
                 self._esp_mic_fail_count += 1
                 if _session_fail_count >= self.esp_mic_fail_threshold:
                     self._esp_mic_fallback = True
+                    self._mic_stream_state = "fallback"
                     self._esp_mic_last_retry = time.perf_counter()
                     event_log.append("esp32_mic_fallback_start", {
                         "fail_count": _session_fail_count, "error": str(exc),
@@ -670,6 +720,10 @@ class VoiceLoopController:
                         payload["level_r"] = self._raw_level_r
                     if self._utterance_id:
                         payload["utterance_id"] = self._utterance_id
+                    # T17 fix #6 — tag every audio_level with its actual mic
+                    # source so the UI badge/colour can stay in sync without
+                    # guessing from channels-count alone.
+                    payload["source"] = self._active_audio_source_label()
                     event_log.append("audio_level", payload)
 
                 # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
@@ -1216,6 +1270,10 @@ class EspAudioHealthMonitor:
             voice_loop._esp_mic_fallback = False
             voice_loop._esp_mic_fail_count = 0
             voice_loop._esp_mic_last_retry = 0.0
+            # After health check passes, the next _run_esp32 attempt re-enters
+            # the "connecting" state — pre-set it here so the UI immediately
+            # reflects the recovery handshake instead of the stale "fallback".
+            voice_loop._mic_stream_state = "connecting"
             event_log.append("esp32_mic_restored", {})
             if voice_loop.running:
                 asyncio.ensure_future(voice_loop.restart())
@@ -1420,7 +1478,12 @@ async def _audio_level_monitor() -> None:
                         break  # arecord exited
                     raw_level = audioop.rms(chunk, 2)
                     norm = round(min(1.0, (raw_level / normalize_factor) ** 0.5), 3)
-                    event_log.append("audio_level", {"level": norm, "state": "idle"})
+                    # T17 fix #6 — this monitor runs ONLY while the voice loop
+                    # isn't holding the mic device (i.e. maintenance-mode idle
+                    # equaliser), so the source is always the local ALSA mic.
+                    event_log.append("audio_level", {
+                        "level": norm, "state": "idle", "source": "local",
+                    })
             finally:
                 try:
                     proc.kill()
