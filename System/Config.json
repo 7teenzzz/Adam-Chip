@@ -86,7 +86,7 @@
       "language": "ru",
       "command_endpointing_ms": 1500,
       "reply_window_sec": 2.5,
-      "reply_absolute_deadline_sec": 3.0,
+      "reply_absolute_deadline_sec": 8.0,
       "sample_rate": 16000,
       "timeout_sec": 30,
       "wake_words": "адам",
