@@ -82,7 +82,7 @@
     "volume": 1.0
   },
   "prompt": {
-    "history_turns": 0,
+    "history_turns": 2,
     "include_scene": true,
     "include_sensors": true
   },
