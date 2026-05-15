@@ -21,7 +21,7 @@
   },
   "media": {
     "video": {
-      "primary": "esp_mjpeg",
+      "primary": "jetson_gstreamer",
       "gstreamer_pipeline": "v4l2src device=/dev/video0 ! image/jpeg,framerate=30/1 ! jpegdec ! videoconvert ! video/x-raw,format=RGB ! appsink name=adam_frames drop=true max-buffers=1 sync=false",
       "remote_rtsp_url": "",
       "preview_enabled": true,
@@ -64,9 +64,9 @@
   },
   "services": {
     "llm": {
-      "provider": "ollama",
-      "base_url": "http://127.0.0.1:11434/v1",
-      "model": "gemma3:4b",
+      "provider": "openai",
+      "base_url": "http://127.0.0.1:8081/v1",
+      "model": "gemma-4-E4B-it-UD-Q4_K_XL",
       "timeout_sec": 60,
       "temperature": 0.7,
       "max_tokens": 40,
