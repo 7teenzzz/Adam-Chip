@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
+from typing import Dict, List
 from .tuning import EpisodicTuning, EpisodicWeights
 
 # Тон зрителя — ограниченный набор для детерминированной аналитики
@@ -141,14 +142,24 @@ class SessionAccumulator:
     _has_new_question: bool = False
     _turn_count: int = 0
 
-    def note_turn(self, who: str, text: str) -> None:
+    def note_turn(
+        self,
+        who: str,
+        text: str,
+        theme_clusters: Optional[Dict[str, List[str]]] = None,
+    ) -> None:
         self._turn_count += 1
-        if who == "visitor" and "?" in text:
-            sig = _question_signature(text)
-            if sig and sig not in self._seen_questions:
-                self._seen_questions.add(sig)
-                # отметим — для salience веса new_question
-                self._has_new_question = True
+        if who == "visitor":
+            if "?" in text:
+                sig = _question_signature(text)
+                if sig and sig not in self._seen_questions:
+                    self._seen_questions.add(sig)
+                    self._has_new_question = True
+            if theme_clusters:
+                words = set(re.findall(r"\w+", text.lower()))
+                for theme, keywords in theme_clusters.items():
+                    if any(kw in words for kw in keywords):
+                        self.note_theme(theme)
 
     def add_highlight(self, who: str, text: str, reason: str = "", *, max_count: int = 6) -> None:
         if len(self.highlights) >= max_count:

@@ -9,9 +9,11 @@ LLM не решает «уместно ли» — gate отдаёт уже от�
 from __future__ import annotations
 
 import logging
+import math
 import random
 import re
 import threading
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -65,7 +67,7 @@ _FENCE_RE = re.compile(r"^```yaml\s*$", re.IGNORECASE)
 _FENCE_END = "```"
 
 
-def parse_echoes_file(path: Path, *, pool: str = "echoes") -> list[EchoEntry]:
+def parse_echoes_file(path: Path, *, pool: str = "echoes", default_weight: float = 0.5) -> list[EchoEntry]:
     """Парсит .md-файл с блоками ```yaml --- frontmatter --- ``` + текст после.
 
     Возвращает список EchoEntry. Невалидные блоки пропускаются с предупреждением.
@@ -73,10 +75,10 @@ def parse_echoes_file(path: Path, *, pool: str = "echoes") -> list[EchoEntry]:
     if not path.exists():
         return []
     raw = path.read_text(encoding="utf-8")
-    return _parse_text(raw, pool=pool, source=str(path))
+    return _parse_text(raw, pool=pool, source=str(path), default_weight=default_weight)
 
 
-def _parse_text(text: str, *, pool: str, source: str = "") -> list[EchoEntry]:
+def _parse_text(text: str, *, pool: str, source: str = "", default_weight: float = 0.5) -> list[EchoEntry]:
     lines = text.splitlines()
     i = 0
     out: list[EchoEntry] = []
@@ -120,7 +122,7 @@ def _parse_text(text: str, *, pool: str, source: str = "") -> list[EchoEntry]:
             entry = EchoEntry(
                 id=str(meta["id"]),
                 tags=[str(t).lower() for t in (meta.get("tags") or [])],
-                weight=float(meta.get("weight", 0.5)),
+                weight=float(meta.get("weight", default_weight)),
                 mood_block=[str(m).lower() for m in (meta.get("mood_block") or [])],
                 body=body,
                 audio_id=meta.get("audio_id"),
@@ -141,6 +143,52 @@ def _clean_body(lines: list[str]) -> str:
     while lines and lines[-1].strip() in ("", "---"):
         lines = lines[:-1]
     return "\n".join(lines).strip()
+
+
+# ---------- TF-IDF матчер ----------
+
+
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"\w+", text.lower())
+
+
+class TfIdfMatcher:
+    """Чистый Python TF-IDF поиск для небольших корпусов (10-100 карточек).
+
+    Инициализируется один раз при загрузке пула, IDF пересчитывается при reload().
+    """
+
+    def __init__(self, corpus: list[list[str]]) -> None:
+        """corpus — список токен-списков, по одному на каждую карточку."""
+        n = len(corpus)
+        df: Counter[str] = Counter()
+        for doc in corpus:
+            for term in set(doc):
+                df[term] += 1
+        self._idf: dict[str, float] = {
+            term: math.log((n + 1) / (count + 1)) + 1.0
+            for term, count in df.items()
+        }
+        self._corpus = corpus
+
+    def score(self, query_tokens: list[str], doc_index: int) -> float:
+        """Cosine-TF-IDF сходство между запросом и документом corpus[doc_index]."""
+        doc = self._corpus[doc_index]
+        if not query_tokens or not doc:
+            return 0.0
+        doc_tf = Counter(doc)
+        q_tf = Counter(query_tokens)
+
+        def vec(tf: Counter) -> dict[str, float]:
+            return {t: tf[t] / max(1, len(tf)) * self._idf.get(t, 1.0) for t in tf}
+
+        qv = vec(q_tf)
+        dv = vec(doc_tf)
+        all_terms = set(qv) | set(dv)
+        dot = sum(qv.get(t, 0.0) * dv.get(t, 0.0) for t in all_terms)
+        norm_q = math.sqrt(sum(v * v for v in qv.values())) or 1.0
+        norm_d = math.sqrt(sum(v * v for v in dv.values())) or 1.0
+        return dot / (norm_q * norm_d)
 
 
 # ---------- gate ----------
@@ -164,13 +212,14 @@ class EchoGate:
         self._lock = threading.RLock()
         self._mtime: float = 0.0
         self._entries: list[EchoEntry] = []
+        self._tfidf: Optional[TfIdfMatcher] = None
         self._turn_counter: int = 0
         self._last_use_turn: int = -10_000  # никогда не использовалось
         self.reload()
 
     # ----- public API -----
 
-    def reload(self) -> int:
+    def reload(self, default_weight: float = 0.5) -> int:
         """Перечитать файл если изменился. Возвращает число загруженных entries."""
         with self._lock:
             try:
@@ -181,7 +230,9 @@ class EchoGate:
                 return 0
             if mtime == self._mtime and self._entries:
                 return len(self._entries)
-            self._entries = parse_echoes_file(self.pool_path, pool=self.pool)
+            self._entries = parse_echoes_file(self.pool_path, pool=self.pool, default_weight=default_weight)
+            corpus = [_tokenize(" ".join(e.tags)) for e in self._entries]
+            self._tfidf = TfIdfMatcher(corpus) if corpus else None
             self._mtime = mtime
             log.info("echoes_gate[%s]: loaded %d entries", self.pool, len(self._entries))
             return len(self._entries)
@@ -206,7 +257,7 @@ class EchoGate:
             if not tuning.enabled:
                 return None
             if not self._entries:
-                self.reload()
+                self.reload(default_weight=tuning.default_entry_weight)
             if not self._entries:
                 return None
 
@@ -226,7 +277,7 @@ class EchoGate:
                     continue
                 if entry.id in recent_uses:
                     continue
-                score, matched = self._score_match(entry, transcript)
+                score, matched = self._score_match(entry, transcript, tuning)
                 if score >= tuning.match_threshold:
                     candidates.append((entry, score, matched))
 
@@ -270,20 +321,33 @@ class EchoGate:
     def _cooldown_days(self, tuning: EchoesTuning | ChineseTuning) -> int:
         return tuning.per_echo_cooldown_days
 
-    def _score_match(self, entry: EchoEntry, transcript: str) -> tuple[float, list[str]]:
-        """Tag-based матч: считаем сколько тегов entry присутствуют в transcript.
+    def _score_match(
+        self,
+        entry: EchoEntry,
+        transcript: str,
+        tuning: "EchoesTuning | ChineseTuning",
+    ) -> tuple[float, list[str]]:
+        """Выбирает алгоритм матчинга по tuning.matcher_type ("tag" или "tfidf")."""
+        if tuning.matcher_type == "tfidf":
+            return self._score_tfidf(entry, transcript)
+        return self._score_tag(entry, transcript, tuning)
 
-        Возвращает (score, matched_tags). Score нормализован к [0..1] относительно числа тегов entry.
-        """
+    def _score_tag(
+        self,
+        entry: EchoEntry,
+        transcript: str,
+        tuning: "EchoesTuning | ChineseTuning",
+    ) -> tuple[float, list[str]]:
+        """Tag-based матч: сколько тегов entry присутствуют в transcript."""
         if not entry.tags:
             return 0.0, []
         normalized = transcript.lower()
+        short_cutoff = tuning.tag_short_cutoff
+        boost = tuning.score_boost
         matched: list[str] = []
         for tag in entry.tags:
             tag_lower = tag.lower()
-            # простой substring-match с учётом границ слов для коротких тегов
-            if len(tag_lower) <= 3:
-                # короткие — только как полное слово
+            if len(tag_lower) <= short_cutoff:
                 pattern = rf"\b{re.escape(tag_lower)}\b"
                 if re.search(pattern, normalized):
                     matched.append(tag)
@@ -292,5 +356,22 @@ class EchoGate:
                     matched.append(tag)
         if not matched:
             return 0.0, []
-        score = min(1.0, len(matched) / max(1, len(entry.tags)) + 0.2)
+        score = min(1.0, len(matched) / max(1, len(entry.tags)) + boost)
+        return score, matched
+
+    def _score_tfidf(
+        self,
+        entry: EchoEntry,
+        transcript: str,
+    ) -> tuple[float, list[str]]:
+        """TF-IDF cosine similarity между transcript и тегами карточки."""
+        if self._tfidf is None or not entry.tags:
+            return 0.0, []
+        try:
+            idx = self._entries.index(entry)
+        except ValueError:
+            return 0.0, []
+        query_tokens = _tokenize(transcript)
+        score = self._tfidf.score(query_tokens, idx)
+        matched = [t for t in entry.tags if t in transcript.lower()]
         return score, matched

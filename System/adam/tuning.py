@@ -9,9 +9,7 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Literal
-
-from typing import Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from .config import PROJECT_ROOT
@@ -50,6 +48,8 @@ class EpisodicTuning(BaseModel):
     duration_normalize_seconds: int = Field(300, ge=30)
     weights: EpisodicWeights = Field(default_factory=EpisodicWeights)
     highlights_max_per_episode: int = Field(6, ge=1, le=50)
+    recurring_min_visits: int = Field(2, ge=2, le=20)
+    recurring_lookup_days: int = Field(90, ge=7, le=365)
 
 
 class SemanticTuning(BaseModel):
@@ -73,6 +73,8 @@ class ConsolidatorTuning(BaseModel):
     temperature: float = Field(0.3, ge=0, le=2)
     max_runtime_minutes: int = Field(30, ge=1, le=240)
     retry_on_invalid_patch: bool = False
+    gate_log_max_days: int = Field(30, ge=1, le=365)
+    instant_threshold: float = Field(0.75, ge=0, le=1)
 
 
 class MemoryTuning(BaseModel):
@@ -80,6 +82,7 @@ class MemoryTuning(BaseModel):
     semantic: SemanticTuning = Field(default_factory=SemanticTuning)
     recent_injection: RecentInjectionTuning = Field(default_factory=RecentInjectionTuning)
     consolidator: ConsolidatorTuning = Field(default_factory=ConsolidatorTuning)
+    theme_clusters: Dict[str, List[str]] = Field(default_factory=dict)
 
 
 class EchoesTuning(BaseModel):
@@ -88,7 +91,10 @@ class EchoesTuning(BaseModel):
     per_echo_cooldown_days: int = Field(7, ge=0)
     match_threshold: float = Field(0.55, ge=0, le=1)
     weight_multiplier: float = Field(1.0, ge=0, le=5)
-    matcher_type: Literal["tag", "embedding"] = "tag"
+    matcher_type: Literal["tag", "tfidf"] = "tag"
+    score_boost: float = Field(0.2, ge=0, le=1)
+    tag_short_cutoff: int = Field(3, ge=1, le=10)
+    default_entry_weight: float = Field(0.5, ge=0, le=1)
 
 
 class ChineseTuning(BaseModel):
@@ -97,6 +103,10 @@ class ChineseTuning(BaseModel):
     per_echo_cooldown_days: int = Field(7, ge=0)
     match_threshold: float = Field(0.65, ge=0, le=1)
     weight_multiplier: float = Field(1.0, ge=0, le=5)
+    matcher_type: Literal["tag", "tfidf"] = "tag"
+    score_boost: float = Field(0.2, ge=0, le=1)
+    tag_short_cutoff: int = Field(3, ge=1, le=10)
+    default_entry_weight: float = Field(0.5, ge=0, le=1)
     audio_mode: Literal[
         "prerendered_only",
         "prerendered_with_text_fallback",

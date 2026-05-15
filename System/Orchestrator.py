@@ -224,6 +224,8 @@ async def _commit_session_locked(reason: str) -> None:
                     "reason": reason,
                 },
             )
+            if episode.salience >= tuning.memory.consolidator.instant_threshold:
+                episodic_memory.quick_patch_diary(episode)
         except Exception as exc:
             event_log.append("episode_commit_error", {"error": str(exc), "id": episode.id})
     else:
@@ -2025,8 +2027,14 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     visitor_name = _extract_visitor_name(transcript)
     if visitor_name:
         acc.set_visitor_name(visitor_name)
+        if episodic_memory.is_recurring(
+            visitor_name,
+            min_visits=tuning.memory.episodic.recurring_min_visits,
+            lookup_days=tuning.memory.episodic.recurring_lookup_days,
+        ):
+            acc.set_recurring(True)
 
-    acc.note_turn("visitor", transcript)
+    acc.note_turn("visitor", transcript, theme_clusters=tuning.memory.theme_clusters)
 
     # recent episodic
     recent_lines: list[str] = []

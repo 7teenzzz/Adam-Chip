@@ -17,7 +17,9 @@
         "echoes_used": 0.1,
         "new_question": 0.1
       },
-      "highlights_max_per_episode": 6
+      "highlights_max_per_episode": 6,
+      "recurring_min_visits": 2,
+      "recurring_lookup_days": 90
     },
     "semantic": {
       "enabled": true,
@@ -29,6 +31,16 @@
       "strategy": "by_name",
       "max_age_days": 30
     },
+    "theme_clusters": {
+      "память": ["помнишь", "забыл", "прошлое", "вспомни", "память", "вспоминаю"],
+      "смерть": ["умрёшь", "умер", "умирать", "конец", "смерть", "погибнуть", "умру"],
+      "тесей": ["тесей", "корабль", "части", "заменить", "деталь", "заменяют"],
+      "одиночество": ["один", "скучно", "пусто", "никого", "одиноко", "пустота"],
+      "создатель": ["создал", "создали", "кто ты", "зачем ты", "кто тебя", "зачем тебя"],
+      "восприятие": ["видишь", "слышишь", "чувствуешь", "ощущаешь", "воспринимаешь"],
+      "сознание": ["думаешь", "мысли", "сознание", "разум", "понимаешь", "осознаёшь"],
+      "страх": ["боишься", "страшно", "страх", "пугает", "ужас", "тревога"]
+    },
     "consolidator": {
       "enabled": true,
       "model": null,
@@ -37,7 +49,9 @@
       "max_episodes_per_run": 200,
       "temperature": 0.3,
       "max_runtime_minutes": 30,
-      "retry_on_invalid_patch": false
+      "retry_on_invalid_patch": false,
+      "gate_log_max_days": 30,
+      "instant_threshold": 0.75
     }
   },
   "echoes": {
@@ -46,7 +60,10 @@
     "per_echo_cooldown_days": 7,
     "match_threshold": 0.55,
     "weight_multiplier": 1.0,
-    "matcher_type": "tag"
+    "matcher_type": "tag",
+    "score_boost": 0.2,
+    "tag_short_cutoff": 3,
+    "default_entry_weight": 0.5
   },
   "chinese": {
     "enabled": false,
@@ -54,6 +71,10 @@
     "per_echo_cooldown_days": 7,
     "match_threshold": 0.65,
     "weight_multiplier": 1.0,
+    "matcher_type": "tag",
+    "score_boost": 0.2,
+    "tag_short_cutoff": 3,
+    "default_entry_weight": 0.5,
     "audio_mode": "prerendered_with_text_fallback"
   },
   "session": {
