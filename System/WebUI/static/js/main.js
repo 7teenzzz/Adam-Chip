@@ -298,6 +298,8 @@ const SIDE_EVENTS = new Set([
   "esp32_audio_health_auto_switch",
   "esp32_mic_fallback_start",
   "esp32_mic_restored",
+  "esp32_mic_stream_opened",
+  "esp32_mic_wav_header",
   // ── Pipeline nodes ───────────────────────
   "wake_word_detected",     // 1. wake word
   "asr_final",              // 2. ASR

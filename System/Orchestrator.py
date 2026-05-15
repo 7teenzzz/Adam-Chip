@@ -315,6 +315,7 @@ class VoiceLoopController:
         self._raw_level_l: float = 0.0
         self._raw_level_r: float = 0.0
         self._reply_noise_gate: int = int(audio_config.get("reply_noise_gate", 0))
+        self._utterance_id: str | None = None  # set on wake_word_detected, cleared on standby
 
     def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
         """Apply audio config changes live. Returns list of fields that require loop restart."""
@@ -387,6 +388,8 @@ class VoiceLoopController:
                 "from": self._voice_state, "to": state, "reason": reason,
             })
         self._voice_state = state
+        if state == "standby":
+            self._utterance_id = None
 
     async def start(self) -> dict[str, Any]:
         if self._task and not self._task.done():
@@ -513,12 +516,15 @@ class VoiceLoopController:
         while self.running:
             profile = self.esp32_mic_profile
             is_stereo = profile.endswith("stereo")
+            event_log.append("esp32_mic_profile_applied", {"profile": profile})
             await self._mcu.request("POST", "/api/audio", {"profile": profile})
             try:
                 resp = await asyncio.to_thread(urllib.request.urlopen, url, timeout=10)
+                event_log.append("esp32_mic_stream_opened", {"url": url, "profile": profile})
                 header = await asyncio.to_thread(resp.read, 44)
                 if len(header) < 44:
                     raise RuntimeError(f"ESP32 WAV header truncated ({len(header)}/44 bytes)")
+                event_log.append("esp32_mic_wav_header", {"bytes": len(header), "is_stereo": is_stereo})
                 if is_stereo:
                     self._raw_is_stereo = True
                     read_fn = self._make_stereo_reader(resp.read)
@@ -585,6 +591,8 @@ class VoiceLoopController:
                 chunk = await asyncio.to_thread(_reader[0], frame_bytes)
                 if not chunk:
                     _empty_streak += 1
+                    if self.mic_source == "esp32":
+                        event_log.append("esp32_mic_empty_read", {"streak": _empty_streak})
                     if _empty_streak >= 3:
                         raise RuntimeError("audio source ended: 3 consecutive empty reads")
                     await asyncio.sleep(0.005)
@@ -602,6 +610,8 @@ class VoiceLoopController:
                         payload["channels"] = 2
                         payload["level_l"] = self._raw_level_l
                         payload["level_r"] = self._raw_level_r
+                    if self._utterance_id:
+                        payload["utterance_id"] = self._utterance_id
                     event_log.append("audio_level", payload)
 
                 # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
@@ -629,7 +639,8 @@ class VoiceLoopController:
                                     "threshold": getattr(self._wake_engine, "_threshold", None),
                                 })
                             if triggered:
-                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None, "silence_timeout_sec": self._wake_silence_timeout_sec})
+                                self._utterance_id = str(uuid4())[:8]
+                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None, "silence_timeout_sec": self._wake_silence_timeout_sec, "utterance_id": self._utterance_id})
                                 self._set_voice_state("listening", "wake_word")
                                 self._webrtc_vad.reset_states()
                                 self._wake_detected_at = time.perf_counter()
@@ -691,7 +702,7 @@ class VoiceLoopController:
                     # Always accumulate in listening — VAD only drives counters.
                     if effective_voiced:
                         if not speech_frames:
-                            event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
+                            event_log.append("asr_partial", {"state": "speech_started", "level": _rms, "utterance_id": self._utterance_id})
                         speech_ms += self.frame_ms
                         silence_ms = 0
                         self.vad_state = "speech"
@@ -700,14 +711,14 @@ class VoiceLoopController:
                         silence_ms += self.frame_ms
                         if not _was_endpointing:
                             _was_endpointing = True
-                            event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms})
+                            event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms, "utterance_id": self._utterance_id})
                         self.vad_state = "endpointing"
                     else:
                         self.vad_state = "silence"
                     speech_frames.append(chunk)
                 elif effective_voiced:
                     if not speech_frames:
-                        event_log.append("asr_partial", {"state": "speech_started", "level": _rms})
+                        event_log.append("asr_partial", {"state": "speech_started", "level": _rms, "utterance_id": self._utterance_id})
                     speech_ms += self.frame_ms
                     silence_ms = 0
                     self.vad_state = "speech"
@@ -716,7 +727,7 @@ class VoiceLoopController:
                     silence_ms += self.frame_ms
                     if not _was_endpointing:
                         _was_endpointing = True
-                        event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms})
+                        event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms, "utterance_id": self._utterance_id})
                     self.vad_state = "endpointing"
                 else:
                     self.vad_state = "silence"
@@ -830,6 +841,7 @@ class VoiceLoopController:
         event_log.append("asr_request", {
             "pcm_ms": pcm_ms,
             "provider": self.asr_client.__class__.__name__,
+            "utterance_id": self._utterance_id,
         }, turn_id=turn_id)
         t_asr = time.perf_counter()
         try:
