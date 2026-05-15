@@ -9,9 +9,17 @@
 Тебе переданы:
 
 1. `diploma/project-analysis/` — архитектурная карта, извлечённая из дипломной работы (output Stage 1)
-2. `graphify-out/graph.json` — граф кодовой базы System/ (646 nodes, 1090 edges)
-3. `graphify-out-persona/` — граф персонажа (Identity, AIIM, Memory)
-4. `diploma/graphify-out/` — граф теоретических концептов диплома (если построен)
+2. `diploma/project-analysis/synthesis/cross_graph_map.md` — таблица theory↔code (lookup table, output Stage 1.5)
+3. `diploma/project-analysis/synthesis/criteria_to_code.md` — маппинг 8 критериев на узлы кода
+4. `diploma/evaluation_criteria.md` — **backbone верификации: 8 критериев квазисубъектности**
+5. `graphify-out/graph.json` — граф кодовой базы System/ (646 nodes, 1090 edges)
+6. `graphify-out-persona/` — граф персонажа (Identity, AIIM, Memory)
+7. `diploma/graphify-out/` — граф теоретических концептов диплома
+
+## LANGUAGE STANDARD
+
+- **Node names, field keys, statuses** → English: `EpisodicMemory`, `FULL/PARTIAL/MISSING/EMERGENT/DECLARED_ONLY`
+- **Описания, аналитика** → русский
 
 Диплом описывает:
 
@@ -109,6 +117,20 @@
 
 ```text
 diploma/project-verification/
+    by-criterion/         ← BACKBONE: один файл на каждый из 8 критериев
+        crit_01_autonomy.md
+        crit_02_agency.md
+        crit_03_identity.md
+        crit_04_normativity.md
+        crit_05_temporal.md
+        crit_06_interaction.md
+        crit_07_embodiment.md
+        crit_08_emergence.md
+    by-section/           ← один файл на раздел Главы 3
+        3.1_concept.md
+        3.2_application.md
+        3.3_installation.md
+        3.4_testing.md
     architecture/
     implemented/
     partial/
@@ -125,7 +147,26 @@ diploma/project-verification/
     emergence/
     recommendations/
     chapter3_materials/
+    REVIEW_CHECKPOINT.md
 ```
+
+### Обязательный backbone: 8 файлов в `by-criterion/`
+
+Это критическая часть output. Каждый из 8 критериев квазисубъектности (раздел 2.1 диплома) должен иметь свой файл со структурой из `diploma/evaluation_criteria.md` (см. секцию "Status template per criterion").
+
+Каждый файл обязан содержать:
+
+- Theoretical Definition (выдержка из `evaluation_criteria_extracted.md`)
+- Implementation Status: один из FULL / PARTIAL / MISSING / EMERGENT / DECLARED_ONLY
+- Graphify Evidence: ≥1 node name + source_file + edge count
+- Verification Trace: пошагово, начиная с `/graphify query`
+- Findings: что реализовано, что отсутствует
+- Связь с главой 3: указать раздел 3.X.Y и метрику 3.4.Z
+- Recommendations for Chapter 3 writing
+
+### `REVIEW_CHECKPOINT.md`
+
+Сгенерировать из `diploma/REVIEW_CHECKPOINT_template.md`, заполнив колонки `_STATUS_`, `_N_`, `_F_` реальными данными.
 
 ---
 

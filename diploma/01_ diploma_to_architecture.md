@@ -32,7 +32,19 @@
 ## INPUT
 
 Входные файлы находятся в `diploma/chapters/` (по одному на главу) или `diploma/Diploma.md` (полный текст).
-Обрабатывай по одной главе за раз, если общий объём превышает контекстное окно.
+Обрабатывай по одной главе за раз.
+
+**Перед началом обработки** — прочитай `diploma/chapter_map.md`, чтобы определить тип главы:
+
+- **INTRO** — извлечь актуальность, задачи, объект/предмет; модули и требования НЕ извлекать
+- **THEORY** (Глава 1) — концепты, фреймворки, теоретические требования
+- **THEORY-comparative** (Глава 2) — концепты + **обязательно 8 критериев квазисубъектности** в `concepts/evaluation_criteria_extracted.md` + сравнительные характеристики case studies (Agent Ruby, Being, Voyager, Bag Of Beliefs, Generative Agents, Symbiosis of Agents) в `concepts/case_studies.md`
+- **IMPL** (Глава 3) — модули, архитектурные решения, runtime-требования, метрики (соответствуют 3.4)
+
+## LANGUAGE STANDARD
+
+- **Node names, field keys, directory names, enums** → English: `EpisodicMemory`, `behavioral_invariant`, `code_correspondence`, `FULL/PARTIAL/MISSING/EMERGENT/DECLARED_ONLY`
+- **Описания, аналитика, текст** → русский
 
 ## PRIMARY OBJECTIVE
 
@@ -184,6 +196,27 @@ diploma/project-analysis/
 - architectural requirement,
 - observable behavior,
 - possible implementation.
+
+### concepts/evaluation_criteria_extracted.md (ТОЛЬКО для главы 2)
+
+**Обязательный файл при обработке главы 2.** Извлеки из раздела 2.1 все 8 критериев квазисубъектности:
+
+- 2.1.1 Степень автономизации
+- 2.1.2 Тип агентности
+- 2.1.3 Устойчивость идентичности
+- 2.1.4 Режим нормативности
+- 2.1.5 Темпоральная связность
+- 2.1.6 Интеракционность
+- 2.1.7 Воплощённость
+- 2.1.8 Уровень эмерджентности
+
+Для каждого: точное определение из текста + операционализация (как измерять) + ожидаемые признаки в реализации.
+
+Этот файл служит **backbone верификации** в Stage 2.
+
+### concepts/case_studies.md (ТОЛЬКО для главы 2)
+
+Сравнительная характеристика case studies из 2.2–2.3: Agent Ruby, Being, Voyager, Bag Of Beliefs, Generative Agents, Symbiosis of Agents. Для каждого: ключевые архитектурные решения, что заимствовано в Adam Chip, что отвергнуто.
 
 ---
 
