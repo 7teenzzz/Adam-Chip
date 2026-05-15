@@ -244,12 +244,22 @@ function paintEspModules(uiData) {
   function micKind() {
     if (mod.mic === undefined) return "";
     if (!mod.mic) return "bad";
-    return vl.esp_mic_fallback ? "warn" : "ok";
+    // T17 fix #9 — tri-state status based on mic_stream_state from
+    // the Jetson voice loop. Distinguishes the connecting/failed
+    // windows from the stable-active case so the dot doesn't lie
+    // green during the 0-30 s urlopen-and-read-header window.
+    if (vl.esp_mic_fallback) return "warn";
+    if (vl.mic_stream_state === "connecting") return "warn";
+    if (vl.mic_stream_state === "failed") return "warn";
+    return "ok";
   }
 
   function micTitle() {
     if (!mod.mic) return "E-Mic: аппаратная ошибка";
     if (vl.esp_mic_fallback) return "E-Mic: ESP32 недоступен, используется pulse";
+    if (vl.mic_stream_state === "connecting") return "E-Mic: ESP32 подключается…";
+    if (vl.mic_stream_state === "failed") return "E-Mic: ESP32 stream упал, переподключаемся";
+    if (vl.mic_source === "esp32" && vl.mic_stream_state === "active") return "E-Mic: INMP441 активен (stream live)";
     return "E-Mic: INMP441 активен";
   }
 

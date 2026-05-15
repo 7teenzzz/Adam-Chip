@@ -102,6 +102,33 @@ export function mount(target) {
   let vuPeakL = 0,  vuPeakR = 0,  vuPeakMono = 0;
   let vuRafId = null;
 
+  // T17 fix #7 — mic source badge. Updated live from audio_level.source so
+  // the user can tell at a glance which mic is feeding the equaliser.
+  let micSource = "local";  // updated by audio_level events below
+  const micSourceBadge = el("span", {
+    style: "font-size:10px; color:var(--muted); font-family:var(--font-mono); padding:2px 6px; border-radius:3px; background:var(--bg-2)",
+  }, "Mic: local");
+  // T17 fix #8 — equaliser colour tracks the mic source so the user
+  // never confuses an ESP32 stream with the local fallback.
+  //   esp32_stereo / esp32_mono → green (--accent path)
+  //   local_fallback            → amber/warn (ESP32 down)
+  //   local                     → muted grey
+  function vuColorTriplet() {
+    if (micSource === "esp32_stereo" || micSource === "esp32_mono") {
+      return { rgb: "67,209,122", emoji: "🟢", label: micSource === "esp32_stereo" ? "ESP32 stereo" : "ESP32 mono" };
+    }
+    if (micSource === "local_fallback") {
+      return { rgb: "240,184,74", emoji: "🟡", label: "Local (ESP32 down)" };
+    }
+    return { rgb: "150,150,160", emoji: "⚪", label: "Local" };
+  }
+  function refreshMicSourceBadge() {
+    const c = vuColorTriplet();
+    micSourceBadge.textContent = `${c.emoji} Mic: ${c.label}`;
+    micSourceBadge.style.color = `rgb(${c.rgb})`;
+  }
+  refreshMicSourceBadge();
+
   function drawVuMeter() {
     const dpr = window.devicePixelRatio || 1;
     const rect = vuCanvas.getBoundingClientRect();
@@ -118,13 +145,14 @@ export function mount(target) {
       const isStereo = vuChannels === 2;
       const GAP = isStereo ? 4 : 0;
       const barW = isStereo ? (w - GAP) / 2 : w;
+      const barRgb = vuColorTriplet().rgb;  // T17 fix #8 — colour by source
 
       function drawBar(x, level, peak) {
-        ctx.fillStyle = "rgba(67,209,122,0.10)";
+        ctx.fillStyle = `rgba(${barRgb},0.10)`;
         ctx.fillRect(Math.round(x), h - 2, Math.round(barW), 2);
         const newPeak = Math.max(level, peak * 0.90);
         const bh = Math.max(1, newPeak * (h - 4));
-        ctx.fillStyle = `rgba(67,209,122,${0.35 + newPeak * 0.65})`;
+        ctx.fillStyle = `rgba(${barRgb},${0.35 + newPeak * 0.65})`;
         ctx.fillRect(Math.round(x), Math.round(h - 2 - bh), Math.round(barW), Math.round(bh));
         return newPeak;
       }
@@ -133,7 +161,7 @@ export function mount(target) {
         vuPeakL = drawBar(0, vuLevelL, vuPeakL);
         vuPeakR = drawBar(barW + GAP, vuLevelR, vuPeakR);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.fillStyle = "rgba(67,209,122,0.45)";
+        ctx.fillStyle = `rgba(${barRgb},0.45)`;
         ctx.font = "9px var(--font-mono, monospace)";
         ctx.fillText("L", 2, h - 3);
         ctx.fillText("R", Math.round((barW + GAP) * dpr) + 2, h - 3);
@@ -355,6 +383,10 @@ export function mount(target) {
           el("div", { style: "flex:1; min-width:0" }, [eqCanvas]),
           vuCanvas,
         ]),
+        el("div", { style: "display:flex; align-items:center; gap:8px; margin-top:2px" }, [
+          micSourceBadge,
+          el("span", { class: "spacer" }),
+        ]),
         el("div", { style: "display:flex; align-items:center; gap:8px" }, [
           el("span", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.4" },
             "Оранжевый — порог wake-word, циан — текущий OWW-score. Настройка порога — в разделе Настройки → OWW."),
@@ -467,6 +499,12 @@ export function mount(target) {
       } else {
         vuChannels = 1;
         vuLevelMono = ev.payload?.level ?? 0;
+      }
+      // T17 fix #7 — refresh source badge live from per-event tag.
+      const incomingSource = ev.payload?.source;
+      if (incomingSource && incomingSource !== micSource) {
+        micSource = incomingSource;
+        refreshMicSourceBadge();
       }
     } else if (ev.type === "scene_updated") {
       const text = ev.payload?.text || ev.payload?.summary || "";
