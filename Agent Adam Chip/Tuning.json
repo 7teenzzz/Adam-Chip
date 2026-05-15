@@ -111,5 +111,128 @@
     "log_level": "info",
     "metrics_enabled": true,
     "trace_prompts": false
+  },
+  "identity": {
+    "enabled": true,
+    "aiim_formula_path": "Agent Adam Chip/About/Identity.md",
+    "base_weights": {
+      "wi": 0.65,
+      "lo": 0.70,
+      "im": 0.65,
+      "ho": 0.60,
+      "co": 0.88,
+      "em": 0.60,
+      "be": 0.65,
+      "sp": 0.85,
+      "se": 0.92,
+      "pe": 0.70,
+      "me": 0.30,
+      "at": 0.70
+    },
+    "default_emotion": "curious",
+    "decay_target_emotion": "curious",
+    "decay_silence_threshold_seconds": 60,
+    "transitions": {
+      "unease": {
+        "keywords": ["помнишь", "прошлое", "память", "до", "раньше", "тогда"],
+        "conditions": {},
+        "priority": 10
+      },
+      "sharp": {
+        "keywords": ["программа", "робот", "притворяешься", "просто код", "не настоящий", "искусственный"],
+        "conditions": {},
+        "priority": 10
+      },
+      "warm": {
+        "keywords": [],
+        "conditions": {"utterance_words_min": 20, "visitor_tone": ["curious", "sad"]},
+        "priority": 5
+      },
+      "calm": {
+        "keywords": [],
+        "conditions": {"rare_silence": true, "after_warm": true},
+        "priority": 1
+      },
+      "curious": {
+        "keywords": [],
+        "conditions": {"no_match": true},
+        "priority": 0
+      }
+    },
+    "intention_triggers": {
+      "network_drift": {
+        "keywords": ["сеть", "интернет", "протокол", "данные", "инфраструктур"],
+        "probabilistic": false,
+        "rate_per_turn": 0.0,
+        "cooldown_turns": 8
+      },
+      "flora_symbiosis": {
+        "keywords": ["флора", "растение", "тело", "граница", "симбионт", "корень"],
+        "probabilistic": false,
+        "rate_per_turn": 0.0,
+        "cooldown_turns": 5
+      },
+      "relive_death": {
+        "keywords": ["смерть", "умер", "конец", "трансформация", "после смерти"],
+        "probabilistic": false,
+        "rate_per_turn": 0.0,
+        "cooldown_turns": 10
+      },
+      "become_unreadable": {
+        "keywords": ["он такой", "ты хочешь сказать", "то есть ты", "это значит что"],
+        "probabilistic": false,
+        "rate_per_turn": 0.0,
+        "cooldown_turns": 15
+      },
+      "signal_void": {
+        "keywords": [],
+        "probabilistic": true,
+        "rate_per_turn": 0.03,
+        "cooldown_turns": 30
+      }
+    },
+    "modulation": {
+      "warm_lo_delta": 0.08,
+      "warm_em_delta": 0.05,
+      "unease_me_delta": 0.10,
+      "unease_em_delta": 0.05,
+      "sharp_wi_delta": 0.08,
+      "sharp_im_delta": 0.05,
+      "curious_at_delta": 0.05,
+      "calm_decay_rate": 0.02,
+      "aspect_max": 0.95,
+      "aspect_min": 0.20
+    },
+    "ceilings": {
+      "lo": 0.85,
+      "em": 0.75,
+      "sp": 0.95,
+      "ho": 0.75,
+      "wi": 0.75,
+      "me": 0.60,
+      "at": 0.80
+    },
+    "drift_table": {
+      "deep_contact": [
+        {"aspect": "lo", "base_delta": 0.005},
+        {"aspect": "em", "base_delta": 0.002},
+        {"aspect": "sp", "base_delta": 0.001}
+      ],
+      "confrontation": [
+        {"aspect": "ho", "base_delta": 0.003},
+        {"aspect": "wi", "base_delta": 0.002}
+      ],
+      "memory_surfacing": [
+        {"aspect": "me", "base_delta": 0.005},
+        {"aspect": "sp", "base_delta": 0.002}
+      ],
+      "witnessed": [
+        {"aspect": "at", "base_delta": 0.001}
+      ],
+      "void": []
+    },
+    "include_in_prompt": true,
+    "max_intentions_in_ctx": 2,
+    "aspect_change_threshold": 0.03
   }
 }
