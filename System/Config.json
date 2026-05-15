@@ -77,8 +77,8 @@
       "speculative": {
         "type": "ngram-mod",
         "ngram_mod_n_match": 24,
-        "ngram_mod_n_min": 48,
-        "ngram_mod_n_max": 64
+        "ngram_mod_n_min": 4,
+        "ngram_mod_n_max": 16
       }
     },
     "vlm": {
