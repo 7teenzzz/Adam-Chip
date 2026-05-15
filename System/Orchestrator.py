@@ -314,6 +314,7 @@ class VoiceLoopController:
         self._raw_is_stereo: bool = False
         self._raw_level_l: float = 0.0
         self._raw_level_r: float = 0.0
+        self._reply_noise_gate: int = int(audio_config.get("reply_noise_gate", 0))
 
     @property
     def device_in_use(self) -> bool:
@@ -693,7 +694,7 @@ class VoiceLoopController:
                     speech_ms = 0
                     silence_ms = 0
                     _was_endpointing = False
-                    if enough:
+                    if enough_speech:
                         # In local ALSA mode self._process is set; in ESP32 mode it is None.
                         _using_process = self._process is not None
                         if _using_process:
