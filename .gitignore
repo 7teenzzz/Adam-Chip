@@ -1,6 +1,8 @@
 # Claude Code local state (plans, memory, local settings) — but commit project MCP config
 .claude/*
 !.claude/settings.json
+!CLAUDE.md
+!**/CLAUDE.md
 PLAN.md
 !.planning/PLAN.md
 .mcp.json

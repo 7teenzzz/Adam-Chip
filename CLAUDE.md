@@ -44,6 +44,17 @@ See @README.md for project overview and @System/Config.json + @System/Config.sch
 - **Аудио устройства.** TTS output = `plughw:1,3` (HDMI, card 1 HDA NVIDIA). Mic input = `pulse` (PulseAudio → WebCamera card 3). hw:1,0 (Jetson APE I2S) физически не работает — не отдаёт PCM данные. hw:0,0 для input — неправильно.
 - **ESP32 IP.** Статический IP = `192.168.0.171`.
 
+## Autonomous run — commit protocol
+
+**Правило действует в bypass/autonomous режиме (несколько фаз без участия пользователя):**
+
+После каждой успешно завершённой GSD фазы → вызвать `/commit-push <phase-N topic>`.
+
+- Скилл спавнит Haiku sub-agent для всех git операций (add → commit → push)
+- Sonnet не делает git-команды напрямую — только делегирует
+- Push включён по умолчанию; пропустить push если фаза помечена WIP в PLAN.md
+- Никогда не коммитить: `.env`, `PrivateConfig.h`, `*.gguf`, `data/`, `logs/`
+
 ## Never do
 
 - Не добавлять JSON/code в LLM-ответ
