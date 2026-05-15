@@ -520,13 +520,15 @@ class VoiceLoopController:
             raise RuntimeError("mic_source=esp32 requires mcu client — not configured")
         url = self._mcu.mic_stream_url()
         _session_fail_count = 0
+        _STREAM_STABLE_THRESHOLD_SEC = 30.0
         while self.running:
             profile = self.esp32_mic_profile
             is_stereo = profile.endswith("stereo")
             event_log.append("esp32_mic_profile_applied", {"profile": profile})
             await self._mcu.request("POST", "/api/audio", {"profile": profile})
+            _stream_open_t = 0.0
             try:
-                resp = await asyncio.to_thread(urllib.request.urlopen, url, timeout=10)
+                resp = await asyncio.to_thread(urllib.request.urlopen, url, timeout=30)
                 event_log.append("esp32_mic_stream_opened", {"url": url, "profile": profile})
                 header = await asyncio.to_thread(resp.read, 44)
                 if len(header) < 44:
@@ -538,8 +540,7 @@ class VoiceLoopController:
                 else:
                     self._raw_is_stereo = False
                     read_fn = resp.read
-                _session_fail_count = 0
-                self._esp_mic_fail_count = 0
+                _stream_open_t = time.perf_counter()
                 await self._vad_loop(read_fn, frame_bytes)
             except asyncio.CancelledError:
                 raise
@@ -547,7 +548,18 @@ class VoiceLoopController:
                 self._raw_is_stereo = False
                 self.vad_state = "error"
                 self.last_asr_error = str(exc)
-                event_log.append("voice_loop_error", {"stage": "esp32_mic", "error": str(exc)})
+                # Reset failure counter only if the stream stayed alive long enough
+                # to count as a proven-stable session. Without this guard, every
+                # urlopen success resets the counter and the fallback threshold
+                # can never be reached under repeated short-lived stream failures.
+                stream_alive_sec = (time.perf_counter() - _stream_open_t) if _stream_open_t else 0.0
+                if stream_alive_sec > _STREAM_STABLE_THRESHOLD_SEC:
+                    _session_fail_count = 0
+                    self._esp_mic_fail_count = 0
+                event_log.append("voice_loop_error", {
+                    "stage": "esp32_mic", "error": str(exc),
+                    "stream_alive_sec": round(stream_alive_sec, 1),
+                })
                 _session_fail_count += 1
                 self._esp_mic_fail_count += 1
                 if _session_fail_count >= self.esp_mic_fail_threshold:
