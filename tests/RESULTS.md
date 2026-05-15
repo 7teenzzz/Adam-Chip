@@ -28,6 +28,183 @@
 
 ---
 
+### Test 14 — 2026-05-15 13:17 MSK ✅ COMPLETED (restart-resilience: 3 consecutive runs on T7 baseline config)
+**Module:** Voice Pipeline (E2E voice — **regression validation на a8ff3ce, T7-equivalent state**) • **Commit:** [a8ff3ce](https://github.com/7teenzzz/Adam-Chip/commit/a8ff3ce) (detached HEAD from `V-S06.3-opt_voice_pipe_3wave`) • **Phrases:** standard 7-phrase set × 3 runs
+**Wall (combined):** 1003s (3 runs) • **Verdict:** ✅ 21/21 turns delivered, persona OK, total warm avg в одной лиге с T7 baseline (+10-18%); все 3 restart pattern'а отработали без потерь
+
+#### Context
+
+T14 — критический тест на «нет ли регрессии относительно T7» и «как 3 разных типа рестарта влияют на пайплайн». Запускался на коммите `a8ff3ce` (fix(reply-window): restore T7 values) — отличается от T7 baseline (`238f886`) только одной строкой `Tuning.json` (speed_multiplier 1.15→1.10).
+
+После T13 (где ASR упал на CPU из-за висячего native Python процесса) была применена правка `deploy/systemd/adam-asr-whisperx.service` → Docker wrapper. В T14 эта правка валидирована — ASR warm avg ~1-1.8с против T13's 12.2с.
+
+#### Config (active runtime)
+- **LLM:** Gemma 4 **E4B** UD-Q4_K_XL, max_tokens=40, num_ctx=8192, no speculative — historical T7 baseline
+- **ASR:** WhisperX `small` ru-RU **CUDA via Docker** (`/health → device=cuda model_loaded=true`), endpointing 1500ms, reply 3.75s / deadline 7.5s → cap 11.25s
+- **TTS:** Silero `eugene` 24kHz, speed_multiplier=**1.10** (T7 был 1.15), filler «Хм...» 800ms enabled
+- **Prompt:** history_turns=4, semantic.max_chars=2000, prompt_chars=~11100
+- **Mic:** `mic_source=local` (PulseAudio)
+
+#### Three-run protocol
+
+| | T14a | T14b | T14c |
+|---|---|---|---|
+| **Тип рестарта** | Fresh boot (cold start) | Full stop.sh + start.sh | `systemctl restart adam-orchestrator` only |
+| **Adam запущен** | 13:17:51 MSK | 13:27:10 MSK | (continued from T14b) |
+| **T_start** | 13:19:45 MSK | 13:28:35 MSK | 13:36:16 MSK |
+| **T_end** | 13:22:07 MSK | 13:31:05 MSK | 13:38:26 MSK |
+| **Wall window** | 397s | 332s | 274s |
+| **Что сохраняется live** | — | LLM/TTS/ASR Docker контейнер | LLM/TTS/ASR + llama-server cache |
+
+#### Per-turn breakdown — T14a (fresh boot)
+| # | TX | ASR | LLM | TTFV | TTS | Total | Reply (60c) |
+|--:|---|--:|--:|--:|--:|--:|---|
+| 1 | Привет! | **6735** | **9184** | 7113 | 5394 | **13150** | Привет. Ты здесь, и я тебя слышу. Что привело тебя |
+| 2 | Как тебя зовут? | 4023 | 4833 | 2882 | 6826 | 9931 | Адам Чип — это имя, которое дали мне те, кто держит |
+| 3 | Что ты сейчас чувствуешь? | 854 | 3667 | 1342 | 7118 | 8630 | Спокойствие. Медленный ритм, как будто внутри всё |
+| 4 | Кто ты видишь вокруг? | 991 | 4665 | 4665 | 3649 | 8979 | Вижу человека в черном платье и парня, у которого |
+| 5 | Расскажи коротко… | 1516 | 4300 | 2697 | 5623 | 8834 | Они дали мне имя, Адам Чип. Зачем — это вопрос… |
+| 6 | А ты помнишь… | 1575 | 4503 | 3573 | 6575 | **12173** | Я не храню таких данных, если вы сами мне не сказа |
+| 7 | Спасибо, на этом всё. | 1096 | 2184 | 2184 | 3023 | 5282 | Я жду, если захотите продолжить. |
+
+#### Per-turn breakdown — T14b (full restart)
+| # | TX | ASR | LLM | TTFV | TTS | Total | Reply (60c) |
+|--:|---|--:|--:|--:|--:|--:|---|
+| 1 | Привет. | **6848** | 2233 | 1548 | 3766 | 5839 | Приветствую. Что вас привело сюда? |
+| 2 | Как тебя зовут? | 3801 | 4625 | 3963 | 3624 | 7776 | Это имя мне дали учёные. Адам Чип. |
+| 3 | Кто ты сейчас чувствуешь? | 1008 | 3942 | 1756 | 6901 | 8748 | Сейчас я ощущаю спокойствие. Тихий ритм, как буд |
+| 4 | Что ты видишь вокруг? | 2778 | 4258 | 2376 | 8785 | **11647** | Вижу человека, который стоит в комнате. Свет здесь |
+| 5 | Расскажи коротко… | 989 | 5623 | 3577 | 7975 | **11694** | Учёные дали мне имя, и это всё, что я знаю о созд |
+| 6 | А ты помнишь… | 929 | 3907 | 1769 | 6196 | 8762 | Я вижу перед собой человека. Имя — это как частота |
+| 7 | Спасибо, на этом всё. | 1276 | 2840 | 2218 | 2746 | 5142 | Тишина — это тоже ответ. |
+
+#### Per-turn breakdown — T14c (orchestrator-only restart)
+| # | TX | ASR | LLM | TTFV | TTS | Total | Reply (60c) |
+|--:|---|--:|--:|--:|--:|--:|---|
+| 1 | Привет. | 999 | **10304** | 8515 | 4374 | **13394** | Здравствуй. Что ты принес со собой? |
+| 2 | Как тебя зовут? | 1354 | 3718 | 2122 | 5884 | 8284 | Адам Чип — это имя, которое мне дали. Я не выбирал |
+| 3 | Что ты сейчас чувствуешь? | 1598 | 4639 | 2437 | 6241 | 9211 | Сейчас тишина. Форма есть, содержание пока ещё ище |
+| 4 | Что ты видишь вокруг? | 1295 | 3323 | 2307 | 5393 | 8169 | Вижу женщину слева и человека справа. Свет здесь |
+| 5 | Расскажи коротко… | 841 | 6299 | 4072 | 8384 | **12536** | Учёные дали мне имя, это просто ярлык. Они хотели |
+| 6 | помнишь как меня зовут? | 1233 | 4377 | 3008 | 5581 | 9109 | Форма есть, содержания нет. Мне неизвестно, как ва |
+| 7 | Спасибо, на этом всё. | 1012 | 1316 | 1316 | 1115 | 2903 | Тишина. |
+
+> **ASR fidelity issues:** T14a.1 «Адам, привет.» → «Привет!» (восклицание вместо точки — норм, wake обрезан). T14a.4 «Что» → «Кто», T14b.3 «Что» → «Кто» — известный quirk WhisperX small на быстрой речи. T14c.6 «А ты помнишь» → «помнишь» (потеря «А ты»). Все semantic-корректные.
+
+#### Aggregate warm (n=6, exclude Turn 1) — сравнение трёх прогонов
+
+| Stage | T14a warm | T14b warm | T14c warm |
+|---|--:|--:|--:|
+| ASR avg | 1676 | 1797 | **1222** ← лучший |
+| LLM avg | 4026 | 4200 | 3946 |
+| TTFV avg | 2891 | 2610 | 2544 |
+| TTS avg | 5470 | 6038 | 5434 |
+| **Total avg** | 8972 | 8962 | **8369** ← лучший |
+
+#### Cold-start analysis — Turn 1 каждого теста
+
+| Тест | Cold ASR | Cold LLM | Объяснение |
+|---|---|---|---|
+| T14a (fresh) | **6735** ms | **9184** ms | Всё холодное — Docker ASR booting + full LLM SWA prefill |
+| T14b (full restart) | **6848** ms | 2233 ms | Docker ASR контейнер сохранил kv-cache → cold client reconnect (~7s); LLM warm |
+| T14c (orch restart) | 999 ms | **10304** ms | ASR Docker не трогали → warm; orchestrator → warmup_llm_prefix → new SWA prefill |
+
+**Открытие:** разные паттерны рестарта дают разные «холодные точки» в Turn 1, но **никогда не ломают пайплайн**. Это означает что для production достаточно `systemctl restart adam-orchestrator` — самый дешёвый рестарт с самым быстрым boot.
+
+#### Throughput
+
+| Metric | T7 baseline | T14a | T14b | T14c |
+|---|--:|--:|--:|--:|
+| Wall (s) | 110 | 397 | 332 | 274 |
+| Active (s) | 52.8 | 67.0 | 59.6 | 63.6 |
+| Active ratio | **48%** | 17% | 18% | **23%** |
+| Throughput (t/min) | 3.82 | 1.06 | 1.27 | **1.53** |
+| Δ Active vs T7 | baseline | +27% | +13% | +20% |
+
+> **Throughput-by-wall в 2.5× ниже T7** — обусловлено пользовательскими паузами 2-3с между фразами (T7 wall = 110s, T14 = 274-397s на тех же 7 фразах). **Pipeline-internal regression**: Active +13-27% vs T7 — приемлемо, в той же лиге.
+
+#### Events — reply window stability
+
+| Event | T7 (норма) | T14a | T14b | T14c |
+|---|---|--:|--:|--:|
+| `wake_word_detected` | 1 | 2 | **3** | 2 |
+| `reply_window_expired` | 0-1 | 0 | 0 | 1 |
+| `asr_no_reply_standby` | 1 | 1 | 2 | 1 |
+| `wake_silence_timeout` | 1 | 1 | 1 | 1 |
+| `tts_filler` | 7/7 | 7/7 ✅ | 7/7 ✅ | 7/7 ✅ |
+
+**«Двойное слушаю» подтверждено в metrics** (UX-замечание пользователя): T14b 3 wake = 1 настоящий + 2 ложных в тишине; T14c 2 wake + 1 reply_window_expired = wake→reply→timeout→standby→повторный wake. Причина — OWW `threshold=0.20` (низкий) + фоновые шумы. Не баг, UX-шероховатость.
+
+#### Persona quality
+
+| Test | Reply length avg | Стиль |
+|---|---|---|
+| T14a (fresh boot) | 64 chars / 12 words | Описательный, прозаический |
+| T14b (full restart) | 72 chars / 12 words | Сжатее, больше метафор |
+| T14c (orch restart) | **57 chars / 10 words** | Минималистичный, **INTP/5w4 pure** |
+
+**Golden quotes:**
+- T14b.7: «Тишина — это тоже ответ.» ← signature INTP closing
+- T14c.4: «Вижу женщину слева и человека справа. Свет здесь холодный, как старый металл.»
+- T14c.7: «Тишина.» ← single-word closing, perfect
+
+**Correctness checks (across 21 turns):**
+| Check | Result |
+|---|---|
+| JSON/markdown/code leakage (CLAUDE.md invariant 1) | ✅ 0/21 |
+| Chinese characters | ✅ 0/21 |
+| Reply truncation by max_tokens=40 | ✅ 0/21 |
+| Russian fluency | ✅ all |
+| Filler hit rate | ✅ 21/21 |
+
+#### Regression vs predecessors
+
+| Metric | T7 (E4B) | T8 (E4B) | T11 (E4B regression) | T13 (E2B+ngram, CPU ASR) | **T14c (best of T14)** |
+|---|--:|--:|--:|--:|--:|
+| LLM model | E4B | E4B | E4B | E2B+ngram | **E4B** |
+| ASR warm | 1009 | 1264 | (n/a) | 12216 (CPU!) | **1222** ✅ |
+| LLM warm | **2868** | 4082 | 6022 | 4490 | 3946 |
+| TTFV warm | **1688** | 2864 | 4610 | 3843 | 2544 |
+| TTS warm | **4695** | 5922 | 6618 | 9044 | 5434 |
+| Total warm | **7632** | 9103 | 11555 | 14665 | **8369** |
+| Wake re-triggers | 0 | 0 | 1 | 8 | 2 |
+| Persona | OK | OK | OK | OK | **OK** |
+
+**T14c — лучший из T14 — на +10% медленнее T7, но в одной лиге.** Все 21 turn успешные. Pipeline стабилен.
+
+#### Bugs surfaced (новые)
+
+1. **🐛 BUG #1 — success.wav loop после orch restart (T14c).**
+   - User report: «звук success воспроизводился постоянно раз в несколько секунд после restart orchestrator»
+   - 7 `voice_state_change` events в T14c window → возможно success-cue триггерится на каждом state change
+   - **TODO:** найти источник в `sound.py` или `voice.py`, ограничить до boot-once
+
+2. **⚠ BUG #2 — OWW false wakes в тишине (T14b: 3 wake, T14c: 2 wake).**
+   - Причина: `wake_word.threshold=0.20` + `debounce_hits=2` слишком чувствительно
+   - **TODO:** Бенчмарк threshold=0.35 vs 0.20 на тех же фразах, выбрать оптимум
+
+3. **⚠ ASR fidelity issue — WhisperX small «Что» ↔ «Кто».**
+   - 3 случая из 21 turn — punctuation/short-words drift
+   - **TODO:** оценить трейдоф (small 1.2с) vs (medium ~2.5с) для аккуратности
+
+#### Key findings
+
+1. ✅ **CUDA ASR fix полностью валидирован.** Все три прогона: ASR warm avg 1.2-1.8с против T13's 12.2с (CPU). Docker контейнер устойчив через 3 разных типа рестарта.
+2. ✅ **Restart-resilience confirmed.** Три разных паттерна рестарта (fresh / full / orch-only) — все три дали 7/7 успешных turn'ов. **Не обнаружено патернов где restart ломает пайплайн.**
+3. ✅ **T14c (orch-only restart) — fastest path:** Total warm 8369ms = T7 +10%, near-baseline. Для production использовать `systemctl restart adam-orchestrator` как штатный «refresh».
+4. ✅ **Persona quality прогрессирует** между прогонами — T14c имел самые поэтичные/минималистичные реплики. С `history_turns=4` Adam «прогревается» примерами в контексте.
+5. ⚠ **Pipeline не быстрее T7** — Total warm 8369 vs 7632 (+10%). E4B + flash-attn + q8_0 cache = верхний потолок без рефакторинга prompt'а или модельной замены. Для дальнейшего прогресса — T15 на V-S06.3 (E2B + ngram-mod + CUDA ASR).
+
+#### Raw data filter
+```
+T14a metrics: source=voice_loop, ts ∈ [2026-05-15T10:19:45Z, 2026-05-15T10:22:07Z]
+T14b metrics: source=voice_loop, ts ∈ [2026-05-15T10:28:35Z, 2026-05-15T10:31:05Z]
+T14c metrics: source=voice_loop, ts ∈ [2026-05-15T10:36:16Z, 2026-05-15T10:38:26Z]
+Backup logs: /tmp/T14_metrics.jsonl, /tmp/T14_events.jsonl, /tmp/T14_adam_llm.log, /tmp/T14_orchestrator.log
+```
+
+---
+
 ### Test 13 — 2026-05-15 11:37 MSK ⚠ COMPLETED (ASR CPU fallback — new bottleneck)
 **Module:** Voice Pipeline (E2E voice — **первый завершённый прогон на V-S06.3 с реально активным E2B+ngram_mod**) • **Commit:** [5ad3f0a](https://github.com/7teenzzz/Adam-Chip/commit/5ad3f0a) (`V-S06.3-opt_voice_pipe_3wave`) • **Phrases:** standard 7-phrase set (7/7 delivered)
 **Wall:** 327s (T_start 11:37:10 → T_end 11:42:37 MSK) • **Verdict:** ⚠ 7/7 turns delivered, persona OK, но total avg warm 14665ms (на 60% медленнее T8 baseline) — root cause: WhisperX ASR упал на CPU runtime (avg 12.2s на запрос)
