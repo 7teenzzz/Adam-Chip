@@ -2923,13 +2923,11 @@ esp_err_t systemStreamRestartHandler(httpd_req_t *req) {
 esp_err_t systemInfoHandler(httpd_req_t *req) {
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-  portENTER_CRITICAL(&gRuntimeStateMux);
-  const uint32_t up = gRuntimeState.uptimeMs;
-  portEXIT_CRITICAL(&gRuntimeStateMux);
+  const uint32_t up_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000ULL);
   char buf[256];
   snprintf(buf, sizeof(buf),
     "{\"uptime_ms\":%lu,\"heap_free\":%lu,\"heap_min_free\":%lu,\"psram_free\":%lu}",
-    (unsigned long)up,
+    (unsigned long)up_ms,
     (unsigned long)esp_get_free_heap_size(),
     (unsigned long)esp_get_minimum_free_heap_size(),
     (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
@@ -2968,7 +2966,7 @@ bool startWebServer() {
 
   httpd_config_t controlConfig = HTTPD_DEFAULT_CONFIG();
   controlConfig.server_port = kHttpPort;
-  controlConfig.max_uri_handlers = 40;
+  controlConfig.max_uri_handlers = 48;
   controlConfig.max_open_sockets = 4;
   controlConfig.lru_purge_enable = true;
   controlConfig.stack_size = 8192;
