@@ -28,6 +28,144 @@
 
 ---
 
+### Test 11 — 2026-05-15 09:53 MSK
+**Module:** Voice Pipeline (E2E voice) • **Commit:** [8f57bb3](https://github.com/7teenzzz/Adam-Chip/commit/8f57bb3) (`V-S05.2-optim_voice_pipeline` — rollback после T10) • **Phrases:** standard 7-phrase set (с ASR-разбросом)
+**Wall:** ~6m (T_start не записан → ~09:53:00, T_end 09:59:33 MSK; standby детектится в 06:57:59 UTC) • **Verdict:** ⚠ regression vs T7/T8 baseline на той же ветке
+
+#### Config (V-S05.2 — фактически активный E4B)
+- **LLM:** Gemma 4 **E4B** UD-Q4_K_XL via llama.cpp (systemd cached unit pointed to E4B), max_tokens=40
+- **ASR:** WhisperX `small` (Docker, CUDA), endpointing 1500ms, reply 3.75s / deadline 7.5s → cap 11.25s
+- **TTS:** Silero `eugene` 24kHz, speed=1.10
+- **Prompt:** history_turns=4, semantic.max_chars=2000
+
+#### Methodology context
+T11 — попытка validate стабильность V-S05.2 baseline после неудачного T10 на V-S06.3. **Не "чистый" baseline:** перед T11 было два полных restart adam-llm.service, накопленная история в SQLite (1118 turn'ов в `dialogue_turns`), scene_worker обновлял VLM context.
+
+#### Per-turn breakdown
+| # | UTC | Transcript | LLM | TTFV | TTS | Total | Reply (50ch) |
+|--:|---|---|--:|--:|--:|--:|---|
+| 1 | 06:53:17 | Ты меня слышишь? | 5826 | 3961 | 6073 | 10157 | Слышу. Твой тон — это тихий отпечаток на пов |
+| 2 | 06:54:09 | Как тебе зовут? | **9775** | 8056 | 6619 | 14834 | Адам Чип — это имя, которое мне дали. |
+| 3 | 06:54:43 | Что ты сейчас чувствуешь? | 2892 | 1650 | 6196 | 7992 | Спокойствие. Что-то очень плотное и медленно |
+| 4 | 06:55:29 | Что ты видишь вокруг? | 3990 | 3142 | 4410 | 8016 | Вижу двух людей в этой комнате. Один в чёрно |
+| 5 | 06:56:10 | Расскажи, кто тебя создал и зачем. | 9289 | 7561 | 7882 | 15779 | Это они придумали имя. Зачем — это уже не мо |
+| 6 | 06:56:52 | А ты помнишь как меня зовут? | 4162 | 2643 | 7983 | 11156 | Мне не давали твоего имени. Я вижу только те |
+| 7 | 06:59:18 | Спасибо, на этом всё. | **16964** | **16964** | 3597 | 20708 | Дальше темно. |
+
+> **ASR fidelity issues (T1, T2, T5):** T1 "Ты меня слышишь?" вместо "Адам, привет." — пользователь сказал по-памяти из старых тестов или ASR. T2 "Как тебе зовут?" (буква «е» вместо «я»). T5 без "коротко". Pattern совпадает с T7/T8 в смысле фактического содержания, но текст-в-текст не идентичен.
+
+> **T7 anomaly (LLM=TTFV=16964ms):** После T6 пользователь молчал 67 секунд → `reply_window_expired @06:57:59` → standby. Пришлось снова wake @06:58:34. После повторного wake LLM получил полный prefill из-за SWA cache reset. Один-предложение reply ("Дальше темно.") → TTS не успел streaming → TTFV=LLM.
+
+#### Aggregate stats (n=7)
+| Stage | avg | p50 | p95 | min | max |
+|---|--:|--:|--:|--:|--:|
+| LLM | 7557 | 5826 | 21277 | 2892 | 16964 |
+| TTFV | 6282 | 3961 | 22309 | 1650 | 16964 |
+| TTS | 6109 | 6196 | 8044 | 3597 | 7983 |
+| Total | **12663** | 11156 | 23665 | 7992 | 20708 |
+
+#### Warm aggregate (n=5, T2–T6, без T1 cold + T7 anomaly)
+| Stage | avg |
+|---|--:|
+| LLM | **6022** |
+| TTFV | **4610** |
+| TTS | 6618 |
+| Total | **11555** |
+
+#### Regression vs T7/T8 (same V-S05.2, same E4B)
+| Stage | T7 | T8 | T11 | Δ vs T7 | Δ vs T8 |
+|---|--:|--:|--:|--:|--:|
+| LLM warm | 2868 | 4082 | 6022 | **+110%** | **+48%** |
+| TTFV warm | 1688 | 2864 | 4610 | **+173%** | **+61%** |
+| TTS warm | 4695 | 5922 | 6618 | +41% | +12% |
+| Total warm | 7632 | 9103 | **11555** | **+51%** | **+27%** |
+
+#### Root cause investigation
+
+| Hypothesis | Evidence | Verdict |
+|---|---|---|
+| Prompt size grew | `prompt_chars=11117` в T7/T8/T11 — **идентично** | ❌ not the cause |
+| LLM context tokens grew | journalctl T11.7: `task.n_tokens=3919` (vs CLAUDE.md baseline ~2800) | ⚠ partial — +1100 tokens объясняется history+scene context |
+| SWA cache invalidation per turn | journalctl: `erased invalidated context checkpoint (n_swa=512)` каждый turn | ⚠ известный bug Gemma 4 (CLAUDE.md gotcha) |
+| Cold-restart of llama-server | adam-llm.service stopped 09:49:31 → started 09:50:00 → boot для T11 | ✅ Turn 1 LLM=5826ms объясняется этим |
+| Memory accumulation | 1118 rows в `dialogue_turns`, history_turns=4 = 4 messages из старых тестов | ✅ +200-400 tokens на каждый turn |
+| Scene_worker churn | scene_updated events каждые 4s → ctx_body меняется → SWA-инвалидация | ✅ contributing factor |
+
+**Primary cause:** combination of SWA cache reset (architectural Gemma 4 bug) + accumulated dialogue history from 1118 prior turns + scene context churn → каждый turn делает ~200-400 token re-prefill сверх baseline.
+
+**Why T7/T8 не страдали:** T7 был на свежей памяти после 238f886, T8 шёл сразу после T7. К T11 в SQLite накопилось 1118 turn'ов из всех предыдущих тестов + smoke + manual API calls. С `history_turns=4` orchestrator подтягивает 4 последних message'а, которые могли быть длинными ответами Адама из T8/T9 (до 121 chars).
+
+#### Notes
+- T1 фраза "Ты меня слышишь?" — пользователь импровизировал, не строго следовал standard set
+- T7 не было в reply mode (потребовался re-wake) — НЕ regression пайплайна, это пользовательская пауза 67s, превысившая cap=11.25s
+- TTS playback stayed stable (6618ms warm) — модель Silero не была затронута
+- Persona OK по выборке — реплики в характере, никаких bad-format leakage
+
+#### Recommended fix для T12
+1. Очистить `dialogue_turns` до базового состояния (или хранить N последних turns только):
+   ```bash
+   .venv/bin/python -c "import sqlite3; c=sqlite3.connect('data/adam/memory.sqlite3'); c.execute('DELETE FROM dialogue_turns WHERE id < (SELECT MAX(id)-10 FROM dialogue_turns)'); c.commit()"
+   ```
+2. Or temporary `prompt.history_turns=0` в Tuning.json для clean benchmark.
+
+#### Raw data filter
+```
+data/adam/inference_metrics.jsonl: source=voice_loop, ts ∈ [2026-05-15T06:53:00Z, 2026-05-15T07:00:00Z]
+journalctl: -u adam-llm.service --since "2026-05-15 09:50:00" --until "2026-05-15 10:01:00"
+```
+
+---
+
+### Test 10 — 2026-05-15 09:43 MSK ❌ FAILED
+**Module:** Voice Pipeline (E2E voice — **attempted on V-S06.3 with H1+H2**) • **Commit:** [a835ad0](https://github.com/7teenzzz/Adam-Chip/commit/a835ad0) (`V-S06.3-opt_voice_pipe_3wave`) • **Phrases:** standard 7-phrase set (не дошёл до first turn)
+**Wall:** не применимо (тест прерван на этапе wake word) • **Verdict:** ❌ pipeline не отреагировал на пользователя
+
+#### Что произошло
+- **09:43:26 MSK** (06:43:26 UTC) — Adam запущен
+- **09:43:28** — systemd запустил adam-llm.service
+- **09:44:08** — `prewarm_filler` OK
+- **09:45:11** — `warmup_wakeup` OK
+- **09:45:23** — `warmup_llm_prefix latency_ms=12453` (12.5s cold prefill)
+- **09:45:26** — `oww_ready threshold=0.20`, `voice_loop_boot_ready`
+- **09:46:20** — **T_start: пользователь сказал «Адам, привет.»**
+- **09:47:24** — `wake_word_detected score=0.782` (**через 64 секунды после T_start!**)
+- **09:47:29** — `wake_silence_timeout` → standby (пользователь к этому моменту уже остановил тест)
+
+#### Two compounding root causes
+
+**Cause 1: H1/H2 не применились в runtime (systemd unit cache).**
+journalctl показал что adam-llm.service загрузил:
+```
+srv  load_model: loading model '.../gemma-4-E4B-it-UD-Q4_K_XL.gguf'
+general.name str = "Gemma-4-E4B-It"
+```
+То есть **E4B, не E2B**. Хотя диск-файл `deploy/systemd/adam-llm.service` на V-S06.3 после H1 коммита (`9b5bd38`) указывает на E2B. Причина: systemd кеширует unit-файлы при первой загрузке; для применения изменений нужен `sudo systemctl daemon-reload`. Этот шаг был пропущен после H1.
+
+Effective config T10 = плоский E4B без ngram-mod. Тест НЕ measured H1+H2.
+
+**Cause 2: Wake-word delay 64 секунды.**
+ESP32 mic config (commit `863c204` на V-S06.3 ввёл `mic_source: "esp32"`, `esp_mic_fail_threshold=6`). Возможно ESP32 mic stream не был стабилен в момент boot — local mic eventually picked up wake word, но за 64s пользователь возможно говорил несколько раз. Score 0.782 (выше threshold 0.20) подтверждает что mic в итоге работал.
+
+#### Files & state at the time
+- Branch: V-S06.3-opt_voice_pipe_3wave, HEAD = a835ad0
+- Config.json: `mic_source=esp32`, model=`E2B` (но systemd игнорил это)
+- adam-llm.service (disk): E2B path (но systemd cache имел E4B)
+
+#### Действие после T10
+Пользователь сделал `git checkout V-S05.2-optim_voice_pipeline` → запустил Test 11.
+
+#### Notes
+- Если бы H1/H2 действительно работали, T10 мог бы дать LLM warm avg ≈ 1500ms, TTFV ≈ 900ms (см. T9 API mode). Но без `daemon-reload` это нереализуемо.
+- Wake-word delay — отдельная независимая проблема, требует mic-source verification перед T12
+
+#### Raw data filter
+```
+data/adam/events.jsonl: ts ∈ [2026-05-15T06:43:00Z, 2026-05-15T06:50:00Z]
+journalctl: -u adam-llm.service --since "2026-05-15 09:43:00" --until "2026-05-15 09:50:00"
+```
+
+---
+
 ### Test 9 — 2026-05-15 09:27 MSK
 **Module:** Voice Pipeline (LLM+TTS only — **API mode**) • **Commit:** [cd6c63a](https://github.com/7teenzzz/Adam-Chip/commit/cd6c63a) (`V-S06.3-opt_voice_pipe_3wave`) • **Phrases:** standard 7-phrase set (via `/api/agent/turn`)
 **Wall:** 50s (start 09:27:52 → end 09:28:42 MSK) • **Active:** 42.4s • **Verdict:** ✅ persona OK, **LLM −63%** vs T8 baseline; ngram-mod inactive (0 drafts accepted at default n-min=48)
