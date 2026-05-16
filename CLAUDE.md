@@ -15,9 +15,9 @@ See @README.md for project overview and @System/Config.json + @System/Config.sch
 | 2 — Status | [.planning/STATE.md](.planning/STATE.md) | Что сейчас активно, текущая фаза |
 | 3 — Plan | [ROADMAP.md](.planning/ROADMAP.md) · [REQUIREMENTS.md](.planning/REQUIREMENTS.md) | История фаз, бэклог |
 | 4 — Detail | `.planning/phases/NN-*/NN-SUMMARY.md` | Итоги конкретных фаз |
-| 4+ — Code graph | [graphify-out/GRAPH_REPORT.md](graphify-out/GRAPH_REPORT.md) | Граф System/adam/ + Orchestrator + Speech (автогенерация) |
-| 4+ — Docs graph | [graphify-out-raw/GRAPH_REPORT.md](graphify-out-raw/GRAPH_REPORT.md) | Граф внешних документов: Silero, Jetson AI Lab |
-| 4+ — Persona graph | [graphify-out-persona/GRAPH_REPORT.md](graphify-out-persona/GRAPH_REPORT.md) | Граф персонажа Адам Чип: AIIM, Memory, Identity |
+| 4+ — Code graph | [Knowledge-graphs/code/GRAPH_REPORT.md](Knowledge-graphs/code/GRAPH_REPORT.md) | Граф System/adam/ + Orchestrator + Speech (автогенерация) |
+| 4+ — Docs graph | [Knowledge-graphs/docs/GRAPH_REPORT.md](Knowledge-graphs/docs/GRAPH_REPORT.md) | Граф внешних документов: Silero, Jetson AI Lab |
+| 4+ — Persona graph | [Knowledge-graphs/persona/GRAPH_REPORT.md](Knowledge-graphs/persona/GRAPH_REPORT.md) | Граф персонажа Адам Чип: AIIM, Memory, Identity |
 
 Числовые параметры — только в `System/Config.json` и `System/Config.schema.json`.
 

@@ -68,7 +68,7 @@
 
 ### Graph Queries — справка
 
-Граф доступен после `/graphify System/ --mode deep` (строит `graphify-out/graph.json`).
+Граф доступен после `/graphify System/ --mode deep` (строит `Knowledge-graphs/code/graph.json`).
 
 **MCP режим:** если MCP сервер активен (`graphify` в `~/.claude/settings.json`), граф доступен как инструмент в каждой сессии без явного вызова скилла — агент сам вызывает `query_graph`, `shortest_path`, `god_nodes` и др.
 
@@ -85,9 +85,9 @@
 При вопросах, затрагивающих несколько графов — запрашивать последовательно:
 
 ```text
-1. query_graph("...")           → graphify-out      (System/adam/ код)
-2. /graphify query "..."        → graphify-out-persona  (персона, AIIM, Memory Schema)
-3. /graphify query "..."        → graphify-out-esp32    (прошивка ESP32)
+1. query_graph("...")           → Knowledge-graphs/code/         (System/adam/ код)
+2. /graphify query "..."        → Knowledge-graphs/persona/      (персона, AIIM, Memory Schema)
+3. /graphify query "..."        → Knowledge-graphs/esp32/        (прошивка ESP32)
 Сравнить: концепт есть в персоне, но нет в коде → gap для следующей фазы
 ```
 

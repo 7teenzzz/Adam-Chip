@@ -16,9 +16,9 @@
 | 2 | `diploma/Diploma.md` | Полный текст диплома (Docling output) |
 | 3 | `diploma/chapters/` | Диплом, разбитый по главам |
 | 4 | `diploma/project-analysis/` | Архитектурная карта (output Stage 1) |
-| 5 | `graphify-out/GRAPH_REPORT.md` | Граф кодовой базы System/ (646 nodes) |
-| 6 | `diploma/graphify-out/GRAPH_REPORT.md` | Граф теоретических концептов диплома |
-| 7 | `graphify-out-persona/GRAPH_REPORT.md` | Граф персонажа: Identity, AIIM, Memory |
+| 5 | `Knowledge-graphs/code/GRAPH_REPORT.md` | Граф кодовой базы System/ (646 nodes) |
+| 6 | `Knowledge-graphs/diploma-theory/GRAPH_REPORT.md` | Граф теоретических концептов диплома |
+| 7 | `Knowledge-graphs/persona/GRAPH_REPORT.md` | Граф персонажа: Identity, AIIM, Memory |
 
 Файлы 5–7 — query-ready. Используй `/graphify query "<концепт>"` для поиска runtime-evidence перед верификацией.
 
@@ -33,7 +33,7 @@ Input:   diploma/chapters/*.md  (или diploma/Diploma.md целиком)
 Промт:   diploma/01_diploma_to_architecture.md
 Output:  diploma/project-analysis/
 Граф:    /graphify diploma/project-analysis/ --mode deep
-         → diploma/graphify-out/
+         → Knowledge-graphs/diploma-theory/
 ```
 
 Цель: извлечь скрытую инженерную архитектуру из теоретического текста. Каждый концепт → архитектурное требование.
@@ -42,9 +42,9 @@ Output:  diploma/project-analysis/
 
 ```text
 Input:   diploma/project-analysis/
-         + graphify-out/graph.json      (кодовый граф)
-         + graphify-out-persona/        (персонажный граф)
-         + diploma/graphify-out/        (диплом-граф)
+         + Knowledge-graphs/code/graph.json      (кодовый граф)
+         + Knowledge-graphs/persona/             (персонажный граф)
+         + Knowledge-graphs/diploma-theory/      (диплом-граф)
 Промт:   diploma/02_code_to_diploma_verification.md
 Output:  diploma/project-verification/
 ```
@@ -64,11 +64,11 @@ Output:  diploma/chapter-3/*.md
 
 | Граф | Путь | God-nodes |
 | --- | --- | --- |
-| Код System/ | `graphify-out/graph.json` | VoiceLoopController (42), EpisodicMemory (29), MCUClient (25) |
-| Персонаж | `graphify-out-persona/graph.json` | Identity, AIIM, TuningStore |
-| Диплом-теория | `diploma/graphify-out/graph.json` | строится после Stage 1 |
+| Код System/ | `Knowledge-graphs/code/graph.json` | VoiceLoopController (42), EpisodicMemory (29), MCUClient (25) |
+| Персонаж | `Knowledge-graphs/persona/graph.json` | Identity, AIIM, TuningStore |
+| Диплом-теория | `Knowledge-graphs/diploma-theory/graph.json` | строится после Stage 1 |
 
-Для поиска runtime-evidence: `/graphify query "<концепт>"` работает против `graphify-out/`.
+Для поиска runtime-evidence: `/graphify query "<концепт>"` работает против `Knowledge-graphs/code/`.
 
 ---
 
@@ -97,7 +97,7 @@ Output:  diploma/chapter-3/*.md
 | Docling output | `diploma/Diploma.md` |
 | Главы | `diploma/chapters/` |
 | Stage 1 output | `diploma/project-analysis/` |
-| Stage 1 граф | `diploma/graphify-out/` |
+| Stage 1 граф | `Knowledge-graphs/diploma-theory/` |
 | Stage 2 output | `diploma/project-verification/` |
 | Глава 3 | `diploma/chapter-3/` |
 
