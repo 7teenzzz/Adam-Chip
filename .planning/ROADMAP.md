@@ -200,6 +200,98 @@ Plans:
 
 ---
 
+## Phase 7: Comprehensive Diploma Analysis
+
+**Branch:** `diploma-chapter3` (работа над дипломом ведётся здесь)
+
+**Goal:** Глубокий комплексный аудит всех 4 глав диплома (ch00-ch03) на 5 измерений: соответствия, расхождения, дублирование, упущения, терминологическая стабильность. Создать структурированный отчёт с приоритизированным списком правок.
+
+**Requires:** Phase 6B завершена
+
+**Delivers:**
+
+- Перестроенный graphify-граф диплома (`Knowledge-graphs/diploma/`)
+- `STRUCTURE.md` — извлечённая структура каждой главы (4 parallel subagents)
+- `TERMINOLOGY-MATRIX.md` — карта ключевых терминов (AIIM, субъектность, квазисубъектность, агентность, идентичность, память, контекст): где введён, где используется, синонимические дрейфы
+- `DUPLICATIONS.md` — концепты, описанные несколько раз с разной формулировкой
+- `GAPS.md` — упущения: концепты, упомянутые но не раскрытые / заявленные но не доведённые
+- `XREF-AUDIT.md` — проверка cross-references внутри диплома (главы ↔ разделы ↔ источники)
+- `07-SUMMARY.md` — приоритизированная матрица: глава × проблема × серьёзность × рекомендация
+
+**Mode:** standard (full GSD cycle: discuss → plan → execute)
+
+---
+
+## Phase 8: Theory-Code Verification
+
+**Branch:** `diploma-chapter3` (анализ остаётся в дипломной ветке)
+
+**Goal:** Для каждого теоретического концепта диплома найти runtime-evidence в коде и классифицировать соответствие. Расширить начатый `diploma/ANALYSIS-THEORY-vs-CODE.md` на все 4 главы.
+
+**Requires:** Phase 7 завершена
+
+**Delivers:**
+
+- `THEORY-CODE-MATRIX.md` — полная матрица: концепт × файлы кода × классификация (FULL / PARTIAL / MISSING / EMERGENT / CONTRADICTED)
+- `CROSS-GRAPH-FINDINGS.md` — перекрёстные запросы по 3 графам (code, persona, esp32)
+- `EMERGENT-FEATURES.md` — фичи, есть в коде, но не описаны в дипломе (LeadingNoiseFilter, проактивные SceneWorker/SessionWatcher, ...)
+- `CONTRADICTIONS.md` — диплом утверждает X, код делает Y (Commander.py mood tags vs keyword matching)
+- Для каждого CONTRADICTED — решение: (A) поправить диплом, (B) поправить код, (C) задокументировать как упрощение
+- `08-SUMMARY.md` — % coverage диплома кодом
+
+**Mode:** standard (full GSD cycle, subagent: gsd-codebase-mapper)
+
+---
+
+## Phase 9: Next-Phases Planning
+
+**Branch:** `diploma-chapter3`
+
+**Goal:** На основе аудита диплома (Ф7) и матрицы соответствия (Ф8) сформировать конкретные технические фазы для следующих волн разработки. Привязать их к активным веткам.
+
+**Requires:** Phases 7, 8 завершены
+
+**Delivers:**
+
+- `CANDIDATES.md` — длинный список потенциальных фаз из Ф7+Ф8
+- `09-PRIORITIZATION.md` — матрица impact × effort × strategic value
+- `09-PHASE-DRAFTS.md` — phase drafts для топ-5-8 кандидатов в формате (Goal / Delivers / Requires / Mode)
+- Интеграция с активными ветками:
+  - `Memory-upgrade` → Phase 10C: Memory Wave 2 (Neural search)
+  - `dynamic-aiim` → Phase 10F: AIIM Dynamic (рефлексивный уровень)
+  - `VLM-upgrade` → Phase 10G: Vision Upgrade
+  - `Identity-tuning` → Phase 10H: Identity Calibration
+- `09-SUMMARY.md` — итог: 5-8 рекомендуемых фаз для добавления в Roadmap
+
+**Mode:** standard
+
+---
+
+## Phase 10: Roadmap Global Update
+
+**Branch:** `diploma-chapter3` (изменения в `.planning/` остаются в дипломной ветке до мёржа)
+
+**Goal:** Обновить ROADMAP.md и REQUIREMENTS.md с глобальной картой будущих фаз; добавить milestone-структуру; привязать активные ветки к фазам.
+
+**Requires:** Phase 9 завершена
+
+**Delivers:**
+
+- `.planning/ROADMAP.md` дополнен фазами из Ф9 (5-8 новых фаз)
+- `.planning/REQUIREMENTS.md` расширен новыми REQUIREMENTS-IDs
+- `.planning/MILESTONES.md` — группировка фаз в milestones (M1 Memory & Search, M2 AI Quality, M3 Diploma Finalization, M4 Production-ready)
+- `.planning/roadmap-visual.md` — Mermaid Gantt-chart с активными ветками и зависимостями
+- `.planning/ACTIVE.md` обновлён: каждая активная ветка получает owner phase ID, definition of done, целевую дату мёржа
+- `docs/BRANCH-template.md` обновлён: обязательное поле «Roadmap Phase: Phase N»
+- `CLAUDE.md` (root) обновлён: ссылка на ROADMAP в Reading Order
+- `docs/AGENT-PROTOCOL.md` обновлён: Branch gap триггер — «Проверь, есть ли Phase в Roadmap для текущей ветки»
+- Backlog обновлён: перенос Memory Wave 2, Proactive Speech, AIIM Dynamic, UI rebuild в актуальные фазы
+- `.planning/STATE.md` обновлён: новая активная фаза
+
+**Mode:** standard
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.
