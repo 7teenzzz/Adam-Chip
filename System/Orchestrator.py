@@ -164,6 +164,52 @@ def _apply_wav_speed(wav: bytes, speed: float) -> bytes:
     except Exception:
         return wav
 
+
+def _apply_wav_volume(wav: bytes, gain: float) -> bytes:
+    """Apply software gain (0.0..2.0) to a 16-bit PCM WAV.
+
+    Multiplies every PCM sample via ``audioop.mul``; samples outside ±32767
+    are automatically clipped. Gain ≈ 1.0 is a no-op fast path. WAV header
+    is preserved verbatim — only the contents of the "data" subchunk are
+    rewritten. Runs in O(n) over the PCM body (a few ms for a typical
+    reply WAV on Jetson).
+
+    Args:
+        wav:  Full RIFF/WAVE bytes (16-bit PCM, any sample rate, mono/stereo).
+        gain: Linear multiplier. 0.0 = silence, 1.0 = unchanged, 2.0 = +6 dB
+              with clipping on loud samples.
+
+    Returns:
+        WAV bytes with the same header and length, PCM scaled. If anything
+        looks off (bad header, missing "data" chunk, audioop fails), returns
+        the input unchanged — TTS must never go silent because of a bug here.
+    """
+    if not wav or len(wav) < 44 or gain is None:
+        return wav
+    if abs(gain - 1.0) < 0.005:
+        return wav
+    if wav[0:4] != b"RIFF" or wav[8:12] != b"WAVE":
+        return wav
+    # Find the "data" subchunk — it may not be at offset 36 if there are
+    # extra chunks (LIST/INFO/fmt extensions) between "fmt " and "data".
+    try:
+        data_marker = wav.find(b"data", 12, min(len(wav), 4096))
+        if data_marker < 0 or data_marker + 8 > len(wav):
+            return wav
+        import struct
+        pcm_size = struct.unpack("<I", wav[data_marker + 4 : data_marker + 8])[0]
+        pcm_start = data_marker + 8
+        pcm_end = min(pcm_start + pcm_size, len(wav))
+        pcm = wav[pcm_start:pcm_end]
+        if not pcm:
+            return wav
+        scaled = audioop.mul(pcm, 2, float(gain))
+        out = bytearray(wav)
+        out[pcm_start:pcm_end] = scaled
+        return bytes(out)
+    except Exception:
+        return wav
+
 _NAME_INTRO_RE = re.compile(
     r"\b(?:меня\s+зовут|я\s+(?:это\s+)?|зовут\s+меня)\s+"
     r"([А-ЯЁA-Z][а-яёa-z\-]{1,30}(?:\s+[А-ЯЁA-Z][а-яёa-z\-]{1,30})?)\b",
@@ -2594,6 +2640,12 @@ async def _stream_llm_and_speak(
         _playback_speed = float(tuning_store.current().voice.speed_multiplier)
     except Exception:
         _playback_speed = 1.0
+    # Snapshot Adam-specific TTS volume (software gain). Applied to every WAV
+    # chunk before playback — independent of system / PulseAudio master volume.
+    try:
+        _playback_volume = float(tuning_store.current().voice.volume)
+    except Exception:
+        _playback_volume = 1.0
 
     async def _producer() -> None:
         buf = ""
@@ -2686,6 +2738,9 @@ async def _stream_llm_and_speak(
         try:
             # N6: check pre-warmed cache first (populated by _prewarm_filler at boot).
             # Cache key matches (phrase, speed). Miss → fall back to on-demand synth.
+            # Volume is NOT in the cache key: it's applied on retrieval below so
+            # changing the UI volume slider takes effect on the next turn without
+            # invalidating the cache.
             cache_key = (phrase, _playback_speed)
             wav = _FILLER_WAV_CACHE.get(cache_key)
             if wav is None:
@@ -2694,6 +2749,8 @@ async def _stream_llm_and_speak(
                     wav = _apply_wav_speed(wav, _playback_speed)
                     # Store for future turns (best-effort, no lock — single-writer loop).
                     _FILLER_WAV_CACHE[cache_key] = wav
+            if wav is not None:
+                wav = _apply_wav_volume(wav, _playback_volume)
             # Wait until either delay elapses OR real TTS has already started.
             try:
                 await asyncio.wait_for(asyncio.sleep(delay_s), timeout=delay_s + 0.1)
@@ -2744,6 +2801,7 @@ async def _stream_llm_and_speak(
             wav = await asyncio.to_thread(tts._get_wav_bytes_sync, chunk)
             if wav is not None:
                 wav = _apply_wav_speed(wav, _playback_speed)
+                wav = _apply_wav_volume(wav, _playback_volume)
 
             if wav is None:
                 # /wav endpoint failed. For jetson_hdmi target, fall back to /speak

@@ -108,8 +108,9 @@ const SCHEMA = [
       { key: "speed_multiplier", label: "Скорость речи", type: "float", min: 0.8, max: 1.6, step: 0.05,
         slider: true,
         hint: "1.0 = нормально · 1.25 = живее (рекомендуется) · 1.5 = быстро" },
-      { key: "volume",           label: "Громкость",     type: "float", min: 0, max: 2, step: 0.05,
-        hint: "1.0 = нормально" },
+      { key: "volume",           label: "Громкость голоса Адама", type: "float", min: 0, max: 2, step: 0.05,
+        slider: true,
+        hint: "0.0 = тишина · 1.0 = норма · 2.0 = максимум (с возможным клипированием). Персональный волюм Адама — применяется поверх системной громкости Jetson" },
     ],
   },
 
