@@ -1,13 +1,31 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: Phase 7 в работе (V-S07.3-ESP32_mic_fix) — Plan 07-03 завершён, готовится Plan 07-04 (UI gate)
+last_updated: "2026-05-16T20:58:00.000Z"
+progress:
+  total_phases: 8
+  completed_phases: 0
+  total_plans: 8
+  completed_plans: 4
+  percent: 50
+---
+
 # Adam-Chip — Project State
 
-**Last Updated:** 2026-05-15
-**Status:** Memory Pipeline Phases 6A + 6B завершены; ветка `Memory-upgrade` готова к мёржу
+**Last Updated:** 2026-05-16
+**Status:** Phase 7 ESP32 Mic Pipeline Refactor — Plan 07-03 завершён (MicReader интегрирован в Orchestrator). Готовится Plan 07-04 (UI pipelineReady gate).
 
 ## Active Phase
 
-Фазы 6A и 6B завершены. Все изменения в ветке `Memory-upgrade`.
-Следующий шаг: code review + мёрж `Memory-upgrade` → `main`.
-Wave 2 (Neural search через llama.cpp /embeddings) — в Backlog до освобождения VRAM.
+Phase 7: ESP32 Mic Pipeline Refactor — MicReader keep-alive (ветка `V-S07.3-ESP32_mic_fix`).
+
+- ✓ Plan 07-01: Config keys (disable_local_fallback, esp_open_timeout_sec, esp_probe_after_fails, esp_retry_backoff_sec)
+- ✓ Plan 07-02: MicReader class в `System/adam/mic_reader.py`
+- ✓ Plan 07-03: Orchestrator integration (этот SUMMARY) — commit `0c358a8`
+- Plan 07-04: WebUI pipelineReady gate (chat.js, wakeMeter.js) — pending
+
 → [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
 
 ## Completed Phases
@@ -96,6 +114,9 @@ Wave 2 (Neural search через llama.cpp /embeddings) — в Backlog до ос
 
 ## History
 
+- 2026-05-16: Phase 7 Plan 03 завершён. Orchestrator интегрирует MicReader: lifespan управляет lifecycle; VoiceLoopController стал consumer'ом `get_chunk()` очереди; introduced `boot_warmup` voice_state; deleted `_run_esp32` / `_esp32_drain_during_mute` / `_audio_level_monitor` + per-turn drainer task; `_make_stereo_reader` promoted to module-level free function. Net -95 LOC. Commit `0c358a8`.
+- 2026-05-16: Phase 7 Plan 02 завершён. MicReader class в `System/adam/mic_reader.py`. Commit `d67d6d4`.
+- 2026-05-16: Phase 7 Plan 01 завершён. Config keys + schema docs. Commit `f5529b5`.
 - 2026-05-15: Phase 6B завершена. memory_search.py, memory_metrics.py, /api/memory/status, 34 теста.
 - 2026-05-15: Phase 6A завершена. llama.cpp в consolidator, rule-based fallback, TF-IDF, auto-themes, trim_gate_logs. Commit Wave 6A: f6b2c5a.
 - 2026-05-15: Phase 5 завершена. AGENT-PROTOCOL.md, @-reference в CLAUDE.md. Все 5 фаз завершены.

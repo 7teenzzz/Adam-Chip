@@ -227,9 +227,9 @@ Plans:
 
 Plans:
 
-- [ ] 07-01-PLAN.md — Config + Schema: 4 new asr keys (disable_local_fallback, esp_open_timeout_sec, esp_probe_after_fails, esp_retry_backoff_sec)
-- [ ] 07-02-PLAN.md — MicReader module: new System/adam/mic_reader.py with class MicReader (producer + audio_level emitter + drain-on-mute)
-- [ ] 07-03-PLAN.md — Orchestrator integration: wire MicReader; delete _run_esp32, _esp32_drain_during_mute, _audio_level_monitor; introduce boot_warmup state; rearrange _orchestrated_startup
+- [x] 07-01-PLAN.md — Config + Schema: 4 new asr keys (`disable_local_fallback`, `esp_open_timeout_sec`, `esp_probe_after_fails`, `esp_retry_backoff_sec`) — commit `f5529b5`
+- [x] 07-02-PLAN.md — MicReader module: new `System/adam/mic_reader.py` with class MicReader (producer + audio_level emitter + drain-on-mute) — commit `d67d6d4`
+- [x] 07-03-PLAN.md — Orchestrator integration: wire MicReader; delete `_run_esp32`, `_esp32_drain_during_mute`, `_audio_level_monitor`; introduce `boot_warmup` state; rearrange `_orchestrated_startup` — commit `0c358a8`
 - [ ] 07-04-PLAN.md — UI integration: chat.js boot_warmup label/placeholder, wakeMeter.js pipelineReady gating on voice_state_change(to=standby)
 
 
