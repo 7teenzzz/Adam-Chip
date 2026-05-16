@@ -52,5 +52,5 @@
 | AGT-01 | Создать `docs/AGENT-PROTOCOL.md` секция "Режимы работы": таблица Advisor / Planner / Implementer / Debugger с триггерами переключения |
 | AGT-02 | Добавить в `docs/AGENT-PROTOCOL.md` секция "Триггеры уточнения": конкретный список условий (Config.json изменение, shared infrastructure, размытый глагол, >3 модулей, global vs experiment) |
 | AGT-03 | Добавить в `docs/AGENT-PROTOCOL.md` секция "Гэпы контекста": классификация Branch gap / Phase gap / Config gap / Invariant gap / Stale gap + поведение агента для каждого |
-| AGT-04 | Добавить в `docs/AGENT-PROTOCOL.md` секция "Протокол планирования": GSD-first (проверить ROADMAP.md → рекомендовать `/gsd-plan-phase` → inline GSD-формат для малых задач) |
+| AGT-04 | Добавить в `docs/AGENT-PROTOCOL.md` секция "Протокол планирования": GSD-first (проверить ROADMAP.md → использовать `/gsd-plan-phase` → inline GSD-формат для малых задач) |
 | AGT-05 | Обновить `CLAUDE.md`: добавить `@docs/AGENT-PROTOCOL.md` в строку с `@`-референсами и однострочную подпись |

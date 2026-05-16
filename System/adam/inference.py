@@ -1,17 +1,95 @@
 from __future__ import annotations
 
 import asyncio
+import audioop
 import base64
 import io
 import json
 import re
+import struct
 import time
 import wave
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener, urlopen, ProxyHandler
+
+# Bypass system HTTP proxy for ESP32 LAN traffic (v2ray on this Jetson hijacks
+# urllib via env vars and leaks sockets back to ESP32:81 port pool of 4).
+_NO_PROXY_OPENER = build_opener(ProxyHandler({}))
+
+
+# ESP32 PCM5102A speaker contract (Subsystem/AdamsServer/config/AdamsConfig.h:91 →
+# kSpeakerSampleRate). The /speaker endpoint validates WAV header and rejects
+# anything that is not mono / 16-bit / 44100 Hz with HTTP 400.
+ESP32_SPEAKER_SAMPLE_RATE = 44100
+ESP32_SPEAKER_CHANNELS = 1
+ESP32_SPEAKER_BITS = 16
+
+
+def _build_wav_header(pcm_size: int, sample_rate: int, channels: int, bits: int) -> bytes:
+    byte_rate = sample_rate * channels * bits // 8
+    block_align = channels * bits // 8
+    chunk_size = 36 + pcm_size
+    return (
+        b"RIFF" + struct.pack("<I", chunk_size) + b"WAVE"
+        + b"fmt " + struct.pack("<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, bits)
+        + b"data" + struct.pack("<I", pcm_size)
+    )
+
+
+def _parse_wav(wav_bytes: bytes) -> tuple[int, int, int, int, int, int]:
+    """Walk RIFF/WAVE chunks and return (audio_format, channels, sample_rate, bits, data_off, data_size).
+
+    The minimal 44-byte WAV layout (RIFF + fmt + data) is just one valid form.
+    Real-world WAVs may interleave LIST/INFO/bext/cue/JUNK chunks between fmt
+    and data, so a fixed offset 44 is fragile. This walker locates the data
+    chunk regardless of preamble layout.
+    """
+    if len(wav_bytes) < 12 or wav_bytes[:4] != b"RIFF" or wav_bytes[8:12] != b"WAVE":
+        raise ValueError("invalid WAV header")
+    audio_format = channels = sample_rate = bits = 0
+    pos = 12
+    while pos + 8 <= len(wav_bytes):
+        chunk_id = wav_bytes[pos:pos + 4]
+        chunk_size = struct.unpack_from("<I", wav_bytes, pos + 4)[0]
+        body = pos + 8
+        if chunk_id == b"fmt ":
+            if chunk_size < 16 or body + 16 > len(wav_bytes):
+                raise ValueError("truncated fmt chunk")
+            audio_format = struct.unpack_from("<H", wav_bytes, body)[0]
+            channels = struct.unpack_from("<H", wav_bytes, body + 2)[0]
+            sample_rate = struct.unpack_from("<I", wav_bytes, body + 4)[0]
+            bits = struct.unpack_from("<H", wav_bytes, body + 14)[0]
+        elif chunk_id == b"data":
+            if audio_format == 0:
+                raise ValueError("data chunk before fmt chunk")
+            data_size = min(chunk_size, len(wav_bytes) - body)
+            return audio_format, channels, sample_rate, bits, body, data_size
+        # Chunks are padded to even length per RIFF spec.
+        pos = body + chunk_size + (chunk_size & 1)
+    raise ValueError("no data chunk found")
+
+
+def _prepare_wav_for_esp32_speaker(wav_bytes: bytes) -> bytes:
+    """Convert arbitrary 16-bit PCM WAV to ESP32 contract: mono / 16-bit / 44100 Hz.
+
+    Validates the source header, downmixes stereo→mono if needed, resamples to
+    44100 Hz via audioop.ratecv, and rebuilds a minimal 44-byte WAV header.
+    """
+    audio_format, channels, sample_rate, bits, data_off, data_size = _parse_wav(wav_bytes)
+    if audio_format != 1 or bits != ESP32_SPEAKER_BITS:
+        raise ValueError(f"unsupported PCM format={audio_format} bits={bits}")
+    if channels not in (1, 2):
+        raise ValueError(f"unsupported channels={channels}")
+    pcm = wav_bytes[data_off:data_off + data_size]
+    if channels == 2:
+        pcm = audioop.tomono(pcm, 2, 0.5, 0.5)
+    if sample_rate != ESP32_SPEAKER_SAMPLE_RATE:
+        pcm, _state = audioop.ratecv(pcm, 2, 1, sample_rate, ESP32_SPEAKER_SAMPLE_RATE, None)
+    return _build_wav_header(len(pcm), ESP32_SPEAKER_SAMPLE_RATE,
+                             ESP32_SPEAKER_CHANNELS, ESP32_SPEAKER_BITS) + pcm
 
 
 @dataclass
@@ -123,14 +201,34 @@ def create_llm_client(config: dict[str, Any]) -> OpenAIChatClient:
     return OpenAIChatClient(config)
 
 
+_VALID_TTS_OUTPUT_TARGETS = ("jetson_hdmi", "esp32_speaker")
+
+
 class TTSClient:
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], mcu_speaker_url: str | None = None) -> None:
         self.base_url = str(config.get("base_url", "http://127.0.0.1:8082")).rstrip("/")
         self.timeout = float(config.get("timeout_sec", 20))
         self.speaker = str(config.get("speaker", "eugene"))
         self.output_device = str(config.get("output_device", "")).strip()
+        target = str(config.get("output_target", "jetson_hdmi")).strip() or "jetson_hdmi"
+        if target not in _VALID_TTS_OUTPUT_TARGETS:
+            # Schema enum is documentation-only — nothing enforces the value at
+            # runtime. Log loudly and degrade to local playback rather than
+            # silently routing audio through whichever branch matches the typo.
+            import logging as _logging
+            _logging.getLogger("adam.tts").warning(
+                "Unknown TTS output_target=%r; falling back to 'jetson_hdmi'. Valid: %s",
+                target, _VALID_TTS_OUTPUT_TARGETS,
+            )
+            target = "jetson_hdmi"
+        self.output_target = target
+        # mcu_speaker_url is required only when output_target='esp32_speaker'.
+        # Stored regardless so a later runtime config swap can flip the target.
+        self._mcu_speaker_url = (mcu_speaker_url or "").strip() or None
         self._current_play_proc: Any = None  # active aplay Popen handle for barge-in interrupt
         self._session: Any = None
+        # Hook for orchestrator to log barge-in attempts that cannot stop ESP32 audio.
+        self._barge_in_event_emitter: Any = None
 
     def _get_session(self) -> Any:
         if self._session is None or self._session.is_closed:
@@ -174,7 +272,13 @@ class TTSClient:
             return None
 
     def _play_wav_bytes_sync(self, wav_bytes: bytes) -> dict[str, Any]:
-        """Play WAV bytes locally. Blocks until playback completes.
+        """Route WAV playback to the configured output target. Blocks until done."""
+        if self.output_target == "esp32_speaker":
+            return self._play_wav_bytes_to_esp32_sync(wav_bytes)
+        return self._play_wav_bytes_local_sync(wav_bytes)
+
+    def _play_wav_bytes_local_sync(self, wav_bytes: bytes) -> dict[str, Any]:
+        """Play WAV bytes via local ALSA/PulseAudio. Blocks until playback completes.
 
         Uses Popen (not subprocess.run) so that interrupt_playback() can kill
         the process mid-playback for barge-in support.
@@ -235,8 +339,73 @@ class TTSClient:
             except OSError:
                 pass
 
+    def _play_wav_bytes_to_esp32_sync(self, wav_bytes: bytes) -> dict[str, Any]:
+        """POST WAV to ESP32 PCM5102A speaker (port 81), then wait for playback to finish.
+
+        Silero v5_5_ru produces 24000 Hz mono; ESP32 firmware enforces mono /
+        16-bit / 44100 Hz and rejects mismatched headers with HTTP 400. We
+        resample on Jetson via audioop.ratecv before POST. No fallback to local
+        playback on error — failed POST returns ok=False so upstream sees the
+        TTS chunk as degraded.
+
+        ESP-IDF's HTTP server returns the response as soon as the request body
+        is consumed by the handler — which writes into the I2S ring buffer but
+        does NOT wait for the DAC to drain. Without compensation, callers think
+        playback is done while audio is still streaming out of PCM5102A, and
+        the reply window starts ticking too early. We sleep for the prepared
+        PCM duration after POST returns to align "TTS finished" with reality.
+        """
+        if not self._mcu_speaker_url:
+            return {"ok": False, "error": "mcu_speaker_url not configured", "target": "esp32_speaker"}
+        try:
+            prepared = _prepare_wav_for_esp32_speaker(wav_bytes)
+        except ValueError as exc:
+            return {"ok": False, "error": f"wav prep: {exc}", "target": "esp32_speaker"}
+        # PCM bytes after the 44-byte header we built ourselves: prepared starts
+        # with WavHeader so subtract its size, then divide by bytes/sec.
+        pcm_bytes = max(0, len(prepared) - 44)
+        bytes_per_sec = ESP32_SPEAKER_SAMPLE_RATE * ESP32_SPEAKER_CHANNELS * (ESP32_SPEAKER_BITS // 8)
+        duration_sec = pcm_bytes / bytes_per_sec if bytes_per_sec else 0.0
+        # Allow timeout to cover at least the playback duration plus a margin
+        # for the network round-trip and ESP32 buffer ramp-up.
+        post_timeout = max(self.timeout, duration_sec + 5.0)
+        req = Request(self._mcu_speaker_url, data=prepared, method="POST")
+        req.add_header("Content-Type", "audio/wav")
+        t0 = time.perf_counter()
+        try:
+            # Bypass system proxy — env HTTP proxy (v2ray) hijacks LAN traffic
+            # and leaks sockets to ESP32:81, blocking subsequent connects.
+            with _NO_PROXY_OPENER.open(req, timeout=post_timeout) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+                ok = resp.status < 400
+        except HTTPError as exc:
+            return {
+                "ok": False, "status": exc.code, "error": f"HTTP {exc.code}",
+                "target": "esp32_speaker",
+            }
+        except (URLError, OSError) as exc:
+            return {"ok": False, "error": str(exc), "target": "esp32_speaker"}
+        # Block remaining playback time so caller-visible "TTS finished" matches
+        # actual audio end — within the bytes already buffered in I2S DMA.
+        elapsed = time.perf_counter() - t0
+        wait_extra = duration_sec - elapsed
+        if wait_extra > 0:
+            time.sleep(min(wait_extra, duration_sec))
+        return {
+            "ok": ok, "status": resp.status, "body": body, "target": "esp32_speaker",
+            "duration_sec": round(duration_sec, 3),
+            "post_sec": round(elapsed, 3),
+        }
+
     def interrupt_playback(self) -> None:
-        """Kill the active aplay process (barge-in). Safe to call from any thread."""
+        """Kill the active aplay process (barge-in). Safe to call from any thread.
+
+        Limitation: when output_target='esp32_speaker' there is no analogous
+        kill — the ESP32 firmware does not currently expose a stop endpoint, so
+        any audio already POSTed will keep playing through the I2S buffer until
+        it drains. The emitter hook lets the orchestrator surface the gap so
+        operators can see why barge-in didn't take effect on ESP32.
+        """
         proc = self._current_play_proc
         if proc is not None and proc.poll() is None:
             proc.terminate()
@@ -248,6 +417,11 @@ class TTSClient:
                 except Exception:
                     pass
         self._current_play_proc = None
+        if self.output_target == "esp32_speaker" and self._barge_in_event_emitter is not None:
+            try:
+                self._barge_in_event_emitter("tts_barge_in_unsupported", {"target": "esp32_speaker"})
+            except Exception:
+                pass
 
     def _health_sync(self) -> ServiceHealth:
         try:
