@@ -229,5 +229,11 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Graphify temporary and cache files
+Knowledge-graphs/**/.chunk_*.json
+Knowledge-graphs/**/.graphify_uncached.txt
+Knowledge-graphs/**/manifest.json
+Knowledge-graphs/**/cost.json
+
 *.[oa]
 *~
