@@ -107,7 +107,11 @@ export function mount(target) {
   // Live updates arrive via audio_level SSE events. Pre-snapshot we show "—"
   // instead of lying with a default "local" label.
   const initialVL = state.get("status")?.voice_loop;
-  let micSource = initialVL?.mic_active_source || null;
+  // Plan 07-04: hide Mic plate during boot_warmup or when voice_loop is down —
+  // the badge must not lie about an active ESP32 stream before standby.
+  const _initialVlBoot =
+    !initialVL || !initialVL.running || initialVL.voice_state === "boot_warmup";
+  let micSource = _initialVlBoot ? null : (initialVL.mic_active_source || null);
   const micSourceBadge = el("span", {
     style: "font-size:10px; color:var(--muted); font-family:var(--font-mono); padding:2px 6px; border-radius:3px; background:var(--bg-2)",
   }, "Mic: —");
@@ -137,6 +141,27 @@ export function mount(target) {
   refreshMicSourceBadge();
 
   function drawVuMeter() {
+    // REQ-UI-INIT-STATUS: while UI is in loading/boot_warmup (or before any
+    // mic source is known), equaliser and VU-meter render a flat placeholder.
+    // Mic plate badge separately stays "—" via refreshMicSourceBadge.
+    if (hearingState === "loading" || hearingState === "boot_warmup" || !micSource) {
+      const rect2 = vuCanvas.getBoundingClientRect();
+      if (rect2.width > 0) {
+        const dpr2 = window.devicePixelRatio || 1;
+        const cw2 = Math.round(rect2.width * dpr2);
+        const ch2 = Math.round(rect2.height * dpr2);
+        if (vuCanvas.width !== cw2 || vuCanvas.height !== ch2) {
+          vuCanvas.width = cw2; vuCanvas.height = ch2;
+        }
+        const ctx2 = vuCanvas.getContext("2d");
+        ctx2.setTransform(dpr2, 0, 0, dpr2, 0, 0);
+        ctx2.clearRect(0, 0, rect2.width, rect2.height);
+        ctx2.fillStyle = "rgba(120,120,130,0.18)";
+        ctx2.fillRect(0, rect2.height - 2, rect2.width, 2);
+      }
+      vuRafId = requestAnimationFrame(drawVuMeter);
+      return;
+    }
     const dpr = window.devicePixelRatio || 1;
     const rect = vuCanvas.getBoundingClientRect();
     if (rect.width > 0) {
@@ -189,6 +214,7 @@ export function mount(target) {
   const HEARING_COLORS = {
     unknown:      "var(--dim)",    // grey    — snapshot not loaded yet
     loading:      "var(--warn)",   // yellow  — voice_loop down (real)
+    boot_warmup:  "var(--warn)",   // yellow  — mic active but warmup in progress (OWW not scanning)
     standby:      "var(--accent)", // green   — waiting for wake word
     listening:    "#a855f7",       // purple  — recording / accumulating speech
     reply:        "#a855f7",       // purple  — reply window open (same as listening)
@@ -196,9 +222,13 @@ export function mount(target) {
     thinking:     "#22d3ee",       // cyan    — LLM generating
     tts:          "#60a5fa",       // blue    — Adam is speaking
   };
+  // W-4 fix: both `loading` and `boot_warmup` show identical text. They differ
+  // semantically (loading = voice_loop down; boot_warmup = up but pre-standby
+  // drain mode), which matters for state-machine routing but NOT for the label.
   const HEARING_LABELS = {
     unknown:      "— ожидаем данных",
     loading:      "⌛ Инициализация",
+    boot_warmup:  "⌛ Инициализация",
     standby:      "💤 Ожидаю обращения",
     listening:    "🎤 Слушаю",
     reply:        "🎤 Слушаю",
@@ -209,7 +239,12 @@ export function mount(target) {
   let hearingState = (() => {
     const vl = state.get("status")?.voice_loop;
     if (vl == null) return "unknown";
-    return vl.running ? "standby" : "loading";
+    if (!vl.running) return "loading";
+    // Honour boot_warmup: voice_loop is up but still in warmup TTS.
+    const vs = vl.voice_state;
+    if (vs === "boot_warmup") return "boot_warmup";
+    if (vs === "listening" || vs === "reply") return vs;
+    return "standby";
   })();
   let dotsTick = 0;
   const DOTS_PERIOD_MS = 400;
@@ -257,9 +292,23 @@ export function mount(target) {
   const dotsTimer = setInterval(tickDots, DOTS_PERIOD_MS);
 
   function updateHearing(newState) {
+    const prev = hearingState;
     hearingState = newState;
     hearingDot.style.background = HEARING_COLORS[newState] || "var(--muted)";
-    asrBox.style.color = newState === "loading" ? "var(--muted)" : "var(--text)";
+    asrBox.style.color = (newState === "loading" || newState === "boot_warmup")
+      ? "var(--muted)"
+      : "var(--text)";
+    // Plan 07-04: leaving boot_warmup means MicReader is now reporting a real
+    // standby/listening/reply state — pull mic_active_source from the snapshot
+    // so the badge flips green immediately, without waiting for the next poll.
+    if (prev === "boot_warmup" && newState !== "boot_warmup" && newState !== "loading") {
+      const vlSnap = state.get("status")?.voice_loop;
+      const src = vlSnap?.mic_active_source || null;
+      if (src && src !== micSource) {
+        micSource = src;
+        refreshMicSourceBadge();
+      }
+    }
     dotsTick = 0;
     renderHearing();
   }
@@ -269,17 +318,17 @@ export function mount(target) {
   // state ends or on initial mount before any events arrive.
   function routeToIdle() {
     const vl = state.get("status")?.voice_loop;
-    if (vl == null) {
-      updateHearing("unknown");
-    } else {
-      updateHearing(vl.running ? "standby" : "loading");
-    }
+    if (vl == null) { updateHearing("unknown"); return; }
+    if (!vl.running) { updateHearing("loading"); return; }
+    const vs = vl.voice_state;
+    if (vs === "boot_warmup") { updateHearing("boot_warmup"); return; }
+    updateHearing("standby");
   }
 
   // Polling-time sync — preserves active SSE-driven states so polling
   // never overrides "слушаю / распознаю / думаю / говорю" mid-flow.
   function syncHearingFromStatus() {
-    if (["listening", "reply", "transcribing", "thinking", "tts"].includes(hearingState)) return;
+    if (["listening", "reply", "transcribing", "thinking", "tts", "boot_warmup"].includes(hearingState)) return;
     // Also refresh mic source from snapshot — keeps badge truthful across
     // remounts when no audio_level event has fired since last navigation.
     const vlSnap = state.get("status")?.voice_loop;
@@ -519,11 +568,19 @@ export function mount(target) {
         vuChannels = 1;
         vuLevelMono = ev.payload?.level ?? 0;
       }
-      // T17 fix #7 — refresh source badge live from per-event tag.
-      const incomingSource = ev.payload?.source;
-      if (incomingSource && incomingSource !== micSource) {
-        micSource = incomingSource;
-        refreshMicSourceBadge();
+      // Plan 07-04: during boot_warmup/loading the Mic plate stays "—".
+      // We still update vuLevel* so transitioning out of boot shows fresh data,
+      // but the badge must not flip to "🟢 Mic: ESP32 stereo" before standby.
+      if (hearingState === "boot_warmup" || hearingState === "loading") {
+        // Skip mic source badge refresh — voice_state_change(to=standby)
+        // will pull mic_active_source from the snapshot.
+      } else {
+        // T17 fix #7 — refresh source badge live from per-event tag.
+        const incomingSource = ev.payload?.source;
+        if (incomingSource && incomingSource !== micSource) {
+          micSource = incomingSource;
+          refreshMicSourceBadge();
+        }
       }
     } else if (ev.type === "scene_updated") {
       const text = ev.payload?.text || ev.payload?.summary || "";
@@ -536,7 +593,23 @@ export function mount(target) {
       pendingAdamBubble = null;
       stopCountdown();
     } else if (ev.type === "voice_loop_started") {
-      updateHearing("standby");
+      // Phase 7: voice_loop now starts in boot_warmup. Trust the explicit
+      // voice_state_change(to=...) event for the real transition rather than
+      // assuming standby here. Payload is the full status() dict.
+      const vs = ev.payload && ev.payload.voice_state;
+      updateHearing(vs === "boot_warmup" ? "boot_warmup" : "standby");
+    } else if (ev.type === "voice_state_change") {
+      // boot_warmup → standby is the warmup-done transition. Other transitions
+      // (standby ↔ listening, listening → reply, reply → standby) are handled
+      // by their dedicated SSE events (wake_word_detected, asr_reply_window_open,
+      // etc.) — we do not double-handle them here.
+      const to = ev.payload && ev.payload.to;
+      const from = ev.payload && ev.payload.from;
+      if (to === "boot_warmup") {
+        updateHearing("boot_warmup");
+      } else if (from === "boot_warmup" && to === "standby") {
+        updateHearing("standby");
+      }
     } else if (ev.type === "voice_loop_stopped") {
       updateHearing("loading");
       stopCountdown();

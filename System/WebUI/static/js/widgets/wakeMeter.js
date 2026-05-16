@@ -227,9 +227,22 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
       const vs = ev.payload && ev.payload.state;
       if (vs === "standby" || vs === "listening" || vs === "reply") {
         state.pipelineReady = true;
+      } else if (vs === "boot_warmup") {
+        // Explicit boot phase — keep the meter in placeholder mode even if
+        // MicReader is already streaming audio_level frames.
+        state.pipelineReady = false;
       }
     } else if (ev.type === "voice_loop_started") {
-      state.pipelineReady = true;
+      // Phase 7: voice_loop_started no longer implies pipelineReady — voice_loop
+      // starts in boot_warmup. The meter waits for voice_state_change(to=standby)
+      // or the first audio_level with state ∈ {standby, listening, reply}.
+    } else if (ev.type === "voice_state_change") {
+      const to = ev.payload && ev.payload.to;
+      if (to === "standby" || to === "listening" || to === "reply") {
+        state.pipelineReady = true;
+      } else if (to === "boot_warmup") {
+        state.pipelineReady = false;
+      }
     } else if (ev.type === "voice_loop_stopped") {
       state.pipelineReady = false;
       state.audioLevel = 0;
