@@ -44,16 +44,39 @@ See @README.md for project overview and @System/Config.json + @System/Config.sch
 - **Аудио устройства.** TTS output = `plughw:1,3` (HDMI, card 1 HDA NVIDIA). Mic input = `pulse` (PulseAudio → WebCamera card 3). hw:1,0 (Jetson APE I2S) физически не работает — не отдаёт PCM данные. hw:0,0 для input — неправильно.
 - **ESP32 IP.** Статический IP = `192.168.0.171`.
 
-## Autonomous run — commit protocol
+## GSD-пайплайн — правила агента
 
-**Правило действует в bypass/autonomous режиме (несколько фаз без участия пользователя):**
+Полный протокол: @docs/AGENT-PROTOCOL.md → раздел «Пайплайн фазы».
 
-После каждой успешно завершённой GSD фазы → вызвать `/commit-push <phase-N topic>`.
+### Обязательный scaffold (единственное жёсткое правило)
 
-- Скилл спавнит Haiku sub-agent для всех git операций (add → commit → push)
+При создании **любой** фазы — сразу создать `.planning/phases/NN-name/NN-CONTEXT.md`.
+Без этого история фазы теряется (прецедент: Фазы 6A–6B выполнены без артефактов → ретробэкфилл 2026-05-16).
+
+### Стандартный порядок для крупной задачи (>2 файлов)
+
+```text
+/gsd-discuss-phase N  →  /gsd-plan-phase N  →  /gsd-execute-phase N
+  → /commit-push phase-N topic  →  /gsd-extract-learnings N
+```
+
+### Автономный режим (bypass / несколько фаз без участия пользователя)
+
+После каждой завершённой фазы → вызвать `/commit-push <phase-N topic>`.
+
+- `/commit-push` спавнит Haiku sub-agent для git операций (add → commit → push)
 - Sonnet не делает git-команды напрямую — только делегирует
-- Push включён по умолчанию; пропустить push если фаза помечена WIP в PLAN.md
+- Push включён по умолчанию; `--no-push` если фаза помечена WIP в PLAN.md
 - Никогда не коммитить: `.env`, `PrivateConfig.h`, `*.gguf`, `data/`, `logs/`
+
+### Ситуационные скиллы
+
+| Когда | Скилл |
+| ----- | ----- |
+| Старт сессии после перерыва | `/gsd-resume-work` |
+| Что-то сломалось | `/gsd-debug` |
+| Перед мёржем в main | `/gsd-code-review` |
+| Бэклог → следующая фаза | `/gsd-review-backlog` |
 
 ## Never do
 

@@ -76,11 +76,49 @@
 
 ---
 
-### GSD-скиллы (справка)
+## Пайплайн фазы — GSD-скиллы
 
-| Скилл | Назначение |
-| ----- | ---------- |
-| `/gsd-plan-phase N` | Создать PLAN.md для фазы N (с исследованием и CONTEXT.md) |
-| `/gsd-plan-phase N --skip-research` | Только планирование, без research-агента |
-| `/gsd-execute-phase` | Запустить выполнение активного PLAN.md через gsd-executor |
-| `/gsd-verify-phase` | Верифицировать завершённую фазу (создаёт VERIFICATION.md) |
+### Стандартный порядок
+
+```
+discuss → plan → execute → commit-push → extract-learnings
+```
+
+Каждый шаг создаёт артефакт, следующий читает предыдущий.
+Пропуск допустим только для хотфиксов (≤2 файлов, без новых модулей).
+
+### Триггеры скиллов
+
+| Событие | Скилл | Создаёт |
+| ------- | ----- | ------- |
+| Новая фаза утверждена | `/gsd-discuss-phase N` | `.planning/phases/NN-name/NN-CONTEXT.md` |
+| После discuss | `/gsd-plan-phase N` | `.planning/phases/NN-name/NN-PLAN.md` (+ подпланы) |
+| Plan готов | `/gsd-execute-phase N` | изменения в коде, VERIFICATION.md |
+| Execute завершён | `/commit-push phase-N topic` | git commit + push (через Haiku sub-agent) |
+| Фаза верифицирована | `/gsd-extract-learnings N` | `.planning/phases/NN-name/NN-SUMMARY.md` |
+
+### Обязательный инвариант
+
+**При создании любой фазы** — создать директорию `.planning/phases/NN-name/` с `NN-CONTEXT.md`.
+Это единственное жёсткое правило (всё остальное — рекомендации).
+Нарушение: Фазы 6A–6B выполнены без артефактов → восстановлены ретроспективно 2026-05-16.
+
+### Ситуационные скиллы
+
+| Ситуация | Скилл |
+| -------- | ----- |
+| Что-то сломалось | `/gsd-debug` |
+| Старт сессии после перерыва | `/gsd-resume-work` |
+| Контекст стал слишком большим | `/gsd-pause-work` |
+| Бэклог → активная фаза | `/gsd-review-backlog` |
+| Перед мёржем в main | `/gsd-code-review` |
+| Откат изменений | `/gsd-undo` |
+
+### Быстрые справки
+
+| Скилл | Аргументы | Когда |
+| ----- | --------- | ----- |
+| `/gsd-plan-phase N` | `--skip-research` — только план, без research-агента | Фаза хорошо понята |
+| `/gsd-execute-phase N` | `--interactive` — без sub-агентов, с чекпоинтами | Маленькая фаза / дебаг |
+| `/gsd-execute-phase N` | `--wave K` — только волна K | Пауза между волнами |
+| `/commit-push` | `--no-push` — только коммит | WIP-фаза, пуш позже |
