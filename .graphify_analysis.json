@@ -1,0 +1,211 @@
+{
+  "communities": {
+    "0": [
+      "convert_pdf_py",
+      "diploma_convert_pdf_convert",
+      "diploma_convert_pdf_extract_bibliography",
+      "diploma_convert_pdf_extract_figures",
+      "diploma_convert_pdf_rationale_1",
+      "diploma_convert_pdf_rationale_30",
+      "diploma_convert_pdf_rationale_73"
+    ],
+    "1": [
+      "diploma_inspect_structure_analyze",
+      "diploma_inspect_structure_main",
+      "diploma_inspect_structure_numbered_level",
+      "diploma_inspect_structure_rationale_1",
+      "diploma_inspect_structure_recommend",
+      "inspect_structure_py"
+    ],
+    "2": [
+      "diploma_split_diploma_extract_block",
+      "diploma_split_diploma_rationale_1",
+      "diploma_split_diploma_sec_idx_total",
+      "diploma_split_diploma_split_diploma",
+      "diploma_split_diploma_sub_idx_total",
+      "split_diploma_py"
+    ],
+    "3": [
+      "diploma_convert_pdf_pymupdf_build_markdown",
+      "diploma_convert_pdf_pymupdf_looks_like_heading",
+      "diploma_convert_pdf_pymupdf_rationale_53",
+      "diploma_convert_pdf_pymupdf_rationale_73"
+    ],
+    "4": [
+      "diploma_split_diploma_detect_heading_style",
+      "diploma_split_diploma_numbered_level",
+      "diploma_split_diploma_rationale_41",
+      "diploma_split_diploma_rationale_46"
+    ],
+    "5": [
+      "consolidate_chapters_py",
+      "diploma_consolidate_chapters_main",
+      "diploma_consolidate_chapters_rationale_1"
+    ],
+    "6": [
+      "diploma_convert_pdf_pymupdf_extract_bibliography",
+      "diploma_convert_pdf_pymupdf_main",
+      "diploma_convert_pdf_pymupdf_rationale_92"
+    ],
+    "7": [
+      "convert_pdf_pymupdf_py",
+      "diploma_convert_pdf_pymupdf_rationale_1"
+    ],
+    "8": [
+      "diploma_convert_pdf_pymupdf_extract_text_with_pages",
+      "diploma_convert_pdf_pymupdf_rationale_35"
+    ],
+    "9": [
+      "diploma_split_diploma_parse_headings",
+      "diploma_split_diploma_rationale_72"
+    ],
+    "10": [
+      "diploma_split_diploma_rationale_33",
+      "diploma_split_diploma_slugify"
+    ]
+  },
+  "cohesion": {
+    "0": 0.38,
+    "1": 0.53,
+    "2": 0.53,
+    "3": 0.5,
+    "4": 0.5,
+    "5": 0.67,
+    "6": 0.67,
+    "7": 1.0,
+    "8": 1.0,
+    "9": 1.0,
+    "10": 1.0
+  },
+  "gods": [
+    {
+      "id": "diploma_split_diploma_split_diploma",
+      "label": "split_diploma()",
+      "degree": 7
+    },
+    {
+      "id": "diploma_convert_pdf_pymupdf_build_markdown",
+      "label": "build_markdown()",
+      "degree": 4
+    },
+    {
+      "id": "diploma_convert_pdf_pymupdf_main",
+      "label": "main()",
+      "degree": 4
+    },
+    {
+      "id": "diploma_split_diploma_numbered_level",
+      "label": "numbered_level()",
+      "degree": 4
+    },
+    {
+      "id": "diploma_split_diploma_detect_heading_style",
+      "label": "detect_heading_style()",
+      "degree": 4
+    },
+    {
+      "id": "diploma_split_diploma_parse_headings",
+      "label": "parse_headings()",
+      "degree": 4
+    },
+    {
+      "id": "diploma_convert_pdf_extract_figures",
+      "label": "extract_figures()",
+      "degree": 3
+    },
+    {
+      "id": "diploma_convert_pdf_extract_bibliography",
+      "label": "extract_bibliography()",
+      "degree": 3
+    },
+    {
+      "id": "diploma_convert_pdf_convert",
+      "label": "convert()",
+      "degree": 3
+    },
+    {
+      "id": "diploma_convert_pdf_pymupdf_extract_text_with_pages",
+      "label": "extract_text_with_pages()",
+      "degree": 3
+    }
+  ],
+  "surprises": [
+    {
+      "source": "main()",
+      "target": "extract_text_with_pages()",
+      "source_files": [
+        "convert_pdf_pymupdf.py",
+        "convert_pdf_pymupdf.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 8 → community 6"
+    },
+    {
+      "source": "main()",
+      "target": "build_markdown()",
+      "source_files": [
+        "convert_pdf_pymupdf.py",
+        "convert_pdf_pymupdf.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 3 → community 6"
+    },
+    {
+      "source": "split_diploma()",
+      "target": "slugify()",
+      "source_files": [
+        "split_diploma.py",
+        "split_diploma.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 10 → community 2"
+    },
+    {
+      "source": "parse_headings()",
+      "target": "numbered_level()",
+      "source_files": [
+        "split_diploma.py",
+        "split_diploma.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 4 → community 9"
+    },
+    {
+      "source": "split_diploma()",
+      "target": "detect_heading_style()",
+      "source_files": [
+        "split_diploma.py",
+        "split_diploma.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 4 → community 2"
+    }
+  ],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `split_diploma()` connect `Community 2` to `Community 9`, `Community 10`, `Community 4`?",
+      "why": "High betweenness centrality (0.020) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `numbered_level()` connect `Community 4` to `Community 9`, `Community 2`?",
+      "why": "High betweenness centrality (0.017) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `detect_heading_style()` connect `Community 4` to `Community 2`?",
+      "why": "High betweenness centrality (0.016) - this node is a cross-community bridge."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `Consolidate fragmented chapter files into canonical 4-chapter layout.  PyMuPDF-b`, `Docling PDF → Markdown конвертер с дополнительной экстракцией.  Использование:`, `Walk pictures and tables, dump captions to markdown.` to the rest of the system?",
+      "why": "15 weakly-connected nodes found - possible documentation gaps or missing edges."
+    }
+  ]
+}

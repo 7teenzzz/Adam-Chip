@@ -1,0 +1,28 @@
+{
+  "chunk": 2,
+  "total_chunks": 8,
+  "files": [
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.2.3_system_prompt_identity.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.2.4_memory_context.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.2.5_perception_speech.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.2.6_command_layer.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.3.1_installation_implementation.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.3.2_perception_motor_layers.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.3.3_microcontroller_programming.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.3.4_interaction_scenario.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.3.5_installation_testing.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.4.1_testing_methodology.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.4.2_metrics_role_normativity.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.4.3_metrics_memory_temporal.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.4.4_metrics_interaction_initiative.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.4.5_interpretation_limitations.md",
+    "F:\\Adam-Chip\\diploma\\chapters\\ch00_introduction.md",
+    "F:\\Adam-Chip\\diploma\\chapters\\ch01_chapter1.md",
+    "F:\\Adam-Chip\\diploma\\chapters\\ch02_chapter2.md",
+    "F:\\Adam-Chip\\diploma\\chapters\\ch03_chapter3.md",
+    "F:\\Adam-Chip\\diploma\\chapters\\ch99_bibliography.md",
+    "F:\\Adam-Chip\\diploma\\chapters\\_raw\\ch01_1_философские_и_технологические_основания_цифровой_субъектно.md",
+    "F:\\Adam-Chip\\diploma\\chapters\\_raw\\ch02_2_архитектурные_модели_субъектности_сравнительный_анализ_раб.md",
+    "F:\\Adam-Chip\\diploma\\chapters\\_raw\\ch03_3_разработка_агента74.md"
+  ]
+}
