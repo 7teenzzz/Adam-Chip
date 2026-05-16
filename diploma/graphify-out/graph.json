@@ -1,0 +1,927 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "consolidate_chapters.py",
+      "file_type": "code",
+      "source_file": "consolidate_chapters.py",
+      "source_location": "L1",
+      "id": "consolidate_chapters_py",
+      "community": 5,
+      "norm_label": "consolidate_chapters.py"
+    },
+    {
+      "label": "main()",
+      "file_type": "code",
+      "source_file": "consolidate_chapters.py",
+      "source_location": "L46",
+      "id": "diploma_consolidate_chapters_main",
+      "community": 5,
+      "norm_label": "main()"
+    },
+    {
+      "label": "Consolidate fragmented chapter files into canonical 4-chapter layout.  PyMuPDF-b",
+      "file_type": "rationale",
+      "source_file": "consolidate_chapters.py",
+      "source_location": "L1",
+      "id": "diploma_consolidate_chapters_rationale_1",
+      "community": 5,
+      "norm_label": "consolidate fragmented chapter files into canonical 4-chapter layout.  pymupdf-b"
+    },
+    {
+      "label": "convert_pdf.py",
+      "file_type": "code",
+      "source_file": "convert_pdf.py",
+      "source_location": "L1",
+      "id": "convert_pdf_py",
+      "community": 0,
+      "norm_label": "convert_pdf.py"
+    },
+    {
+      "label": "extract_figures()",
+      "file_type": "code",
+      "source_file": "convert_pdf.py",
+      "source_location": "L29",
+      "id": "diploma_convert_pdf_extract_figures",
+      "community": 0,
+      "norm_label": "extract_figures()"
+    },
+    {
+      "label": "extract_bibliography()",
+      "file_type": "code",
+      "source_file": "convert_pdf.py",
+      "source_location": "L72",
+      "id": "diploma_convert_pdf_extract_bibliography",
+      "community": 0,
+      "norm_label": "extract_bibliography()"
+    },
+    {
+      "label": "convert()",
+      "file_type": "code",
+      "source_file": "convert_pdf.py",
+      "source_location": "L87",
+      "id": "diploma_convert_pdf_convert",
+      "community": 0,
+      "norm_label": "convert()"
+    },
+    {
+      "label": "Docling PDF \u2192 Markdown \u043a\u043e\u043d\u0432\u0435\u0440\u0442\u0435\u0440 \u0441 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0439 \u044d\u043a\u0441\u0442\u0440\u0430\u043a\u0446\u0438\u0435\u0439.  \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435:",
+      "file_type": "rationale",
+      "source_file": "convert_pdf.py",
+      "source_location": "L1",
+      "id": "diploma_convert_pdf_rationale_1",
+      "community": 0,
+      "norm_label": "docling pdf \u2192 markdown \u043a\u043e\u043d\u0432\u0435\u0440\u0442\u0435\u0440 \u0441 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0438 \u044d\u043a\u0441\u0442\u0440\u0430\u043a\u0446\u0438\u0435\u0438.  \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435:"
+    },
+    {
+      "label": "Walk pictures and tables, dump captions to markdown.",
+      "file_type": "rationale",
+      "source_file": "convert_pdf.py",
+      "source_location": "L30",
+      "id": "diploma_convert_pdf_rationale_30",
+      "community": 0,
+      "norm_label": "walk pictures and tables, dump captions to markdown."
+    },
+    {
+      "label": "Heuristic: take everything from biblio trigger to EOF.",
+      "file_type": "rationale",
+      "source_file": "convert_pdf.py",
+      "source_location": "L73",
+      "id": "diploma_convert_pdf_rationale_73",
+      "community": 0,
+      "norm_label": "heuristic: take everything from biblio trigger to eof."
+    },
+    {
+      "label": "convert_pdf_pymupdf.py",
+      "file_type": "code",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L1",
+      "id": "convert_pdf_pymupdf_py",
+      "community": 7,
+      "norm_label": "convert_pdf_pymupdf.py"
+    },
+    {
+      "label": "extract_text_with_pages()",
+      "file_type": "code",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L34",
+      "id": "diploma_convert_pdf_pymupdf_extract_text_with_pages",
+      "community": 8,
+      "norm_label": "extract_text_with_pages()"
+    },
+    {
+      "label": "looks_like_heading()",
+      "file_type": "code",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L52",
+      "id": "diploma_convert_pdf_pymupdf_looks_like_heading",
+      "community": 3,
+      "norm_label": "looks_like_heading()"
+    },
+    {
+      "label": "build_markdown()",
+      "file_type": "code",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L72",
+      "id": "diploma_convert_pdf_pymupdf_build_markdown",
+      "community": 3,
+      "norm_label": "build_markdown()"
+    },
+    {
+      "label": "extract_bibliography()",
+      "file_type": "code",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L91",
+      "id": "diploma_convert_pdf_pymupdf_extract_bibliography",
+      "community": 6,
+      "norm_label": "extract_bibliography()"
+    },
+    {
+      "label": "main()",
+      "file_type": "code",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L101",
+      "id": "diploma_convert_pdf_pymupdf_main",
+      "community": 6,
+      "norm_label": "main()"
+    },
+    {
+      "label": "Lightweight PDF \u2192 Markdown fallback using PyMuPDF.  Used when Docling is unavail",
+      "file_type": "rationale",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L1",
+      "id": "diploma_convert_pdf_pymupdf_rationale_1",
+      "community": 7,
+      "norm_label": "lightweight pdf \u2192 markdown fallback using pymupdf.  used when docling is unavail"
+    },
+    {
+      "label": "Return list of (page_number, text) pairs, 1-indexed.",
+      "file_type": "rationale",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L35",
+      "id": "diploma_convert_pdf_pymupdf_rationale_35",
+      "community": 8,
+      "norm_label": "return list of (page_number, text) pairs, 1-indexed."
+    },
+    {
+      "label": "Detect Russian numbered headings. Returns (level, normalized_text) or None.",
+      "file_type": "rationale",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L53",
+      "id": "diploma_convert_pdf_pymupdf_rationale_53",
+      "community": 3,
+      "norm_label": "detect russian numbered headings. returns (level, normalized_text) or none."
+    },
+    {
+      "label": "Build markdown with heading detection and page markers.",
+      "file_type": "rationale",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L73",
+      "id": "diploma_convert_pdf_pymupdf_rationale_73",
+      "community": 3,
+      "norm_label": "build markdown with heading detection and page markers."
+    },
+    {
+      "label": "Heuristic: take everything after a bibliography trigger heading.",
+      "file_type": "rationale",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L92",
+      "id": "diploma_convert_pdf_pymupdf_rationale_92",
+      "community": 6,
+      "norm_label": "heuristic: take everything after a bibliography trigger heading."
+    },
+    {
+      "label": "inspect_structure.py",
+      "file_type": "code",
+      "source_file": "inspect_structure.py",
+      "source_location": "L1",
+      "id": "inspect_structure_py",
+      "community": 1,
+      "norm_label": "inspect_structure.py"
+    },
+    {
+      "label": "numbered_level()",
+      "file_type": "code",
+      "source_file": "inspect_structure.py",
+      "source_location": "L20",
+      "id": "diploma_inspect_structure_numbered_level",
+      "community": 1,
+      "norm_label": "numbered_level()"
+    },
+    {
+      "label": "analyze()",
+      "file_type": "code",
+      "source_file": "inspect_structure.py",
+      "source_location": "L24",
+      "id": "diploma_inspect_structure_analyze",
+      "community": 1,
+      "norm_label": "analyze()"
+    },
+    {
+      "label": "recommend()",
+      "file_type": "code",
+      "source_file": "inspect_structure.py",
+      "source_location": "L52",
+      "id": "diploma_inspect_structure_recommend",
+      "community": 1,
+      "norm_label": "recommend()"
+    },
+    {
+      "label": "main()",
+      "file_type": "code",
+      "source_file": "inspect_structure.py",
+      "source_location": "L62",
+      "id": "diploma_inspect_structure_main",
+      "community": 1,
+      "norm_label": "main()"
+    },
+    {
+      "label": "Diploma structure inspector \u2014 read-only \u0432\u0430\u043b\u0438\u0434\u0430\u0446\u0438\u044f Docling output.  \u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u0442 \u043a\u0430\u0447",
+      "file_type": "rationale",
+      "source_file": "inspect_structure.py",
+      "source_location": "L1",
+      "id": "diploma_inspect_structure_rationale_1",
+      "community": 1,
+      "norm_label": "diploma structure inspector \u2014 read-only \u0432\u0430\u043b\u0438\u0434\u0430\u0446\u0438\u044f docling output.  \u043f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u0442 \u043a\u0430\u0447"
+    },
+    {
+      "label": "split_diploma.py",
+      "file_type": "code",
+      "source_file": "split_diploma.py",
+      "source_location": "L1",
+      "id": "split_diploma_py",
+      "community": 2,
+      "norm_label": "split_diploma.py"
+    },
+    {
+      "label": "slugify()",
+      "file_type": "code",
+      "source_file": "split_diploma.py",
+      "source_location": "L32",
+      "id": "diploma_split_diploma_slugify",
+      "community": 10,
+      "norm_label": "slugify()"
+    },
+    {
+      "label": "numbered_level()",
+      "file_type": "code",
+      "source_file": "split_diploma.py",
+      "source_location": "L40",
+      "id": "diploma_split_diploma_numbered_level",
+      "community": 4,
+      "norm_label": "numbered_level()"
+    },
+    {
+      "label": "detect_heading_style()",
+      "file_type": "code",
+      "source_file": "split_diploma.py",
+      "source_location": "L45",
+      "id": "diploma_split_diploma_detect_heading_style",
+      "community": 4,
+      "norm_label": "detect_heading_style()"
+    },
+    {
+      "label": "parse_headings()",
+      "file_type": "code",
+      "source_file": "split_diploma.py",
+      "source_location": "L71",
+      "id": "diploma_split_diploma_parse_headings",
+      "community": 9,
+      "norm_label": "parse_headings()"
+    },
+    {
+      "label": "extract_block()",
+      "file_type": "code",
+      "source_file": "split_diploma.py",
+      "source_location": "L102",
+      "id": "diploma_split_diploma_extract_block",
+      "community": 2,
+      "norm_label": "extract_block()"
+    },
+    {
+      "label": "split_diploma()",
+      "file_type": "code",
+      "source_file": "split_diploma.py",
+      "source_location": "L106",
+      "id": "diploma_split_diploma_split_diploma",
+      "community": 2,
+      "norm_label": "split_diploma()"
+    },
+    {
+      "label": "sec_idx_total()",
+      "file_type": "code",
+      "source_file": "split_diploma.py",
+      "source_location": "L172",
+      "id": "diploma_split_diploma_sec_idx_total",
+      "community": 2,
+      "norm_label": "sec_idx_total()"
+    },
+    {
+      "label": "sub_idx_total()",
+      "file_type": "code",
+      "source_file": "split_diploma.py",
+      "source_location": "L176",
+      "id": "diploma_split_diploma_sub_idx_total",
+      "community": 2,
+      "norm_label": "sub_idx_total()"
+    },
+    {
+      "label": "Diploma splitter \u2014 \u0440\u0430\u0437\u0431\u0438\u0432\u0430\u0435\u0442 Diploma.md \u043d\u0430 \u0438\u0435\u0440\u0430\u0440\u0445\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0444\u0440\u0430\u0433\u043c\u0435\u043d\u0442\u044b.  \u041f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435",
+      "file_type": "rationale",
+      "source_file": "split_diploma.py",
+      "source_location": "L1",
+      "id": "diploma_split_diploma_rationale_1",
+      "community": 2,
+      "norm_label": "diploma splitter \u2014 \u0440\u0430\u0437\u0431\u0438\u0432\u0430\u0435\u0442 diploma.md \u043d\u0430 \u0438\u0435\u0440\u0430\u0440\u0445\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0444\u0440\u0430\u0433\u043c\u0435\u043d\u0442\u044b.  \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435"
+    },
+    {
+      "label": "Translit-friendly slug. Keeps Cyrillic words readable by code.",
+      "file_type": "rationale",
+      "source_file": "split_diploma.py",
+      "source_location": "L33",
+      "id": "diploma_split_diploma_rationale_33",
+      "community": 10,
+      "norm_label": "translit-friendly slug. keeps cyrillic words readable by code."
+    },
+    {
+      "label": "1' \u2192 1, '1.1' \u2192 2, '1.1.1' \u2192 3, '1.1.1.1' \u2192 4.",
+      "file_type": "rationale",
+      "source_file": "split_diploma.py",
+      "source_location": "L41",
+      "id": "diploma_split_diploma_rationale_41",
+      "community": 4,
+      "norm_label": "1' \u2192 1, '1.1' \u2192 2, '1.1.1' \u2192 3, '1.1.1.1' \u2192 4."
+    },
+    {
+      "label": "Returns one of: markdown, russian_numbered, bold_numbered.     Picks the style y",
+      "file_type": "rationale",
+      "source_file": "split_diploma.py",
+      "source_location": "L46",
+      "id": "diploma_split_diploma_rationale_46",
+      "community": 4,
+      "norm_label": "returns one of: markdown, russian_numbered, bold_numbered.     picks the style y"
+    },
+    {
+      "label": "Returns list of (level, title, line_index) sorted by line_index.",
+      "file_type": "rationale",
+      "source_file": "split_diploma.py",
+      "source_location": "L72",
+      "id": "diploma_split_diploma_rationale_72",
+      "community": 9,
+      "norm_label": "returns list of (level, title, line_index) sorted by line_index."
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "consolidate_chapters.py",
+      "source_location": "L46",
+      "weight": 1.0,
+      "source": "consolidate_chapters_py",
+      "target": "diploma_consolidate_chapters_main",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "consolidate_chapters.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "diploma_consolidate_chapters_rationale_1",
+      "target": "consolidate_chapters_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf.py",
+      "source_location": "L29",
+      "weight": 1.0,
+      "source": "convert_pdf_py",
+      "target": "diploma_convert_pdf_extract_figures",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf.py",
+      "source_location": "L72",
+      "weight": 1.0,
+      "source": "convert_pdf_py",
+      "target": "diploma_convert_pdf_extract_bibliography",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf.py",
+      "source_location": "L87",
+      "weight": 1.0,
+      "source": "convert_pdf_py",
+      "target": "diploma_convert_pdf_convert",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_rationale_1",
+      "target": "convert_pdf_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf.py",
+      "source_location": "L113",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_convert",
+      "target": "diploma_convert_pdf_extract_figures",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf.py",
+      "source_location": "L30",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_rationale_30",
+      "target": "diploma_convert_pdf_extract_figures",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf.py",
+      "source_location": "L117",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_convert",
+      "target": "diploma_convert_pdf_extract_bibliography",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf.py",
+      "source_location": "L73",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_rationale_73",
+      "target": "diploma_convert_pdf_extract_bibliography",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L34",
+      "weight": 1.0,
+      "source": "convert_pdf_pymupdf_py",
+      "target": "diploma_convert_pdf_pymupdf_extract_text_with_pages",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L52",
+      "weight": 1.0,
+      "source": "convert_pdf_pymupdf_py",
+      "target": "diploma_convert_pdf_pymupdf_looks_like_heading",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L72",
+      "weight": 1.0,
+      "source": "convert_pdf_pymupdf_py",
+      "target": "diploma_convert_pdf_pymupdf_build_markdown",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L91",
+      "weight": 1.0,
+      "source": "convert_pdf_pymupdf_py",
+      "target": "diploma_convert_pdf_pymupdf_extract_bibliography",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L101",
+      "weight": 1.0,
+      "source": "convert_pdf_pymupdf_py",
+      "target": "diploma_convert_pdf_pymupdf_main",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_pymupdf_rationale_1",
+      "target": "convert_pdf_pymupdf_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L108",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_pymupdf_main",
+      "target": "diploma_convert_pdf_pymupdf_extract_text_with_pages",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L35",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_pymupdf_rationale_35",
+      "target": "diploma_convert_pdf_pymupdf_extract_text_with_pages",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L82",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_pymupdf_build_markdown",
+      "target": "diploma_convert_pdf_pymupdf_looks_like_heading",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L53",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_pymupdf_rationale_53",
+      "target": "diploma_convert_pdf_pymupdf_looks_like_heading",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L111",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_pymupdf_main",
+      "target": "diploma_convert_pdf_pymupdf_build_markdown",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L73",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_pymupdf_rationale_73",
+      "target": "diploma_convert_pdf_pymupdf_build_markdown",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L116",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_pymupdf_main",
+      "target": "diploma_convert_pdf_pymupdf_extract_bibliography",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "convert_pdf_pymupdf.py",
+      "source_location": "L92",
+      "weight": 1.0,
+      "source": "diploma_convert_pdf_pymupdf_rationale_92",
+      "target": "diploma_convert_pdf_pymupdf_extract_bibliography",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "inspect_structure.py",
+      "source_location": "L20",
+      "weight": 1.0,
+      "source": "inspect_structure_py",
+      "target": "diploma_inspect_structure_numbered_level",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "inspect_structure.py",
+      "source_location": "L24",
+      "weight": 1.0,
+      "source": "inspect_structure_py",
+      "target": "diploma_inspect_structure_analyze",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "inspect_structure.py",
+      "source_location": "L52",
+      "weight": 1.0,
+      "source": "inspect_structure_py",
+      "target": "diploma_inspect_structure_recommend",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "inspect_structure.py",
+      "source_location": "L62",
+      "weight": 1.0,
+      "source": "inspect_structure_py",
+      "target": "diploma_inspect_structure_main",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "inspect_structure.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "diploma_inspect_structure_rationale_1",
+      "target": "inspect_structure_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "inspect_structure.py",
+      "source_location": "L40",
+      "weight": 1.0,
+      "source": "diploma_inspect_structure_analyze",
+      "target": "diploma_inspect_structure_numbered_level",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "inspect_structure.py",
+      "source_location": "L70",
+      "weight": 1.0,
+      "source": "diploma_inspect_structure_main",
+      "target": "diploma_inspect_structure_analyze",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "inspect_structure.py",
+      "source_location": "L93",
+      "weight": 1.0,
+      "source": "diploma_inspect_structure_main",
+      "target": "diploma_inspect_structure_recommend",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L32",
+      "weight": 1.0,
+      "source": "split_diploma_py",
+      "target": "diploma_split_diploma_slugify",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L40",
+      "weight": 1.0,
+      "source": "split_diploma_py",
+      "target": "diploma_split_diploma_numbered_level",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L45",
+      "weight": 1.0,
+      "source": "split_diploma_py",
+      "target": "diploma_split_diploma_detect_heading_style",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L71",
+      "weight": 1.0,
+      "source": "split_diploma_py",
+      "target": "diploma_split_diploma_parse_headings",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L102",
+      "weight": 1.0,
+      "source": "split_diploma_py",
+      "target": "diploma_split_diploma_extract_block",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L106",
+      "weight": 1.0,
+      "source": "split_diploma_py",
+      "target": "diploma_split_diploma_split_diploma",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L172",
+      "weight": 1.0,
+      "source": "split_diploma_py",
+      "target": "diploma_split_diploma_sec_idx_total",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L176",
+      "weight": 1.0,
+      "source": "split_diploma_py",
+      "target": "diploma_split_diploma_sub_idx_total",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_rationale_1",
+      "target": "split_diploma_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L149",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_split_diploma",
+      "target": "diploma_split_diploma_slugify",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L33",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_rationale_33",
+      "target": "diploma_split_diploma_slugify",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L55",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_detect_heading_style",
+      "target": "diploma_split_diploma_numbered_level",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L86",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_parse_headings",
+      "target": "diploma_split_diploma_numbered_level",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L41",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_rationale_41",
+      "target": "diploma_split_diploma_numbered_level",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L112",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_split_diploma",
+      "target": "diploma_split_diploma_detect_heading_style",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L46",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_rationale_46",
+      "target": "diploma_split_diploma_detect_heading_style",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L115",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_split_diploma",
+      "target": "diploma_split_diploma_parse_headings",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L72",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_rationale_72",
+      "target": "diploma_split_diploma_parse_headings",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L143",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_split_diploma",
+      "target": "diploma_split_diploma_extract_block",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L169",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_split_diploma",
+      "target": "diploma_split_diploma_sec_idx_total",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "split_diploma.py",
+      "source_location": "L169",
+      "weight": 1.0,
+      "source": "diploma_split_diploma_split_diploma",
+      "target": "diploma_split_diploma_sub_idx_total",
+      "confidence_score": 1.0
+    }
+  ],
+  "hyperedges": [],
+  "built_at_commit": "c3dcfb93dec5f68ca95ede9b46fde22576cc36c1"
+}
