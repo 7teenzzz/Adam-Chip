@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "docx": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/docx/SKILL.md",
+      "computedHash": "150be87ff7b18f273ad07da303adb1cf2ca21cc3e76db7a2cf0373405178a278"
+    },
+    "paper-writer": {
+      "source": "kgraph57/paper-writer-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "aa3a2def05874467c8e673d565144009c05b2f796ab7211c10ee304272e78360"
+    }
+  }
+}
