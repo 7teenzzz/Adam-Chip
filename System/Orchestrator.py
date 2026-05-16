@@ -825,44 +825,49 @@ class VoiceLoopController:
         self.running = False
         self.vad_state = "idle"
 
-    async def _drain_esp32_backlog(
+    async def _esp32_drain_during_mute(
         self,
         read_fn: Callable[[int], bytes],
         frame_bytes: int,
-        mute_start: float,
-    ) -> int:
-        """Read and discard ESP32 stream frames buffered during the mute window.
+    ) -> None:
+        """Continuously read and discard ESP32 audio bytes while voice_loop is muted.
 
-        ESP32 keeps writing PCM into the open TCP stream while the orchestrator is
-        busy (transcribe → LLM → TTS). On unmute, the next read returns those
-        accumulated frames, which include acoustic self-echo of the agent's own
-        TTS. Discarding ~mute_duration_ms (+200 ms jitter) of bytes realigns the
-        reader with live audio.
+        ESP32 keeps writing PCM @ 64 KB/s into the TCP stream regardless of whether
+        the Jetson is reading. The W5500 SPI Ethernet send buffer (~64 KB) overflows
+        within ~1 second if nothing drains it; ESP firmware then closes the
+        connection. Without this drainer, every turn ends with IncompleteRead after
+        the transcribe + LLM + TTS dispatch.
 
-        Reads are coalesced byte-wise (HTTPResponse.read may return short reads
-        mid-stream) to keep frame alignment intact for downstream WebRTC VAD.
-        A wall-clock deadline of 2× expected drain prevents an indefinite hang
-        if the underlying socket died during the long mute.
+        Runs as a background task spawned at mic_muted and cancelled at unmute.
+        Discarded bytes are not used — the goal is to keep the TCP socket alive
+        so the same connection survives across the dispatch window.
+
+        Cancellation by the caller is the normal exit path. Stream errors are
+        logged and ignored — the next read from the main loop will surface the
+        same error and trigger retry in _run_esp32.
         """
-        mute_duration_ms = (time.perf_counter() - mute_start) * 1000.0 + 200.0
-        bytes_to_drain = max(0, int(mute_duration_ms / self.frame_ms)) * frame_bytes
-        if bytes_to_drain <= 0:
-            return 0
-        deadline = time.perf_counter() + (mute_duration_ms / 1000.0) * 2.0
         drained_bytes = 0
-        while drained_bytes < bytes_to_drain:
-            if time.perf_counter() > deadline:
-                event_log.append("esp32_mic_drain_timeout", {
-                    "drained_bytes": drained_bytes,
-                    "target_bytes": bytes_to_drain,
-                })
-                break
-            remaining = bytes_to_drain - drained_bytes
-            chunk = await asyncio.to_thread(read_fn, remaining)
-            if not chunk:
-                break
-            drained_bytes += len(chunk)
-        return drained_bytes // frame_bytes
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.to_thread(read_fn, frame_bytes)
+                except Exception as exc:
+                    event_log.append("esp32_mic_drainer_error", {
+                        "error": str(exc), "drained_bytes": drained_bytes,
+                    })
+                    return
+                if not chunk:
+                    # Stream empty or closed — short sleep avoids busy loop.
+                    # On real closure the next main-loop read will get the
+                    # same empty / exception and trigger reconnect.
+                    await asyncio.sleep(0.02)
+                    continue
+                drained_bytes += len(chunk)
+        except asyncio.CancelledError:
+            event_log.append("esp32_mic_drainer_stopped", {
+                "drained_bytes": drained_bytes,
+            })
+            raise
 
     def _make_stereo_reader(self, read_fn: Callable[[int], bytes]) -> Callable[[int], bytes]:
         """Wraps a stereo PCM read_fn to return downmixed mono (L+R)/2.
@@ -1057,12 +1062,7 @@ class VoiceLoopController:
                     silence_ms = 0
                     _was_endpointing = False
                     if enough_speech:
-                        # mute_start is the wall-clock anchor for ESP32 backlog
-                        # estimation. Take it BEFORE _stop_process() so its value
-                        # is independent of the ALSA branch (avoids a future bug
-                        # where the local _stop_process() inflates the drain
-                        # estimate). In ESP32 mode no process exists; the value
-                        # is set at the same logical moment as endpointing.
+                        # mute_start tracks total mute duration for diagnostics.
                         mute_start = time.perf_counter()
                         # In local ALSA mode self._process is set; in ESP32 mode it is None.
                         _using_process = self._process is not None
@@ -1072,27 +1072,48 @@ class VoiceLoopController:
                         event_log.append("mic_muted", {"reason": "asr_transcribing"})
                         self.vad_state = "transcribing"
 
-                        spoke = await self._transcribe_and_dispatch(pcm)
+                        # ESP32 mode: spawn background drainer to keep the TCP
+                        # stream alive during the dispatch window. Without this,
+                        # ESP closes the connection after ~10 s of no reads
+                        # (W5500 send buffer overflow) and the next main-loop
+                        # read raises IncompleteRead. See notes/voice-pipeline-
+                        # vs-ui-layering.md.
+                        _drainer_task: asyncio.Task | None = None
+                        if not _using_process and self.mic_source == "esp32":
+                            _drainer_task = asyncio.create_task(
+                                self._esp32_drain_during_mute(_reader[0], frame_bytes),
+                                name="adam_esp32_drainer",
+                            )
+                            event_log.append("esp32_mic_drainer_started", {})
 
-                        # Local mode: restart arecord and update _reader (clean buffer).
-                        # ESP32 mode: stream stays open and accumulates frames in TCP
-                        # during transcribe + LLM + TTS. Drain that backlog here so the
-                        # next read does not return TTS self-echo as user speech.
+                        try:
+                            spoke = await self._transcribe_and_dispatch(pcm)
+                        finally:
+                            if _drainer_task is not None:
+                                _drainer_task.cancel()
+                                try:
+                                    await _drainer_task
+                                except asyncio.CancelledError:
+                                    pass
+                                except Exception:
+                                    # Drainer logs its own errors. We don't want
+                                    # an error here to block the unmute path —
+                                    # the next main-loop read will re-surface it.
+                                    pass
+
+                        # Local mode: restart arecord and update _reader (clean
+                        # buffer). ESP32 mode: drainer kept stream live and at
+                        # the live edge; main loop resumes reading directly.
                         if _using_process:
                             self._process = self._start_arecord()
                             stdout = self._process.stdout
                             if stdout is None:
                                 raise RuntimeError("arecord restart failed")
                             _reader[0] = stdout.read
-                        else:
-                            drained = await self._drain_esp32_backlog(
-                                _reader[0], frame_bytes, mute_start
-                            )
-                            event_log.append("esp32_mic_drained", {
-                                "frames": drained,
-                                "ms": drained * self.frame_ms,
-                            })
-                        event_log.append("mic_unmuted", {"reason": "transcription_complete"})
+                        event_log.append("mic_unmuted", {
+                            "reason": "transcription_complete",
+                            "mute_duration_ms": int((time.perf_counter() - mute_start) * 1000),
+                        })
                         self.muted_by_tts = False
                         speech_frames.clear()
                         speech_ms = 0
@@ -1112,16 +1133,13 @@ class VoiceLoopController:
                             })
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            self.running = False
-            self.vad_state = "error"
-            self.last_asr_error = str(exc)
-            runtime_state["last_error"] = f"voice_loop:{exc}"
-            event_log.append("voice_loop_error", {"error": str(exc)})
-            event_log.append("voice_loop_stopped", self.status())
+        # Exception handling is the responsibility of the caller (_run_esp32 /
+        # _run_local). They own retry counters, fallback policy, and the
+        # decision to stop the pipeline. Swallowing exceptions here previously
+        # killed voice_loop on a single IncompleteRead from the ESP32 stream
+        # — see notes/voice-pipeline-vs-ui-layering.md.
         finally:
             self._stop_process()
-            self.running = False
 
     def _start_arecord(self) -> subprocess.Popen[bytes]:
         command = [

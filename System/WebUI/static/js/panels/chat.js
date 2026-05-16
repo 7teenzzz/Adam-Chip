@@ -102,17 +102,21 @@ export function mount(target) {
   let vuPeakL = 0,  vuPeakR = 0,  vuPeakMono = 0;
   let vuRafId = null;
 
-  // T17 fix #7 — mic source badge. Updated live from audio_level.source so
-  // the user can tell at a glance which mic is feeding the equaliser.
-  let micSource = "local";  // updated by audio_level events below
+  // Mic source badge — single source of truth is the server snapshot.
+  // Initial value comes from /api/agent/status (voice_loop.mic_active_source).
+  // Live updates arrive via audio_level SSE events. Pre-snapshot we show "—"
+  // instead of lying with a default "local" label.
+  const initialVL = state.get("status")?.voice_loop;
+  let micSource = initialVL?.mic_active_source || null;
   const micSourceBadge = el("span", {
     style: "font-size:10px; color:var(--muted); font-family:var(--font-mono); padding:2px 6px; border-radius:3px; background:var(--bg-2)",
-  }, "Mic: local");
-  // T17 fix #8 — equaliser colour tracks the mic source so the user
-  // never confuses an ESP32 stream with the local fallback.
+  }, "Mic: —");
+  // Equaliser colour tracks the mic source so the user never confuses an
+  // ESP32 stream with the local fallback.
   //   esp32_stereo / esp32_mono → green (--accent path)
   //   local_fallback            → amber/warn (ESP32 down)
-  //   local                     → muted grey
+  //   local                     → muted grey (idle equaliser, no pipeline)
+  //   null / unknown            → "—", pre-snapshot
   function vuColorTriplet() {
     if (micSource === "esp32_stereo" || micSource === "esp32_mono") {
       return { rgb: "67,209,122", emoji: "🟢", label: micSource === "esp32_stereo" ? "ESP32 stereo" : "ESP32 mono" };
@@ -120,7 +124,10 @@ export function mount(target) {
     if (micSource === "local_fallback") {
       return { rgb: "240,184,74", emoji: "🟡", label: "Local (ESP32 down)" };
     }
-    return { rgb: "150,150,160", emoji: "⚪", label: "Local" };
+    if (micSource === "local") {
+      return { rgb: "150,150,160", emoji: "⚪", label: "Local" };
+    }
+    return { rgb: "120,120,130", emoji: "○", label: "—" };
   }
   function refreshMicSourceBadge() {
     const c = vuColorTriplet();
@@ -174,8 +181,14 @@ export function mount(target) {
   vuRafId = requestAnimationFrame(drawVuMeter);
 
   // ---- Hearing (OWW + ASR) live display ----
+  // State machine is server-authoritative: on mount we read /api/agent/status
+  // and derive the initial label. Pre-snapshot we show "unknown" (a neutral
+  // grey "—" placeholder) instead of lying with "Инициализация" — the latter
+  // is reserved for the case where the snapshot HAS loaded and voice_loop
+  // is actually down. Transitions are driven by SSE events.
   const HEARING_COLORS = {
-    loading:      "var(--warn)",   // yellow  — OWW/ASR not ready
+    unknown:      "var(--dim)",    // grey    — snapshot not loaded yet
+    loading:      "var(--warn)",   // yellow  — voice_loop down (real)
     standby:      "var(--accent)", // green   — waiting for wake word
     listening:    "#a855f7",       // purple  — recording / accumulating speech
     reply:        "#a855f7",       // purple  — reply window open (same as listening)
@@ -184,6 +197,7 @@ export function mount(target) {
     tts:          "#60a5fa",       // blue    — Adam is speaking
   };
   const HEARING_LABELS = {
+    unknown:      "— ожидаем данных",
     loading:      "🎧 Инициализация",
     standby:      "🎧 Ожидаю обращения",
     listening:    "🎤 Слушаю",
@@ -192,16 +206,20 @@ export function mount(target) {
     thinking:     "💭 Думаю",
     tts:          "🔊 Говорю",
   };
-  let hearingState = "loading";
+  let hearingState = (() => {
+    const vl = state.get("status")?.voice_loop;
+    if (vl == null) return "unknown";
+    return vl.running ? "standby" : "loading";
+  })();
   let dotsTick = 0;
   const DOTS_PERIOD_MS = 400;
   const hearingDot = el("span", {
     style: `display:inline-block; width:8px; height:8px; border-radius:50%;
-            background:${HEARING_COLORS.loading}; flex-shrink:0; transition:background 0.35s`,
+            background:${HEARING_COLORS[hearingState] || HEARING_COLORS.unknown}; flex-shrink:0; transition:background 0.35s`,
   });
   const asrBox = el("div", {
     style: "min-height:28px; padding:6px 8px; border-radius:4px; background:var(--bg-2); font-size:12px; color:var(--muted); font-family:var(--font-mono); white-space:pre-wrap; word-break:break-word; line-height:1.4",
-  }, HEARING_LABELS.loading);
+  }, HEARING_LABELS[hearingState] || HEARING_LABELS.unknown);
 
   // ---- Countdown bar ----
   const countdownFill = el("div", {
@@ -263,21 +281,39 @@ export function mount(target) {
     countdownFill.style.width = "0%";
   }
 
-  // Route to idle: standby if voice loop is up, loading otherwise.
-  // Called explicitly when an active SSE state ends.
+  // Route to idle: standby if voice_loop is up, loading if it's down,
+  // unknown if we don't have a snapshot yet. Called when an active SSE
+  // state ends or on initial mount before any events arrive.
   function routeToIdle() {
-    const running = state.get("status")?.voice_loop?.running;
-    updateHearing(running ? "standby" : "loading");
+    const vl = state.get("status")?.voice_loop;
+    if (vl == null) {
+      updateHearing("unknown");
+    } else {
+      updateHearing(vl.running ? "standby" : "loading");
+    }
   }
 
   // Polling-time sync — preserves active SSE-driven states so polling
   // never overrides "слушаю / распознаю / думаю / говорю" mid-flow.
   function syncHearingFromStatus() {
     if (["listening", "reply", "transcribing", "thinking", "tts"].includes(hearingState)) return;
+    // Also refresh mic source from snapshot — keeps badge truthful across
+    // remounts when no audio_level event has fired since last navigation.
+    const vlSnap = state.get("status")?.voice_loop;
+    if (vlSnap?.mic_active_source && vlSnap.mic_active_source !== micSource) {
+      micSource = vlSnap.mic_active_source;
+      refreshMicSourceBadge();
+    }
     routeToIdle();
   }
   syncHearingFromStatus();
   state.subscribe("status", syncHearingFromStatus);
+
+  // Self-trigger a status fetch on mount so we don't wait for main.js's
+  // 4-second polling cycle to deliver the first snapshot.
+  if (state.get("status") == null) {
+    api.get("/api/agent/status").then((s) => state.set("status", s)).catch(() => {});
+  }
 
   let jetTimer = null, jetInflight = false;
 
