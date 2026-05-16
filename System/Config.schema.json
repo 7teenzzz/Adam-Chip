@@ -454,6 +454,31 @@
               "enum": ["standby", "stop"],
               "description": "Action when the reply window expires (soft or hard cutoff with no qualifying speech). 'standby' (default) — return voice loop to STANDBY, keep mic running, ready for next wake word. 'stop' — fully stop the voice loop (mic off, no OWW); requires explicit /api/voice/start to resume. Use 'stop' for exhibition power-saving when long idle periods are expected.",
               "default": "standby"
+            },
+            "disable_local_fallback": {
+              "type": "boolean",
+              "description": "When true, MicReader (System/adam/mic_reader.py) never falls back to local ALSA mic regardless of how many consecutive ESP32 stream-open failures occur. Retries continue forever with `esp_retry_backoff_sec`. When false (legacy behavior), the older `_esp_mic_fallback` path activates after `media.audio.esp_mic_fail_threshold` consecutive failures. Default true is the exhibition contract: ESP32 INMP441 is the only sanctioned mic; local arecord is for maintenance-mode debugging only.",
+              "default": true
+            },
+            "esp_open_timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "description": "Per-attempt timeout in seconds for opening the ESP32 :81 WAV stream (`_NO_PROXY_OPENER.open(url, None, timeout)`). Replaces the legacy hardcoded 30 s. Lower value (8) trades a slightly higher false-failure rate during ESP boot for faster recovery cycles — the retry loop in MicReader (`esp_retry_backoff_sec`) is the canonical recovery mechanism.",
+              "default": 8
+            },
+            "esp_probe_after_fails": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20,
+              "description": "After this many consecutive `:81` stream-open failures, MicReader probes `:80 /api/status` (cheap, ~150 ms) before attempting another `:81` open. If the probe fails, MicReader skips the `:81` attempt and sleeps the next `esp_retry_backoff_sec` slot. Saves roughly `esp_open_timeout_sec * remaining_attempts` seconds when ESP is fully down. 0 disables probing (always retry :81).",
+              "default": 2
+            },
+            "esp_retry_backoff_sec": {
+              "type": "array",
+              "items": { "type": "number" },
+              "description": "Exponential-backoff sequence (seconds) between MicReader stream-reopen attempts. Index = `min(consecutive_fail_count - 1, len - 1)`; the final element is reused indefinitely once exhausted. Default `[2, 4, 8, 15]` gives recovery under 5 s for transient drops (REQ-RECOVERY-UNDER-5SEC) while capping reconnect storms at one every 15 s. List MUST contain at least one positive number; otherwise MicReader busy-loops on failure.",
+              "default": [2, 4, 8, 15]
             }
           }
         },

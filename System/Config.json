@@ -96,7 +96,11 @@
       "timeout_sec": 30,
       "wake_words": "адам",
       "wake_word_required": true,
-      "reply_window_expired_action": "standby"
+      "reply_window_expired_action": "standby",
+      "disable_local_fallback": true,
+      "esp_open_timeout_sec": 8,
+      "esp_probe_after_fails": 2,
+      "esp_retry_backoff_sec": [2, 4, 8, 15]
     },
     "tts": {
       "provider": "silero",
