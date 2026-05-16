@@ -241,6 +241,15 @@ Plans:
 
 **Mode:** standard (full GSD cycle, subagent: gsd-codebase-mapper)
 
+**Plans:** 6 plans
+
+- [ ] 08-01-PLAN.md — Wave 0 graphify check + Wave 1.1 verify 16 philosophical terms
+- [ ] 08-02-PLAN.md — Wave 1.2 verify 9 AIIM terms against persona graph
+- [ ] 08-03-PLAN.md — Wave 1.3 verify 18 technical terms against code graph + Config.json
+- [ ] 08-04-PLAN.md — Wave 1.4 verify 5 artistic terms against esp32 graph + Lore
+- [ ] 08-05-PLAN.md — Wave 2 synthesis (THEORY-CODE-MATRIX + CONTRADICTIONS + EMERGENT + CROSS-GRAPH)
+- [ ] 08-06-PLAN.md — Wave 3 final 08-SUMMARY.md
+
 ---
 
 ## Phase 9: Next-Phases Planning
