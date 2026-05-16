@@ -1709,11 +1709,64 @@ async def _wait_for_services(expected: set[str]) -> bool:
     return False
 
 
+async def _ensure_crossover_link() -> None:
+    """Bring up eno1 crossover interface if NetworkManager didn't auto-connect yet.
+
+    Reads /sys/class/net/eno1/operstate first — skips nmcli call when already up.
+    connection.permissions=-- means any user can activate it without sudo.
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        state = Path("/sys/class/net/eno1/operstate").read_text().strip()
+    except OSError:
+        state = "unknown"
+    ip_line = ""
+    try:
+        ip_result = await loop.run_in_executor(None, lambda: subprocess.run(
+            ["ip", "-4", "-o", "addr", "show", "eno1"],
+            capture_output=True, text=True, timeout=3,
+        ))
+        ip_line = ip_result.stdout.strip()
+    except Exception:
+        pass
+    eno1_ip = ip_line.split()[3] if ip_line else None
+    event_log.append("crossover_link_check", {"eno1_state": state, "eno1_ip": eno1_ip or "none"})
+    if state == "up" and eno1_ip:
+        return
+    # Interface not ready — try to bring up the NetworkManager profile.
+    # connection.permissions=-- means any user can activate it without sudo.
+    try:
+        result = await loop.run_in_executor(None, lambda: subprocess.run(
+            ["nmcli", "connection", "up", "adam-esp-crossover"],
+            capture_output=True, text=True, timeout=10,
+        ))
+        event_log.append("crossover_link_up_attempt", {
+            "returncode": result.returncode,
+            "stdout": result.stdout.strip()[:200],
+            "stderr": result.stderr.strip()[:200],
+        })
+        if result.returncode == 0:
+            await asyncio.sleep(2)
+            # Re-read IP to confirm NM assigned it
+            try:
+                ip_result2 = await loop.run_in_executor(None, lambda: subprocess.run(
+                    ["ip", "-4", "-o", "addr", "show", "eno1"],
+                    capture_output=True, text=True, timeout=3,
+                ))
+                confirmed_ip = ip_result2.stdout.strip().split()[3] if ip_result2.stdout.strip() else None
+                event_log.append("crossover_link_up_confirmed", {"eno1_ip": confirmed_ip or "none"})
+            except Exception:
+                pass
+    except Exception as exc:
+        event_log.append("crossover_link_up_error", {"error": str(exc)[:120]})
+
+
 async def _orchestrated_startup(services_confirmed: bool) -> None:
     """Sequential boot: wait for services → sound → warmup greeting → voice loop.
 
     Keeps the mic off during the entire sequence so OWW cannot fire on TTS audio.
     """
+    await _ensure_crossover_link()
     expected_raw = os.environ.get("ADAM_EXPECTED_SERVICES", "llm,tts,asr,vlm")
     expected = {s.strip() for s in expected_raw.split(",") if s.strip()}
 

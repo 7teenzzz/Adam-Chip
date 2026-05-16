@@ -183,45 +183,6 @@ if ! ${EXPLICIT_NODES} && ! ${EMPTY_MODE}; then
 fi
 echo
 
-# --------- 0a. Crossover network sanity (eno1 + ESP) -------------------------
-# Adam подключается к ESP через crossover-cable Jetson eno1 ↔ ESP W5500.
-# Подсеть 10.10.10.0/24 (Jetson .1, ESP .171). НЕ идёт через Wi-Fi/router.
-#
-# nmcli profile adam-esp-crossover настроен один раз и поднимается auto
-# при cold boot. Этот блок — только проверка + быстрая попытка поднять
-# если NetworkManager не успел.
-ESP_BASE_URL="$(python3 -c "import json; print(json.load(open('${ROOT_DIR}/System/Config.json'))['mcu']['base_url'])" 2>/dev/null || echo "http://10.10.10.171")"
-
-eno1_state="$(cat /sys/class/net/eno1/operstate 2>/dev/null || echo unknown)"
-eno1_ip="$(ip -4 -o addr show eno1 2>/dev/null | awk '{print $4}' | head -1)"
-if [[ "${eno1_state}" != "up" ]] || [[ -z "${eno1_ip}" ]]; then
-  echo "⏵ Поднимаю eno1 (adam-esp-crossover)…"
-  sudo nmcli connection up adam-esp-crossover >/dev/null 2>&1 || \
-    echo "  ! Не удалось поднять adam-esp-crossover — проверь: nmcli connection show"
-  sleep 2
-  eno1_ip="$(ip -4 -o addr show eno1 2>/dev/null | awk '{print $4}' | head -1)"
-fi
-echo "  eno1: state=${eno1_state} ip=${eno1_ip:-none}"
-
-# Wait for ESP (max 90s, poll every 5s). Adam должен использовать ESP-микрофоны
-# по умолчанию — пробуем дать ESP время подняться перед стартом orchestrator.
-echo "⏵ Ожидание ESP на ${ESP_BASE_URL} (до 90с)…"
-ESP_OK=false
-for i in $(seq 1 18); do
-  if curl --noproxy '*' -fsS --max-time 2 "${ESP_BASE_URL}/api/status" >/dev/null 2>&1; then
-    echo "  ✓ ESP отвечает (через ${i}×5с = $((i*5))с)"
-    ESP_OK=true
-    break
-  fi
-  printf "  · попытка %d/18 (timeout 2s)…\r" "${i}"
-  sleep 5
-done
-echo
-if ! ${ESP_OK}; then
-  echo "  ! ESP не отвечает за 90с — orchestrator запустится с local mic fallback"
-  echo "    (orchestrator продолжит 20 background-retry × 15s в течение 5 минут)"
-fi
-
 # --------- 0. Log Viewer (always-on, independent of AI services) -------------
 if systemctl cat adam-logviewer.service >/dev/null 2>&1; then
   if ! systemctl is-active --quiet adam-logviewer 2>/dev/null; then

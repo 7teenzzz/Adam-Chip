@@ -278,12 +278,18 @@ class TTSClient:
         return self._play_wav_bytes_local_sync(wav_bytes)
 
     def _play_wav_bytes_local_sync(self, wav_bytes: bytes) -> dict[str, Any]:
-        """Play WAV bytes via local ALSA/PulseAudio. Blocks until playback completes.
+        """Play WAV bytes via local PulseAudio/ALSA. Blocks until playback completes.
 
         Uses Popen (not subprocess.run) so that interrupt_playback() can kill
         the process mid-playback for barge-in support.
 
         Try order: paplay (PulseAudio) → aplay <device> → aplay default.
+
+        PulseAudio first is intentional: it makes Adam's output obey the Jetson
+        system volume slider (Sound Settings / pactl). aplay -D plughw:1,3 is
+        kept as the immediate fallback for headless/no-PA contexts where paplay
+        fails fast — the direct-ALSA path remains the proven working route for
+        HDMI HDA on Tegra.
         """
         import shutil
         import subprocess
@@ -298,15 +304,15 @@ class TTSClient:
             return {"ok": False, "error": f"tempfile: {exc}"}
 
         def _candidates() -> list[list[str]]:
-            # Prefer explicit ALSA device (reliable for HDMI output).
-            # Fall back to default ALSA, then PulseAudio default sink.
+            # PulseAudio first → system volume control reaches Adam.
+            # Fall back to direct ALSA (plughw:1,3) when PA isn't reachable.
             cmds: list[list[str]] = []
+            if pp := shutil.which("paplay"):
+                cmds.append([pp, wav_path])
             if ap := shutil.which("aplay"):
                 cmds.append([ap, "-q", "-D", dev, wav_path])
                 if dev != "default":
                     cmds.append([ap, "-q", "-D", "default", wav_path])
-            if pp := shutil.which("paplay"):
-                cmds.append([pp, wav_path])
             return cmds
 
         candidates = _candidates()
