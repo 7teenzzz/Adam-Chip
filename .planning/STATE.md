@@ -19,11 +19,12 @@ progress:
 
 ## Active Phase
 
-**Phase 8: Theory-Code Verification** — ✓ COMPLETE (2026-05-17)
-Summary: [phases/08-theory-code-verification/08-SUMMARY.md](phases/08-theory-code-verification/08-SUMMARY.md)
+**Phase 9: Next-Phases Planning** — CONTEXT gathered, ready for plan
+Context: [phases/09-next-phases-planning/09-CONTEXT.md](phases/09-next-phases-planning/09-CONTEXT.md)
 Branch: `diploma-chapter3`
+Next step: `/gsd-plan-phase 9`
 
-**Next:** Phase 9 — Next-Phases Planning (`/gsd-discuss-phase 9`)
+**Recently completed:** Phase 7 (Diploma Analysis); Phase 8 (Theory-Code Verification); top-3 EMERGENT applied to diploma
 
 **Recently completed:** Phase 7 (Diploma Analysis); Phase 8 (Theory-Code Verification)
 
