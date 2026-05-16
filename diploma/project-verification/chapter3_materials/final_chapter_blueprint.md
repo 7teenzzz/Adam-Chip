@@ -1,47 +1,58 @@
+﻿<!--
+GENERATED: 2026-05-16T17:35:39Z
+STAGE: 2
+SOURCE: by-section/ (writing guide)
+STATUS: OK complete
+RUN: Manual or CI-triggered
+NEXT_UPDATE: manual trigger or when source changes
+-->
 # Final Chapter 3 Blueprint
 
-Каркас третьей главы для Stage 3 (writing).
+РљР°СЂРєР°СЃ С‚СЂРµС‚СЊРµР№ РіР»Р°РІС‹ РґР»СЏ Stage 3 (writing).
 
-## Структура
+## РЎС‚СЂСѓРєС‚СѓСЂР°
 
-| # | Раздел | Источник материала | Статус |
+| # | Р Р°Р·РґРµР» | РСЃС‚РѕС‡РЅРёРє РјР°С‚РµСЂРёР°Р»Р° | РЎС‚Р°С‚СѓСЃ |
 |---|---|---|---|
-| 3.1.1 | Концептуальная основа | by-section/3.1_concept.md + ch03/identity/identity_model.md | FULL |
-| 3.1.2 | Логика поведения | by-section/3.1_concept.md + crit_01_autonomy.md | PARTIAL |
-| 3.1.3 | Функции нейроагента | by-section/3.1_concept.md (5 функций) | FULL |
-| 3.2.1 | Общая архитектура | by-section/3.2_application.md + ch03/architecture/system_map.md | FULL |
-| 3.2.2 | Программный стек | by-section/3.2_application.md + Config.json | PARTIAL |
-| 3.2.3 | Системный промпт | crit_03_identity.md + ch03/identity/identity_model.md | FULL |
-| 3.2.4 | Память и контекст | crit_05_temporal.md + ch03/memory/memory_model.md | FULL |
-| 3.2.5 | Перцептивный/речевой | crit_06_interaction.md + ch03/interaction/interaction_model.md | FULL |
-| 3.2.6 | Командный контур | crit_04_normativity.md + crit_07_embodiment.md | FULL |
-| 3.3.1 | Техническая реализация | by-section/3.3_installation.md | FULL |
-| 3.3.2 | Перцептивный/моторный слои | crit_07_embodiment.md | FULL |
-| 3.3.3 | Программирование МК | by-section/3.3_installation.md | FULL |
-| 3.3.4 | Сценарий взаимодействия | crit_06_interaction.md + crit_01_autonomy.md | PARTIAL |
-| 3.3.5 | Тестирование инсталляции | by-section/3.3_installation.md + scripts/ | FULL |
-| 3.4.1 | Задачи и методика | by-section/3.4_testing.md | FULL |
-| 3.4.2 | Метрики удержания роли | crit_03 + crit_04 | FULL |
-| 3.4.3 | Метрики памяти/темпоральности | crit_05_temporal.md | FULL |
-| 3.4.4 | Метрики интеракционности | crit_01 + crit_06 | PARTIAL |
-| 3.4.5 | Интерпретация и ограничения | crit_08_emergence.md + REVIEW_CHECKPOINT.md (Section C) | FULL |
+| 3.1.1 | РљРѕРЅС†РµРїС‚СѓР°Р»СЊРЅР°СЏ РѕСЃРЅРѕРІР° | by-section/3.1_concept.md + ch03/identity/identity_model.md | FULL |
+| 3.1.2 | Р›РѕРіРёРєР° РїРѕРІРµРґРµРЅРёСЏ | by-section/3.1_concept.md + crit_01_autonomy.md | PARTIAL |
+| 3.1.3 | Р¤СѓРЅРєС†РёРё РЅРµР№СЂРѕР°РіРµРЅС‚Р° | by-section/3.1_concept.md (5 С„СѓРЅРєС†РёР№) | FULL |
+| 3.2.1 | РћР±С‰Р°СЏ Р°СЂС…РёС‚РµРєС‚СѓСЂР° | by-section/3.2_application.md + ch03/architecture/system_map.md | FULL |
+| 3.2.2 | РџСЂРѕРіСЂР°РјРјРЅС‹Р№ СЃС‚РµРє | by-section/3.2_application.md + Config.json | PARTIAL |
+| 3.2.3 | РЎРёСЃС‚РµРјРЅС‹Р№ РїСЂРѕРјРїС‚ | crit_03_identity.md + ch03/identity/identity_model.md | FULL |
+| 3.2.4 | РџР°РјСЏС‚СЊ Рё РєРѕРЅС‚РµРєСЃС‚ | crit_05_temporal.md + ch03/memory/memory_model.md | FULL |
+| 3.2.5 | РџРµСЂС†РµРїС‚РёРІРЅС‹Р№/СЂРµС‡РµРІРѕР№ | crit_06_interaction.md + ch03/interaction/interaction_model.md | FULL |
+| 3.2.6 | РљРѕРјР°РЅРґРЅС‹Р№ РєРѕРЅС‚СѓСЂ | crit_04_normativity.md + crit_07_embodiment.md | FULL |
+| 3.3.1 | РўРµС…РЅРёС‡РµСЃРєР°СЏ СЂРµР°Р»РёР·Р°С†РёСЏ | by-section/3.3_installation.md | FULL |
+| 3.3.2 | РџРµСЂС†РµРїС‚РёРІРЅС‹Р№/РјРѕС‚РѕСЂРЅС‹Р№ СЃР»РѕРё | crit_07_embodiment.md | FULL |
+| 3.3.3 | РџСЂРѕРіСЂР°РјРјРёСЂРѕРІР°РЅРёРµ РњРљ | by-section/3.3_installation.md | FULL |
+| 3.3.4 | РЎС†РµРЅР°СЂРёР№ РІР·Р°РёРјРѕРґРµР№СЃС‚РІРёСЏ | crit_06_interaction.md + crit_01_autonomy.md | PARTIAL |
+| 3.3.5 | РўРµСЃС‚РёСЂРѕРІР°РЅРёРµ РёРЅСЃС‚Р°Р»Р»СЏС†РёРё | by-section/3.3_installation.md + scripts/ | FULL |
+| 3.4.1 | Р—Р°РґР°С‡Рё Рё РјРµС‚РѕРґРёРєР° | by-section/3.4_testing.md | FULL |
+| 3.4.2 | РњРµС‚СЂРёРєРё СѓРґРµСЂР¶Р°РЅРёСЏ СЂРѕР»Рё | crit_03 + crit_04 | FULL |
+| 3.4.3 | РњРµС‚СЂРёРєРё РїР°РјСЏС‚Рё/С‚РµРјРїРѕСЂР°Р»СЊРЅРѕСЃС‚Рё | crit_05_temporal.md | FULL |
+| 3.4.4 | РњРµС‚СЂРёРєРё РёРЅС‚РµСЂР°РєС†РёРѕРЅРЅРѕСЃС‚Рё | crit_01 + crit_06 | PARTIAL |
+| 3.4.5 | РРЅС‚РµСЂРїСЂРµС‚Р°С†РёСЏ Рё РѕРіСЂР°РЅРёС‡РµРЅРёСЏ | crit_08_emergence.md + REVIEW_CHECKPOINT.md (Section C) | FULL |
 
-## Архитектурные компромиссы (Section C tensions)
+## РђСЂС…РёС‚РµРєС‚СѓСЂРЅС‹Рµ РєРѕРјРїСЂРѕРјРёСЃСЃС‹ (Section C tensions)
 
-Описать в 3.2.2 + 3.4.5:
+РћРїРёСЃР°С‚СЊ РІ 3.2.2 + 3.4.5:
 
-1. **LLM swap.** Заявление о Cosmos заменить на Gemma 4 E4B с обоснованием (доступность Q4_K_XL квантизации, ~65 tok/s на Jetson).
-2. **AIIM operationalization.** AIIM-формула — теоретический фундамент. Реализация через структурированный JSON (Tuning.json) для удобства hot-reload.
-3. **Module naming.** В тексте использовать code-side имена (`prompt.py`, `action.py`, `device.py`), упомянуть упрощённые имена из проектирования как ранние варианты.
-4. **Proactive speech absence.** Честно описать в 3.4.4 как inženernый компромисс: cost LLM inference vs benefit спонтанных реплик.
-5. **Web UI вместо TUI.** Кратко упомянуть в 3.2.2: вместо CLI собран FastAPI + Web UI + Log Viewer (порт 8083 always-on).
-6. **AIIM рефлексивный уровень.** Обозначить в 3.4.5 как направление дальнейшего развития.
+1. **LLM swap.** Р—Р°СЏРІР»РµРЅРёРµ Рѕ Cosmos Р·Р°РјРµРЅРёС‚СЊ РЅР° Gemma 4 E4B СЃ РѕР±РѕСЃРЅРѕРІР°РЅРёРµРј (РґРѕСЃС‚СѓРїРЅРѕСЃС‚СЊ Q4_K_XL РєРІР°РЅС‚РёР·Р°С†РёРё, ~65 tok/s РЅР° Jetson).
+2. **AIIM operationalization.** AIIM-С„РѕСЂРјСѓР»Р° вЂ” С‚РµРѕСЂРµС‚РёС‡РµСЃРєРёР№ С„СѓРЅРґР°РјРµРЅС‚. Р РµР°Р»РёР·Р°С†РёСЏ С‡РµСЂРµР· СЃС‚СЂСѓРєС‚СѓСЂРёСЂРѕРІР°РЅРЅС‹Р№ JSON (Tuning.json) РґР»СЏ СѓРґРѕР±СЃС‚РІР° hot-reload.
+3. **Module naming.** Р’ С‚РµРєСЃС‚Рµ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ code-side РёРјРµРЅР° (`prompt.py`, `action.py`, `device.py`), СѓРїРѕРјСЏРЅСѓС‚СЊ СѓРїСЂРѕС‰С‘РЅРЅС‹Рµ РёРјРµРЅР° РёР· РїСЂРѕРµРєС‚РёСЂРѕРІР°РЅРёСЏ РєР°Рє СЂР°РЅРЅРёРµ РІР°СЂРёР°РЅС‚С‹.
+4. **Proactive speech absence.** Р§РµСЃС‚РЅРѕ РѕРїРёСЃР°С‚СЊ РІ 3.4.4 РєР°Рє inЕѕenernС‹Р№ РєРѕРјРїСЂРѕРјРёСЃСЃ: cost LLM inference vs benefit СЃРїРѕРЅС‚Р°РЅРЅС‹С… СЂРµРїР»РёРє.
+5. **Web UI РІРјРµСЃС‚Рѕ TUI.** РљСЂР°С‚РєРѕ СѓРїРѕРјСЏРЅСѓС‚СЊ РІ 3.2.2: РІРјРµСЃС‚Рѕ CLI СЃРѕР±СЂР°РЅ FastAPI + Web UI + Log Viewer (РїРѕСЂС‚ 8083 always-on).
+6. **AIIM СЂРµС„Р»РµРєСЃРёРІРЅС‹Р№ СѓСЂРѕРІРµРЅСЊ.** РћР±РѕР·РЅР°С‡РёС‚СЊ РІ 3.4.5 РєР°Рє РЅР°РїСЂР°РІР»РµРЅРёРµ РґР°Р»СЊРЅРµР№С€РµРіРѕ СЂР°Р·РІРёС‚РёСЏ.
 
-## Стилистические напоминания (из 03_write_chapter3.md)
+## РЎС‚РёР»РёСЃС‚РёС‡РµСЃРєРёРµ РЅР°РїРѕРјРёРЅР°РЅРёСЏ (РёР· 03_write_chapter3.md)
 
-- Пассивный залог, прошедшее время для описания реализации
-- Без личных местоимений
-- ≥1500 знаков на раздел
-- Ссылки на исходники в формате ГОСТ `[N]`
-- При первом упоминании термина — определение + источник
-- В разделах 3.2–3.4 — обязательные ссылки на конкретные модули кода
+- РџР°СЃСЃРёРІРЅС‹Р№ Р·Р°Р»РѕРі, РїСЂРѕС€РµРґС€РµРµ РІСЂРµРјСЏ РґР»СЏ РѕРїРёСЃР°РЅРёСЏ СЂРµР°Р»РёР·Р°С†РёРё
+- Р‘РµР· Р»РёС‡РЅС‹С… РјРµСЃС‚РѕРёРјРµРЅРёР№
+- в‰Ґ1500 Р·РЅР°РєРѕРІ РЅР° СЂР°Р·РґРµР»
+- РЎСЃС‹Р»РєРё РЅР° РёСЃС…РѕРґРЅРёРєРё РІ С„РѕСЂРјР°С‚Рµ Р“РћРЎРў `[N]`
+- РџСЂРё РїРµСЂРІРѕРј СѓРїРѕРјРёРЅР°РЅРёРё С‚РµСЂРјРёРЅР° вЂ” РѕРїСЂРµРґРµР»РµРЅРёРµ + РёСЃС‚РѕС‡РЅРёРє
+- Р’ СЂР°Р·РґРµР»Р°С… 3.2вЂ“3.4 вЂ” РѕР±СЏР·Р°С‚РµР»СЊРЅС‹Рµ СЃСЃС‹Р»РєРё РЅР° РєРѕРЅРєСЂРµС‚РЅС‹Рµ РјРѕРґСѓР»Рё РєРѕРґР°
+
+
+
