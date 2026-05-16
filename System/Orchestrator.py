@@ -117,6 +117,10 @@ runtime_state: dict[str, Any] = {
     "last_tts_text": "",        # last TTS reply text (lowercase) for self-echo detection
     "last_tts_finished_at": 0.0,  # perf_counter() when last TTS playback ended
     "recent_tts_history": [],   # rolling buffer of {text, finished_at} for echo filtering
+    # True once the voice pipeline has fully booted (services healthy, warmup
+    # spoken, voice_loop.start() succeeded). Used to gate audio_level emission
+    # so the UI equaliser does not flicker during boot/warmup TTS playback.
+    "pipeline_ready": False,
 }
 
 
@@ -388,6 +392,15 @@ class VoiceLoopController:
         self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
         self.esp_mic_fail_threshold: int = int(audio_config.get("esp_mic_fail_threshold", 3))
         self.esp_mic_retry_interval_sec: float = float(audio_config.get("esp_mic_retry_interval_sec", 30.0))
+        # ESP-only mode: never drop to local mic, retry the stream forever.
+        # All three knobs live in services.asr so they're tunable from the UI.
+        self._disable_local_fallback: bool = bool(asr_cfg.get("disable_local_fallback", True))
+        self._esp_open_timeout_sec: int = int(asr_cfg.get("esp_open_timeout_sec", 8))
+        self._esp_probe_after_fails: int = int(asr_cfg.get("esp_probe_after_fails", 2))
+        _backoff = asr_cfg.get("esp_retry_backoff_sec", [2, 4, 8, 15])
+        self._esp_retry_backoff_sec: list[float] = (
+            [float(x) for x in _backoff] if isinstance(_backoff, list) and _backoff else [2.0, 4.0, 8.0, 15.0]
+        )
         self._esp_mic_fallback: bool = False
         self._esp_mic_fail_count: int = 0
         self._esp_mic_last_retry: float = 0.0
@@ -750,6 +763,25 @@ class VoiceLoopController:
             is_stereo = profile.endswith("stereo")
             event_log.append("esp32_mic_profile_applied", {"profile": profile})
             await self._mcu.request("POST", "/api/audio", {"profile": profile})
+            # After repeated stream-open failures, first verify ESP control
+            # plane (:80) before paying another open-timeout on :81. If even
+            # /api/status doesn't answer, the ESP is genuinely down and we
+            # back off harder instead of burning open-timeouts.
+            if (
+                self._esp_probe_after_fails > 0
+                and _session_fail_count >= self._esp_probe_after_fails
+            ):
+                probe = await self._mcu.request("GET", "/api/status")
+                if not probe.ok:
+                    event_log.append("esp32_mic_probe_failed", {
+                        "consecutive_fails": _session_fail_count,
+                        "probe_status": probe.status,
+                        "probe_error": str(probe.error)[:120],
+                    })
+                    backoff_s = self._next_backoff(_session_fail_count)
+                    if self.running:
+                        await asyncio.sleep(backoff_s)
+                    continue
             _stream_open_t = 0.0
             resp = None
             # Mark "connecting" before the long-poll urlopen so the UI shows
@@ -760,7 +792,11 @@ class VoiceLoopController:
                 # Use no-proxy opener — env HTTP proxy (v2ray) hijacks LAN
                 # connections to ESP32 and leaks sockets on long-poll mic stream
                 # disconnects. _NO_PROXY_OPENER guarantees direct TCP to ESP32:81.
-                resp = await asyncio.to_thread(_NO_PROXY_OPENER.open, url, None, 30)
+                # Timeout shortened to esp_open_timeout_sec (default 8) — a hung
+                # :81 accept-loop is now detected ~4× faster than the legacy 30s.
+                resp = await asyncio.to_thread(
+                    _NO_PROXY_OPENER.open, url, None, self._esp_open_timeout_sec,
+                )
                 event_log.append("esp32_mic_stream_opened", {"url": url, "profile": profile})
                 header = await asyncio.to_thread(resp.read, 44)
                 if len(header) < 44:
@@ -777,6 +813,10 @@ class VoiceLoopController:
                 # AFTER read_fn is bound so the first audio_level.source label
                 # already reflects "active".
                 self._mic_stream_state = "active"
+                # Successful open resets the streak — even before we know if
+                # the stream will stay stable. Otherwise a fast reconnect would
+                # carry the previous failure count into the next session.
+                _session_fail_count = 0
                 event_log.append("esp32_mic_stream_active", {
                     "profile": profile, "is_stereo": is_stereo,
                 })
@@ -810,7 +850,11 @@ class VoiceLoopController:
                 })
                 _session_fail_count += 1
                 self._esp_mic_fail_count += 1
-                if _session_fail_count >= self.esp_mic_fail_threshold:
+                # Two retry policies:
+                #   disable_local_fallback=True  → loop forever, exponential backoff
+                #   disable_local_fallback=False → legacy: after N fails, switch
+                #                                  to local mic via fallback path
+                if not self._disable_local_fallback and _session_fail_count >= self.esp_mic_fail_threshold:
                     self._esp_mic_fallback = True
                     self._mic_stream_state = "fallback"
                     self._esp_mic_last_retry = time.perf_counter()
@@ -819,7 +863,7 @@ class VoiceLoopController:
                     })
                     break
                 if self.running:
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(self._next_backoff(_session_fail_count))
             finally:
                 # Catch the normal-exit path too (vad_loop returned without
                 # exception, e.g. self.running flipped to False during shutdown).
@@ -833,6 +877,13 @@ class VoiceLoopController:
             await self._run_local(fb_frame_bytes)
         self.running = False
         self.vad_state = "idle"
+
+    def _next_backoff(self, fail_count: int) -> float:
+        """Pick the next reconnect-wait duration from the configured backoff
+        sequence. fail_count is 1-based (first fail → backoff[0])."""
+        seq = self._esp_retry_backoff_sec or [2.0]
+        idx = min(max(0, fail_count - 1), len(seq) - 1)
+        return float(seq[idx])
 
     async def _esp32_drain_during_mute(
         self,
@@ -943,6 +994,19 @@ class VoiceLoopController:
                     # guessing from channels-count alone.
                     payload["source"] = self._active_audio_source_label()
                     event_log.append("audio_level", payload)
+
+                # ── BOOT_WARMUP: drain only, no OWW, no endpointing ──────────────
+                # While the orchestrator is still in the warmup phase (TTS
+                # greeting + LLM prefix prime) we must keep reading the ESP32
+                # socket so its send buffer doesn't overflow and tear the
+                # connection (the "IncompleteRead alive=15.6s" boot bug). But
+                # we must NOT react to Adam's own warmup TTS as a wake word.
+                # So: read chunks, emit audio_level (for diagnostics), skip
+                # everything else, and loop. Exiting this state is the
+                # orchestrator's job (_set_voice_state("standby", "warmup_done")).
+                if self._voice_state == "boot_warmup":
+                    self.vad_state = "boot_warmup"
+                    continue
 
                 # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
                 if self._voice_state == "standby":
@@ -1697,6 +1761,13 @@ async def _audio_level_monitor() -> None:
 
     while True:
         try:
+            # Hold off until the pipeline has fully booted — otherwise the UI
+            # equaliser would react to the warmup TTS played by Adam himself
+            # before voice_loop is even running, contradicting the expected
+            # "no levels until pipeline is up" UX contract.
+            if not runtime_state.get("pipeline_ready", False):
+                await asyncio.sleep(0.3)
+                continue
             if voice_loop.device_in_use:
                 await asyncio.sleep(0.3)
                 continue
@@ -1823,6 +1894,23 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
             await _play_error_sound("startup_services_failed")
 
     event_log.append("voice_loop_boot_muted", {"reason": "warmup_in_progress"})
+    # ── EARLY VOICE-LOOP START ──────────────────────────────────────────────
+    # Start voice_loop BEFORE warmup so the ESP32 mic stream is up and draining
+    # the entire time TTS plays the greeting. Previously voice_loop.start()
+    # came after _warmup_wakeup; the mic stream then opened with the ESP32
+    # send-buffer already 15 s pre-loaded, which tore the connection on the
+    # first real read ("IncompleteRead alive=15.6s" boot bug).
+    #
+    # voice_state is set to "boot_warmup" — _vad_loop drains chunks but skips
+    # OWW and endpointing, so Adam's own warmup TTS cannot trigger a wake.
+    for _retry in range(5):
+        result = await voice_loop.start()
+        if result.get("ok"):
+            event_log.append("voice_loop_boot_ready", {"retry": _retry})
+            voice_loop._set_voice_state("boot_warmup", "warmup_in_progress")
+            break
+        await asyncio.sleep(2.0)
+
     # N6: pre-synthesize filler WAV BEFORE warmup_wakeup. If we ran it after,
     # the streaming pipeline inside _warmup_wakeup would itself trigger
     # _filler_task → on-demand synth → cache populated. Then _prewarm_filler
@@ -1837,12 +1925,14 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
     await _warmup_llm_prefix()
     # Brief buffer after TTS finishes so ALSA drain noise decays before OWW starts.
     await asyncio.sleep(0.5)
-    for _retry in range(5):
-        result = await voice_loop.start()
-        if result.get("ok"):
-            event_log.append("voice_loop_boot_ready", {"retry": _retry})
-            break
-        await asyncio.sleep(2.0)
+
+    # ── EXIT BOOT WARMUP ────────────────────────────────────────────────────
+    # Promote voice_loop from boot_warmup → standby so OWW starts scanning and
+    # the UI flips from "⌛ Инициализация" to "💤 Ожидаю обращения".
+    if voice_loop.running and voice_loop._voice_state == "boot_warmup":
+        voice_loop._set_voice_state("standby", "warmup_done")
+        voice_loop._standby_entry_time = time.perf_counter()  # arm post-TTS guard
+    runtime_state["pipeline_ready"] = True
 
 
 @asynccontextmanager
@@ -2997,9 +3087,25 @@ async def _stream_llm_and_speak(
 
 async def _speak(text: str, *, turn_id: str | None = None) -> dict[str, Any]:
     runtime_state["speaking"] = True
-    event_log.append("tts_started", {"text": text}, turn_id=turn_id)
     try:
-        result = await tts.speak(text)
+        # Synthesize first, then emit tts_started immediately before playback
+        # so the UI status "Говорю" lines up with actual audio coming out of
+        # the speaker instead of firing at the start of TTS request (the old
+        # behaviour caused "Говорю" to appear while we were still generating).
+        wav = await asyncio.to_thread(tts._get_wav_bytes_sync, text)
+        if wav is not None:
+            event_log.append("tts_started", {"text": text}, turn_id=turn_id)
+            play_result = await asyncio.to_thread(tts._play_wav_bytes_sync, wav)
+            ok = bool(play_result.get("ok"))
+            result: dict[str, Any] = {
+                "ok": ok, "degraded": not ok,
+                "chunks": 1, "results": [play_result],
+            }
+        else:
+            # /wav endpoint not available — fall back to combined /speak.
+            # Emit at the start because we cannot separate synth from play here.
+            event_log.append("tts_started", {"text": text}, turn_id=turn_id)
+            result = await tts.speak(text)
         event_log.append("tts_finished", {"ok": bool(result.get("ok")), "degraded": bool(result.get("degraded"))}, turn_id=turn_id)
         return result
     except Exception as exc:
@@ -3007,6 +3113,7 @@ async def _speak(text: str, *, turn_id: str | None = None) -> dict[str, Any]:
         raise
     finally:
         runtime_state["speaking"] = False
+        runtime_state["last_tts_finished_at"] = time.perf_counter()
         runtime_state["last_tts_finished_at"] = time.perf_counter()
 
 

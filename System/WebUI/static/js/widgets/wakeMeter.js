@@ -222,14 +222,20 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
     if (ev.type === "audio_level") {
       const lvl = ev.payload && ev.payload.level;
       state.audioLevel = typeof lvl === "number" ? lvl : 0;
-      // First frame from the real voice loop (state is standby/listening/reply)
-      // means warmup has finished — flip out of the placeholder.
+      // First audio_level frame whose voice_state is one of {standby,
+      // listening, reply} means the orchestrator has exited boot_warmup and
+      // OWW scanning is live — flip out of the placeholder. We deliberately
+      // do NOT count "boot_warmup" here: the equaliser must stay quiet
+      // while Adam's own warmup TTS is playing.
       const vs = ev.payload && ev.payload.state;
       if (vs === "standby" || vs === "listening" || vs === "reply") {
         state.pipelineReady = true;
       }
-    } else if (ev.type === "voice_loop_started") {
-      state.pipelineReady = true;
+    } else if (ev.type === "voice_state_change") {
+      // Backend-authoritative signal: transition out of boot_warmup → ready.
+      if (ev.payload && ev.payload.to === "standby" && ev.payload.from === "boot_warmup") {
+        state.pipelineReady = true;
+      }
     } else if (ev.type === "voice_loop_stopped") {
       state.pipelineReady = false;
       state.audioLevel = 0;

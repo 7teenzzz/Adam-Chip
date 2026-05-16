@@ -88,15 +88,19 @@
       "model": "small",
       "language": "ru",
       "command_endpointing_ms": 1500,
-      "silence_after_speech_ms": 1500,
-      "silence_rms_threshold": 0,
       "reply_window_sec": 3.75,
       "reply_absolute_deadline_sec": 7.5,
       "sample_rate": 16000,
       "timeout_sec": 30,
       "wake_words": "адам",
       "wake_word_required": true,
-      "reply_window_expired_action": "standby"
+      "reply_window_expired_action": "standby",
+      "silence_after_speech_ms": 1500,
+      "silence_rms_threshold": 0,
+      "disable_local_fallback": true,
+      "esp_open_timeout_sec": 8,
+      "esp_probe_after_fails": 2,
+      "esp_retry_backoff_sec": [2, 4, 8, 15]
     },
     "tts": {
       "provider": "silero",
@@ -313,7 +317,7 @@
     "voice": {
       "speaker": "eugene",
       "speed_multiplier": 1.1,
-      "volume": 1.1
+      "volume": 1.5
     },
     "prompt": {
       "history_turns": 4,

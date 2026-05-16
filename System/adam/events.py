@@ -77,7 +77,16 @@ class EventLog:
 
         return source[-limit:]
 
-    def subscribe(self, max_queue: int = 200) -> asyncio.Queue[dict[str, Any]]:
+    # High-frequency events that are safe to drop first under back-pressure —
+    # losing one audio_level frame or one oww_score sample is a barely-visible
+    # equaliser stutter; losing a state-change event would freeze the UI in
+    # the wrong status.
+    _LOW_PRIORITY_TYPES: frozenset[str] = frozenset({"audio_level", "oww_score"})
+
+    def subscribe(self, max_queue: int = 1000) -> asyncio.Queue[dict[str, Any]]:
+        """Default raised from 200 → 1000 in V-S07.2 so a slow UI can absorb
+        the 10 Hz audio_level + 12.5 Hz oww_score stream without dropping the
+        rarer state-change events that the equaliser+status panel rely on."""
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_queue)
         with self._lock:
@@ -99,16 +108,38 @@ class EventLog:
     def _enqueue(self, queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
         try:
             queue.put_nowait(event)
+            return
         except asyncio.QueueFull:
-            try:
-                queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            try:
-                queue.put_nowait(event)
-            except asyncio.QueueFull:
-                with self._lock:
-                    self._dropped_count += 1
+            pass
+        # Queue full — try to make room by evicting the oldest low-priority
+        # event (audio_level / oww_score) so we don't lose a state change.
+        # We touch queue._queue (a deque) directly: asyncio.Queue has no
+        # public iteration API, but the deque is a stable implementation
+        # detail in CPython.
+        inner = getattr(queue, "_queue", None)
+        if inner is not None:
+            for idx, item in enumerate(inner):
+                if item.get("type") in self._LOW_PRIORITY_TYPES:
+                    try:
+                        del inner[idx]
+                    except (IndexError, ValueError):
+                        break
+                    try:
+                        queue.put_nowait(event)
+                        return
+                    except asyncio.QueueFull:
+                        break
+        # No low-priority victim available — fall back to FIFO drop-oldest
+        # so we always make room for the newest event.
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            with self._lock:
+                self._dropped_count += 1
 
 
 def _ts_to_ms(ts: str) -> float:

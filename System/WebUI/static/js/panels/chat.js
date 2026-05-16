@@ -149,6 +149,27 @@ export function mount(target) {
       const w = rect.width, h = rect.height;
       ctx.clearRect(0, 0, w, h);
 
+      // Placeholder cases:
+      //   1. No mic chosen yet (pre-snapshot / status not received)
+      //   2. Voice loop is in boot_warmup / loading — stream may already be
+      //      draining but the UI must show "Инициализация" until standby.
+      const inBootPhase = (hearingState === "boot_warmup" || hearingState === "loading");
+      if (!micSource || inBootPhase) {
+        vuLevelL = vuLevelR = vuLevelMono = 0;
+        vuPeakL = vuPeakR = vuPeakMono = 0;
+        ctx.fillStyle = "rgba(150,150,160,0.55)";
+        ctx.font = "10px ui-sans-serif,system-ui,sans-serif";
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        ctx.fillText(
+          inBootPhase ? "⌛ инициализация" : "микрофон не выбран",
+          w / 2, h / 2,
+        );
+        ctx.textAlign = "start";
+        vuRafId = requestAnimationFrame(drawVuMeter);
+        return;
+      }
+
       const isStereo = vuChannels === 2;
       const GAP = isStereo ? 4 : 0;
       const barW = isStereo ? (w - GAP) / 2 : w;
@@ -182,13 +203,14 @@ export function mount(target) {
 
   // ---- Hearing (OWW + ASR) live display ----
   // State machine is server-authoritative: on mount we read /api/agent/status
-  // and derive the initial label. Pre-snapshot we show "unknown" (a neutral
-  // grey "—" placeholder) instead of lying with "Инициализация" — the latter
-  // is reserved for the case where the snapshot HAS loaded and voice_loop
-  // is actually down. Transitions are driven by SSE events.
+  // and derive the initial label. Pre-snapshot we show "loading" (Инициализация)
+  // because the contract is that the UI shows "Инициализация" from the very
+  // first paint until the voice loop is up. The "unknown" entry stays as a
+  // last-resort fallback for malformed states.
   const HEARING_COLORS = {
     unknown:      "var(--dim)",    // grey    — snapshot not loaded yet
     loading:      "var(--warn)",   // yellow  — voice_loop down (real)
+    boot_warmup:  "var(--warn)",   // yellow  — voice_loop up but mic-only-drain
     standby:      "var(--accent)", // green   — waiting for wake word
     listening:    "#a855f7",       // purple  — recording / accumulating speech
     reply:        "#a855f7",       // purple  — reply window open (same as listening)
@@ -199,6 +221,7 @@ export function mount(target) {
   const HEARING_LABELS = {
     unknown:      "— ожидаем данных",
     loading:      "⌛ Инициализация",
+    boot_warmup:  "⌛ Инициализация",
     standby:      "💤 Ожидаю обращения",
     listening:    "🎤 Слушаю",
     reply:        "🎤 Слушаю",
@@ -208,7 +231,10 @@ export function mount(target) {
   };
   let hearingState = (() => {
     const vl = state.get("status")?.voice_loop;
-    if (vl == null) return "unknown";
+    // Default to "loading" (Инициализация) instead of "unknown" until the
+    // status snapshot arrives — the contract is that the UI shows
+    // Инициализация during boot, never a generic "— ожидаем данных".
+    if (vl == null) return "loading";
     return vl.running ? "standby" : "loading";
   })();
   let dotsTick = 0;
@@ -269,8 +295,10 @@ export function mount(target) {
   // state ends or on initial mount before any events arrive.
   function routeToIdle() {
     const vl = state.get("status")?.voice_loop;
+    // Pre-snapshot we show "loading" rather than "unknown" — see HEARING_LABELS
+    // initialiser above for the rationale.
     if (vl == null) {
-      updateHearing("unknown");
+      updateHearing("loading");
     } else {
       updateHearing(vl.running ? "standby" : "loading");
     }
@@ -536,7 +564,19 @@ export function mount(target) {
       pendingAdamBubble = null;
       stopCountdown();
     } else if (ev.type === "voice_loop_started") {
-      updateHearing("standby");
+      // Backend flips voice_state → boot_warmup right after start (mic drains
+      // ESP buffer during warmup TTS). Match that to avoid a brief flash of
+      // "standby" before the voice_state_change event arrives.
+      updateHearing("boot_warmup");
+    } else if (ev.type === "voice_state_change") {
+      const to = ev.payload?.to;
+      if (to === "boot_warmup") {
+        updateHearing("boot_warmup");
+      } else if (to === "standby" && ["boot_warmup", "loading"].includes(hearingState)) {
+        updateHearing("standby");
+      }
+      // listening / reply transitions are handled by their dedicated events
+      // (wake_word_detected, asr_reply_window_open) — leave them alone here.
     } else if (ev.type === "voice_loop_stopped") {
       updateHearing("loading");
       stopCountdown();

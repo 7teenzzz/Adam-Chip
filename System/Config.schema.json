@@ -419,6 +419,31 @@
               "minimum": 0,
               "maximum": 2000
             },
+            "disable_local_fallback": {
+              "type": "boolean",
+              "description": "When true (default), the voice loop never falls back to the local microphone — it keeps retrying the ESP32 stream indefinitely with exponential backoff. When false, after esp_mic_fail_threshold consecutive failures the loop switches to local mic (legacy behavior). ESP32 should always be primary; this toggle exists only so dev/maintenance scenarios without an ESP can still bring up the loop.",
+              "default": true
+            },
+            "esp_open_timeout_sec": {
+              "type": "integer",
+              "description": "TCP open() timeout in seconds for the ESP32 mic stream. Previously hard-coded to 30; reduced to 8 so a hung ESP:81 socket is detected ~4× faster, enabling quicker reconnect. Keep above ~5 — under that you'll false-positive on legitimately slow ESP boots.",
+              "default": 8,
+              "minimum": 3,
+              "maximum": 60
+            },
+            "esp_probe_after_fails": {
+              "type": "integer",
+              "description": "After this many consecutive mic-stream-open failures, the voice loop first probes ESP /api/status (control plane on :80) before attempting the next stream open. If the probe fails too, we know the ESP is genuinely down and skip the slow :81 TCP timeout. Set to 0 to disable probing.",
+              "default": 2,
+              "minimum": 0,
+              "maximum": 10
+            },
+            "esp_retry_backoff_sec": {
+              "type": "array",
+              "items": {"type": "number", "minimum": 0.5, "maximum": 60},
+              "description": "Exponential backoff sequence (seconds) between successive reconnect attempts when disable_local_fallback=true. The last value is reused after exhausting the list. Use shorter list for snappier recovery, longer for less network/log churn on a dead ESP.",
+              "default": [2, 4, 8, 15]
+            },
             "reply_window_sec": {
               "type": "number",
               "description": "Soft reply window in seconds. After agent's TTS finishes, voice loop waits this long for the user to start speaking. If no speech (>= min_speech_ms) is detected → return to standby.",
