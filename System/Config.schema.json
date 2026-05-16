@@ -402,8 +402,22 @@
             },
             "command_endpointing_ms": {
               "type": "integer",
-              "description": "Milliseconds of silence after speech before the voice loop submits the audio to ASR.",
+              "description": "DEPRECATED — kept as fallback only. Use silence_after_speech_ms instead. If silence_after_speech_ms is missing, this value is used.",
               "default": 1500
+            },
+            "silence_after_speech_ms": {
+              "type": "integer",
+              "description": "How many consecutive milliseconds of silence after detected speech are required to mark the user's request as finished and forward it to ASR. Applies in both LISTENING (after wake word) and REPLY (after Adam's response) modes. Lower = faster Adam reaction but cuts off slow speakers; higher = more patient but introduces delay.",
+              "default": 1500,
+              "minimum": 200,
+              "maximum": 5000
+            },
+            "silence_rms_threshold": {
+              "type": "integer",
+              "description": "RMS audio-level threshold below which a frame is treated as silence regardless of what WebRTC VAD says. Acts as a secondary filter against constant background hum/HVAC noise that VAD may classify as voiced. 0 disables this filter (WebRTC VAD decides alone). Typical 200–500 for normal indoor rooms; raise for noisy exhibition halls. Compare with media.audio.normalize_factor (8000) — threshold should stay well below that.",
+              "default": 0,
+              "minimum": 0,
+              "maximum": 2000
             },
             "reply_window_sec": {
               "type": "number",

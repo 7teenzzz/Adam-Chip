@@ -165,6 +165,19 @@ const SCHEMA = [
     extras: () => buildWakeWordExtras(),
   },
 
+  // ── Завершение запроса от пользователя ──────────────────────────────────────
+  {
+    source: "config", section: "services.asr", title: "Завершение запроса от пользователя",
+    fields: [
+      { key: "silence_after_speech_ms", label: "Длительность тишины (мс)", type: "number",
+        hint: "Сколько миллисекунд подряд должно быть тихо после речи, чтобы считать запрос завершённым. Действует и в режиме «Слушаю», и в режиме ожидания продолжения после ответа Адама. 1500 — рекомендуемое значение.",
+        min: 200, max: 5000, step: 100 },
+      { key: "silence_rms_threshold", label: "Чувствительность тишины (RMS)", type: "number",
+        hint: "Уровень звука, ниже которого аудио считается тишиной (даже если VAD считает иначе). Повысьте, если фоновый шум зала мешает закончить фразу. 0 — отключить фильтр (только WebRTC VAD). Типично 200–500.",
+        min: 0, max: 2000, step: 50 },
+    ],
+  },
+
   // ── ASR · WhisperX ───────────────────────────────────────────────────────────
   {
     source: "config", section: "services.asr", title: "ASR · WhisperX",
@@ -172,9 +185,6 @@ const SCHEMA = [
       { key: "model", label: "Модель WhisperX", type: "select",
         choices: ["tiny", "base", "small", "medium", "large-v2", "large-v3"],
         hint: "tiny/base — быстро, точность низкая · small — баланс · medium — рекомендуется · large-v2/v3 — максимум точности, 10+ ГБ VRAM" },
-      { key: "command_endpointing_ms", label: "Endpointing — пауза перед отправкой (мс)", type: "number",
-        hint: "3000 рекомендуется · VAD ждёт такую паузу тишины, затем отправляет фразу в распознавание",
-        min: 200, max: 5000, step: 100 },
       { key: "reply_window_sec", label: "Reply window — soft (с)", type: "number",
         hint: "3.75 · soft-окно после ответа Адама — зритель может говорить без wake word; если речи нет → STANDBY",
         min: 1, max: 30, step: 0.25 },

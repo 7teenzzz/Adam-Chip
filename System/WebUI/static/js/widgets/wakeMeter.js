@@ -48,6 +48,11 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
     scorePeakTs: 0,
     dragging: false,
     engineReady: false,
+    // pipelineReady stays false until the voice loop produces a real
+    // standby/listening/reply audio_level frame. While false the meter
+    // renders an "Инициализация" placeholder instead of live bars so the
+    // operator does not see the equaliser reacting to its own warmup TTS.
+    pipelineReady: false,
   };
 
   // Initial load + listen for external updates (e.g. settings page changes
@@ -90,6 +95,19 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
       const w = rect.width;
       const h = rect.height;
       ctx.clearRect(0, 0, w, h);
+
+      // Voice pipeline is still booting (warmup, no voice_loop yet) — show a
+      // calm placeholder instead of live bars driven by idle-monitor audio.
+      if (!state.pipelineReady) {
+        ctx.fillStyle = "rgba(180,180,190,0.55)";
+        ctx.font = "12px ui-sans-serif,system-ui,sans-serif";
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        ctx.fillText("⌛ Инициализация…", w / 2, h / 2);
+        ctx.textAlign = "start";
+        rafId = requestAnimationFrame(draw);
+        return;
+      }
 
       const gap = 2;
       const barW = (w - (BAR_N - 1) * gap) / BAR_N;
@@ -204,6 +222,18 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
     if (ev.type === "audio_level") {
       const lvl = ev.payload && ev.payload.level;
       state.audioLevel = typeof lvl === "number" ? lvl : 0;
+      // First frame from the real voice loop (state is standby/listening/reply)
+      // means warmup has finished — flip out of the placeholder.
+      const vs = ev.payload && ev.payload.state;
+      if (vs === "standby" || vs === "listening" || vs === "reply") {
+        state.pipelineReady = true;
+      }
+    } else if (ev.type === "voice_loop_started") {
+      state.pipelineReady = true;
+    } else if (ev.type === "voice_loop_stopped") {
+      state.pipelineReady = false;
+      state.audioLevel = 0;
+      for (let i = 0; i < BAR_N; i++) peaks[i] = 0;
     } else if (ev.type === "oww_score") {
       const p = ev.payload || {};
       if (typeof p.score === "number") state.score = p.score;

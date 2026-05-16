@@ -323,7 +323,15 @@ class VoiceLoopController:
         self.min_speech_ms = int(audio_config.get("min_speech_ms", 280))
         self.asr_client = asr_client
         asr_cfg = settings.section("services").get("asr", {})
-        self._command_endpointing_ms = int(asr_cfg.get("command_endpointing_ms", 2500))
+        # silence_after_speech_ms is the canonical knob; command_endpointing_ms
+        # remains as a deprecated fallback so old configs keep working.
+        self._silence_after_speech_ms = int(asr_cfg.get(
+            "silence_after_speech_ms",
+            asr_cfg.get("command_endpointing_ms", 2500),
+        ))
+        self._command_endpointing_ms = self._silence_after_speech_ms
+        # RMS gate against constant background noise — 0 means "trust WebRTC VAD alone".
+        self._silence_rms_threshold = int(asr_cfg.get("silence_rms_threshold", 0))
         self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
         self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
         self._reply_absolute_deadline_sec: float = float(asr_cfg.get("reply_absolute_deadline_sec", 12.0))
@@ -912,7 +920,13 @@ class VoiceLoopController:
                 _empty_streak = 0
 
                 _rms = audioop.rms(chunk, 2)
-                voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
+                vad_voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
+                # RMS gate — when threshold > 0, frames below it are forced to "silence"
+                # even if WebRTC VAD thinks they're voiced. Defeats constant background
+                # hum (HVAC, projector fans) that VAD sometimes classifies as speech.
+                voiced = vad_voiced and (
+                    self._silence_rms_threshold <= 0 or _rms >= self._silence_rms_threshold
+                )
                 level_tick += 1
                 if level_tick >= 5:
                     level_tick = 0

@@ -198,8 +198,8 @@ export function mount(target) {
   };
   const HEARING_LABELS = {
     unknown:      "— ожидаем данных",
-    loading:      "🎧 Инициализация",
-    standby:      "🎧 Ожидаю обращения",
+    loading:      "⌛ Инициализация",
+    standby:      "💤 Ожидаю обращения",
     listening:    "🎤 Слушаю",
     reply:        "🎤 Слушаю",
     transcribing: "⏳ Распознаю",
@@ -262,23 +262,6 @@ export function mount(target) {
     asrBox.style.color = newState === "loading" ? "var(--muted)" : "var(--text)";
     dotsTick = 0;
     renderHearing();
-  }
-
-  function startCountdown(durationMs) {
-    if (_cdTimer) { clearTimeout(_cdTimer); _cdTimer = null; }
-    countdownFill.style.transition = "none";
-    countdownFill.style.width = "100%";
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      countdownFill.style.transition = `width ${durationMs}ms linear`;
-      countdownFill.style.width = "0%";
-    }));
-    _cdTimer = setTimeout(stopCountdown, durationMs + 100);
-  }
-
-  function stopCountdown() {
-    if (_cdTimer) { clearTimeout(_cdTimer); _cdTimer = null; }
-    countdownFill.style.transition = "none";
-    countdownFill.style.width = "0%";
   }
 
   // Route to idle: standby if voice_loop is up, loading if it's down,
