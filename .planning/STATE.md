@@ -19,12 +19,26 @@ progress:
 
 ## Active Phase
 
-**Phase 8: Theory-Code Verification** — CONTEXT gathered, ready for plan
-Context: [phases/08-theory-code-verification/08-CONTEXT.md](phases/08-theory-code-verification/08-CONTEXT.md)
+**Phase 8: Theory-Code Verification** — ✓ COMPLETE (2026-05-17)
+Summary: [phases/08-theory-code-verification/08-SUMMARY.md](phases/08-theory-code-verification/08-SUMMARY.md)
 Branch: `diploma-chapter3`
-Next step: `/gsd-plan-phase 8`
 
-**Recently completed:** Phase 7 (Comprehensive Diploma Analysis) — see [07-SUMMARY.md](phases/07-comprehensive-diploma-analysis/07-SUMMARY.md)
+**Next:** Phase 9 — Next-Phases Planning (`/gsd-discuss-phase 9`)
+
+**Recently completed:** Phase 7 (Diploma Analysis); Phase 8 (Theory-Code Verification)
+
+### Phase 8 ✓ COMPLETE (2026-05-17) — Theory-Code Verification
+
+Что сделано:
+
+- Wave 1: 4 параллельных category verifications (MATRIX-philosophical/aiim/technical/artistic.md) — 459 строк
+- Wave 2: cross-graph synthesis (THEORY-CODE-MATRIX + CONTRADICTIONS + EMERGENT-FEATURES + CROSS-GRAPH-FINDINGS) — 510 строк
+- Wave 3: 08-SUMMARY.md в Hybrid формате — 250 строк
+- Результат: 48 терминов проверены через 3 графа (code, persona, esp32)
+  - 26 FULL (54%) + 16 PARTIAL (33%) + 4 MISSING (8%) + 13 EMERGENT + 0 CONTRADICTED
+- Главное доказательство: триангуляция AIIM → Mood → Device → ESP32 (3 графа, 4 узла) подтверждает воплощённость
+- Path distribution для PARTIAL+MISSING: 4A (правка диплома) + 6B (правка кода) + 7C (документировать) + 1 accepted
+- 0 CRITICAL CONTRADICTED — диплом готов к мёржу после Phase 10A правок
 
 Параллельно — Фазы 6A/6B (Memory): завершены в ветке `Memory-upgrade`, готовы к мёржу в main.
 → [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
