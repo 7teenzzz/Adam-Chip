@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 
-THRESHOLD_FLOOR = 0.15
+THRESHOLD_FLOOR = 0.03
 THRESHOLD_CEIL = 0.60
 NOISE_RED_FLAG_P99 = 0.30  # if noise p99 above this, warn the operator
 
@@ -82,7 +82,7 @@ def compute_recommendation(scores: list[float], margin: float) -> dict[str, Any]
 async def collect_noise_profile(
     event_log: Any,
     duration_sec: float,
-    margin: float = 0.08,
+    margin: float = 0.03,
 ) -> dict[str, Any]:
     """Subscribe to oww_score events for `duration_sec`, return profile + recommendation.
 

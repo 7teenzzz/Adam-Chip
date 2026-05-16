@@ -372,7 +372,8 @@ class VoiceLoopController:
         self._ww_buf: list[bytes] = []
         self._ww_frames_needed = 4
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
-        self._STANDBY_GUARD_SEC: float = 0.5    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
+        self._STANDBY_GUARD_SEC: float = 0.3    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
+        self._REPLY_GUARD_SEC: float = 0.6      # post-TTS guard for reply state — suppress echo of own TTS picked up by ESP32 mic
         self._wake_detected_at: float = 0.0
         # Fallback default 6.0 is only for missing-config startup; Config.json
         # supplies the authoritative value (3 per reference logic).
@@ -968,6 +969,12 @@ class VoiceLoopController:
                 # ── REPLY: check window timeout ──────────────────────────────────
                 if self._voice_state == "reply":
                     elapsed = time.perf_counter() - self._reply_start
+                    # Guard window after listening→reply: skip VAD for _REPLY_GUARD_SEC so the
+                    # tail of own TTS (heard by ESP32 mic across the room) does not feed the
+                    # endpointer. Chunk is still drained from the stream — buffer cannot grow.
+                    if elapsed < self._REPLY_GUARD_SEC:
+                        self.vad_state = "reply_guard"
+                        continue
                     absolute_deadline = self._reply_window_sec + self._reply_absolute_deadline_sec
                     no_speech_expired = elapsed >= self._reply_window_sec and speech_ms < self.min_speech_ms
                     hard_cutoff = elapsed >= absolute_deadline

@@ -54,7 +54,7 @@
         "clip_burst_threshold": 20,
         "restore_threshold_polls": 5
       },
-      "webrtc_vad_aggressiveness": 2,
+      "webrtc_vad_aggressiveness": 1,
       "max_command_segment_ms": 15000,
       "normalize_factor": 8000
     },
@@ -152,7 +152,7 @@
   "wake_word": {
     "engine": "openwakeword",
     "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.1,
+    "threshold": 0.08,
     "debounce_hits": 2,
     "vad_threshold": 0,
     "wake_silence_timeout_sec": 3
