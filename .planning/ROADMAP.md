@@ -200,6 +200,29 @@ Plans:
 
 ---
 
+## Phase 7: ESP32 Mic Pipeline Refactor — MicReader keep-alive
+
+**Branch:** `V-S07.3-ESP32_mic_fix`
+
+**Goal:** Извлечь работу с ESP32 audio-stream в долгоживущую задачу `MicReader` по аналогу `CameraReader`. Поток открывается до warmup TTS, держится keep-alive весь срок жизни Orchestrator, drainer всегда активен, переоткрытие на exception с экспоненциальным backoff. Voice loop читает chunks из shared queue вместо прямого управления stream. Local fallback отключён по умолчанию.
+
+**Requires:** ESP32 firmware готова к стабильной работе на :81 (после reboot — проверено).
+
+**Delivers:**
+
+- `System/adam/mic_reader.py` (новый модуль) — `MicReader` task: open stream → drain bytes → put в `asyncio.Queue` → reconnect on exception (backoff). Никогда не fallback на local mic, если `disable_local_fallback=true`.
+- `System/Orchestrator.py` — `_run_esp32` упрощён до consumer'а на Queue; lifecycle stream вынесен из voice_loop в MicReader. Удалён `_audio_level_monitor` (его роль перенимает MicReader).
+- Boot sequence: MicReader стартует в lifespan **до** `_orchestrated_startup`, к моменту warmup TTS поток уже active. Drainer работает всё время, в том числе во время warmup.
+- `voice_state="boot_warmup"` (новое значение): voice_loop читает из Queue но не сканирует OWW и не делает endpointing. После warmup → standby.
+- `System/Config.json` + `Config.schema.json` — новые ключи: `services.asr.disable_local_fallback` (default true), `esp_open_timeout_sec` (default 8), `esp_probe_after_fails` (default 2), `esp_retry_backoff_sec` (default [2,4,8,15]).
+- UI ([chat.js](../System/WebUI/static/js/panels/chat.js), [wakeMeter.js](../System/WebUI/static/js/widgets/wakeMeter.js)): корректное отображение «⌛ Инициализация» во время boot_warmup, плашка Mic и эквалайзер остаются placeholder пока voice_state ≠ standby/listening/reply. После warmup → 💤 Ожидаю обращения + активный эквалайзер + 🟢 Mic: ESP32 stereo.
+
+**Mode:** standard
+
+**Requirements:** ESP-mic должен открыться к моменту warmup TTS; никаких `voice_loop_error stage=esp32_mic` в первые 60 сек после старта; recovery после disconnect <5 сек; никаких переходов на local mic пока `disable_local_fallback=true`.
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.
