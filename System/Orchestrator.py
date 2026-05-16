@@ -4,6 +4,7 @@ from __future__ import annotations
 import audioop
 import json
 import os
+import random
 import re
 import shutil
 import sys
@@ -2657,9 +2658,22 @@ async def _stream_llm_and_speak(
         Synthesis runs in parallel with LLM streaming. Playback only happens
         if the real reply hasn't started yet, so the user hears continuous
         audio ("Хм... [real reply]") instead of a silent gap.
+
+        Probabilistic gate: filler_probability (0.0..1.0). 0.0 = never,
+        1.0 = always (legacy). Default 0.30. Roll happens once, *before*
+        synthesis, so a "no-roll" turn doesn't pay the TTS cost.
         """
         tts_cfg = settings.section("services").get("tts", {}) or {}
         if not tts_cfg.get("filler_enabled", False):
+            filler_done_event.set()
+            return
+        try:
+            probability = float(tts_cfg.get("filler_probability", 0.30))
+        except (TypeError, ValueError):
+            probability = 0.30
+        probability = max(0.0, min(1.0, probability))
+        if probability <= 0.0 or random.random() >= probability:
+            event_log.append("tts_filler_skipped", {"reason": "probability", "p": probability})
             filler_done_event.set()
             return
         # Fallback default 1500 is only for missing-config startup; Config.json

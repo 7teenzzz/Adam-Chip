@@ -19,7 +19,7 @@ function el(tag, attrs, children = []) {
   return node;
 }
 
-// Описание полей по группам. Источник истины — Tuning.json + tuning.py.
+// Описание полей по группам. Источник истины — Config.json (секция `tuning`) + tuning.py.
 // Если добавляешь параметр в pydantic — добавь сюда же, иначе он не появится в UI.
 const SPEC = [
   {

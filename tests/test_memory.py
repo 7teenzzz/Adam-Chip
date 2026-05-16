@@ -289,13 +289,28 @@ class EchoesGateTests(unittest.TestCase):
 
 
 class TuningStoreTests(unittest.TestCase):
+    """TuningStore теперь читает/пишет в Config.json (секция `tuning`).
+
+    Тесты изолируют ADAM_CONFIG на временный файл, чтобы не трогать
+    реальный System/Config.json.
+    """
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         reset_store()
-        path = Path(self.tmp.name) / "Tuning.json"
-        path.write_text(json.dumps({}), encoding="utf-8")
-        self.store = TuningStore(path)
+        self.cfg_path = Path(self.tmp.name) / "Config.json"
+        self.cfg_path.write_text(json.dumps({"tuning": {}}), encoding="utf-8")
+        self._prev_adam_config = os.environ.get("ADAM_CONFIG")
+        os.environ["ADAM_CONFIG"] = str(self.cfg_path)
+        self.addCleanup(self._restore_env)
+        self.store = TuningStore()
+
+    def _restore_env(self) -> None:
+        if self._prev_adam_config is None:
+            os.environ.pop("ADAM_CONFIG", None)
+        else:
+            os.environ["ADAM_CONFIG"] = self._prev_adam_config
 
     def test_defaults_load(self) -> None:
         cfg = self.store.current()
@@ -305,10 +320,9 @@ class TuningStoreTests(unittest.TestCase):
     def test_apply_patch_merges_deeply(self) -> None:
         new = self.store.apply_patch({"echoes": {"global_cooldown_turns": 99}})
         self.assertEqual(new.echoes.global_cooldown_turns, 99)
-        self.assertEqual(new.memory.episodic.decay_days, 14)  # сохранено
-        # на диске тоже
-        on_disk = json.loads(self.store.path.read_text(encoding="utf-8"))
-        self.assertEqual(on_disk["echoes"]["global_cooldown_turns"], 99)
+        self.assertEqual(new.memory.episodic.decay_days, 14)
+        on_disk = json.loads(self.cfg_path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["tuning"]["echoes"]["global_cooldown_turns"], 99)
 
     def test_invalid_patch_raises(self) -> None:
         with self.assertRaises(Exception):

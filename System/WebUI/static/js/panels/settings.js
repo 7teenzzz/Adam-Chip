@@ -127,6 +127,23 @@ const SCHEMA = [
     ],
   },
 
+  // ── TTS filler («Хм...») ─────────────────────────────────────────────────────
+  {
+    source: "config", section: "services.tts", title: "TTS · Филлер (междометия)",
+    fields: [
+      { key: "filler_enabled", label: "Включить междометия", type: "bool",
+        hint: "если LLM долго думает — Адам произносит короткое «Хм...» вместо тишины" },
+      { key: "filler_phrase", label: "Фраза", type: "text",
+        hint: "что произносить · например «Хм...», «Ух», «Эээ»" },
+      { key: "filler_delay_ms", label: "Задержка LLM (мс)", type: "number",
+        min: 0, max: 5000, step: 50,
+        hint: "если ответ LLM начался быстрее этой задержки — филлер не звучит. 800 = норма" },
+      { key: "filler_probability", label: "Вероятность (0..1)", type: "number",
+        min: 0, max: 1, step: 0.05,
+        hint: "0.30 = в среднем 1 из 3 ходов · 0.0 = выключено de facto · 1.0 = всегда (старое поведение). Не привязано к таймеру — независимый бросок на каждый ход" },
+    ],
+  },
+
   // ── OWW · Wake word ──────────────────────────────────────────────────────────
   {
     source: "config", section: "wake_word", title: "OWW · Wake word",

@@ -395,7 +395,7 @@ export function mount(target) {
         ]),
         el("div", { style: "display:flex; align-items:center; gap:6px; margin-top:4px" }, [
           hearingDot,
-          el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Слух"),
+          el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Статус речевого модуля"),
         ]),
         asrBox,
         countdownTrack,
