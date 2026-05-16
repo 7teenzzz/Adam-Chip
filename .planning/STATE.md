@@ -19,11 +19,12 @@ progress:
 
 ## Active Phase
 
-**Phase 7: Comprehensive Diploma Analysis** — ✓ COMPLETE (2026-05-16)
-Summary: [phases/07-comprehensive-diploma-analysis/07-SUMMARY.md](phases/07-comprehensive-diploma-analysis/07-SUMMARY.md)
+**Phase 8: Theory-Code Verification** — CONTEXT gathered, ready for plan
+Context: [phases/08-theory-code-verification/08-CONTEXT.md](phases/08-theory-code-verification/08-CONTEXT.md)
 Branch: `diploma-chapter3`
+Next step: `/gsd-plan-phase 8`
 
-**Next:** Phase 8 — Theory-Code Verification (`/gsd-discuss-phase 8`)
+**Recently completed:** Phase 7 (Comprehensive Diploma Analysis) — see [07-SUMMARY.md](phases/07-comprehensive-diploma-analysis/07-SUMMARY.md)
 
 Параллельно — Фазы 6A/6B (Memory): завершены в ветке `Memory-upgrade`, готовы к мёржу в main.
 → [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
