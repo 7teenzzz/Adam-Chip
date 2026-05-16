@@ -103,6 +103,77 @@ Output:  diploma/chapter-3/*.md
 
 ---
 
+## Chapter 3 Writing Rules
+
+### Code & Config Inclusion Rule
+
+**Правило:** В тексте диплома вставляются ТОЛЬКО небольшие, важные куски кода/конфига. Все остальное — в приложение или ссылка на репозиторий.
+
+**Критерии включения фрагмента:**
+
+- ✅ **Включить (1–5 строк):**
+  - Ключевой параметр из Config.json: `"temperature": 0.7, "max_tokens": 40`
+  - Важная переменная Mood: `Mood = Literal["neutral", "curious", "warm", ...]`
+  - Важное условие логики: `if scene.engagement == "watching": agent_initiates()`
+  - Пример вывода VLM: `"Scene: 1 person, engagement: watching"`
+
+- ❌ **НЕ включать:**
+  - Полные функции (→ код в гитхабе)
+  - Длинные конфиги (→ ссылка на Config.json)
+  - Повторяющийся код (→ текстовое описание)
+  - Debug output или логи (→ в приложение)
+
+**Оформление:**
+
+```python
+# Inline: "ActionLayer определяет mood: Mood = Literal["neutral", "curious", "warm"]"
+# Code block: 3–5 строк максимум
+
+# ❌ Избегать:
+def huge_function(...):
+    ... 20 строк ...
+```
+
+**Ссылка на источник:** Каждый фрагмент должен иметь ссылку:
+
+```text
+(System/adam/action.py:8–9)
+(System/Config.json:services.llm.temperature)
+```
+
+---
+
+### Diagrams Rule
+
+**Правило:** Диаграммы должны быть красивыми и профессиональными, не ASCII-art.
+
+**Допустимые форматы:**
+
+1. **Mermaid** (в markdown, встроенный рендер на GitHub):
+
+```mermaid
+graph LR
+    A[Jetson] -->|HTTP| B[ESP32]
+    B -->|PWM| C[Motors]
+```
+
+1. **SVG/PNG** (если нужна высокая детализация) — сохранить в `diploma/assets/` и встроить в markdown
+
+1. **Таблицы Markdown** (для структурированных данных):
+
+```text
+| Component | GPIO | Protocol |
+|-----------|------|----------|
+```
+
+**Размещение:**
+
+- Диаграмма ≤ 20 строк Mermaid → inline в главе
+- Диаграмма > 20 строк или сложная → отдельный файл в `diploma/assets/diagrams/`
+- Ссылка в тексте: `[Figure 3.2.1](assets/diagrams/architecture.svg)`
+
+---
+
 ## Gotchas (non-obvious)
 
 - **Диплом — это архитектурная спека, замаскированная под гуманитарный текст.** Каждый теоретический раздел содержит скрытые инженерные требования. Философия = язык, а не суть.
@@ -111,3 +182,4 @@ Output:  diploma/chapter-3/*.md
 - **Глава 3 = implementation chapter.** Все предыдущие главы дают теоретический фундамент для неё — читай их как спецификацию, а не как введение.
 - **Не путай context retention с настоящей памятью.** Диплом разграничивает их — в коде эта граница тоже важна.
 - **graphify query даёт runtime-evidence**, а не теоретическое соответствие. Используй query перед каждым assertion в верификационных файлах.
+- **Code fragments are windows, not tutorials.** Show the pattern, not the full implementation. Readers can read the repo if they want details.
