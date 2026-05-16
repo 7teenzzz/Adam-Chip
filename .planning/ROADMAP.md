@@ -292,6 +292,41 @@ Plans:
 
 ---
 
+## Phase 12: Metrics & Evaluation Framework
+
+**Branch:** новая (`metrics-framework`) — создаётся после стабилизации основных веток
+
+**Goal:** Реализовать автоматический сбор и расчёт метрик качества работы агента, заявленных в дипломе (3.4): RAS, RDI, NVR, RI, CRS, LMRR, SCS, SIAR. Закрывает диплом-задачи №3 (формализация критериев устойчивости роли) и №6 (демонстрация в реальном времени + оценка).
+
+**Requires:**
+- Стабилизация активных веток: `Memory-upgrade`, `Identity-tuning`, `VLM-upgrade`, `dynamic-aiim` → merged in main
+- Phase 11 (AIIM Dynamic) завершена — без рефлексивного цикла часть метрик (RDI, CRS) не имеет источника данных
+
+**Delivers:**
+
+- `System/adam/evaluation/` — новый пакет с модулями расчёта метрик
+- `scripts/export_turns_for_markup.py` — экспорт turn'ов с pre-filled данными для экспертной разметки
+- `data/adam/eval/` — корпус разметки + результаты автоматического расчёта
+- Метрики:
+  - **RAS** (Role Adherence Score) — экспертная + автоматическая компонента (lexical analysis ответов)
+  - **RDI** (Role Drift Index) — на основе истории сессий (требует Phase 11)
+  - **NVR** (Normative Violation Rate) — правило-based детектор + опциональная LLM-проверка
+  - **RI** (Repetition Index) — анализ echoes_used.jsonl + chinese_used.jsonl
+  - **CRS** (Coherence-Response Strength) — semantic similarity между запросом и ответом
+  - **LMRR** (LTM Retention Rate) — анализ обращений к семантической памяти diary.md
+  - **SCS** (Scene Coherence Score) — корреляция VLM-описаний с ответами агента
+  - **SIAR** (Spontaneous Initiative Activity Ratio) — счётчик проактивных событий (требует Proactive Speech)
+- `GET /api/agent/metrics/summary` — текущие значения метрик
+- Dashboard на `:8083/metrics` — графики метрик за последние N дней
+- `docs/EVALUATION-FRAMEWORK.md` — методология, рубрики оценки, примеры разметки
+- Главы диплома 3.4 актуализируются с реальными значениями вместо спецификации
+
+**Mode:** standard (full GSD cycle)
+
+**Связь с Phase 7 находками:** закрывает T-02 (метрики как honesty-проблема), задачи №3 и №6 из ch00
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.
