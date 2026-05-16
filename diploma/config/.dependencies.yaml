@@ -1,0 +1,269 @@
+# Diploma Pipeline Dependencies
+# Documents which stage outputs are required by which stage inputs
+# Used for intelligent cache invalidation and incremental updates
+
+version: "1.0"
+generated: "2026-05-16T17:45:00Z"
+description: "Dependency graph for diploma pipeline. Defines what needs to be re-run when source materials change."
+
+# Stage 1 → Stage 2 dependencies
+# These define what Stage 2 requires from Stage 1 output
+stage_1_to_2_dependencies:
+  # Criteria verification depends on extracted concepts
+  by_criterion:
+    crit_01_autonomy:
+      depends_on_stage_1:
+        - "ch03/architecture/system_map.md"
+        - "ch03/runtime/runtime_model.md"
+      reason: "Autonomy criterion requires understanding of system architecture and runtime model"
+      revalidate_when: ["code changes affecting state management", "runtime model updates"]
+
+    crit_02_agency:
+      depends_on_stage_1:
+        - "ch03/architecture/system_map.md"
+        - "ch03/identity/identity_model.md"
+        - "ch03/interaction/interaction_model.md"
+      reason: "Agency requires identity model, interaction patterns, and system architecture"
+      revalidate_when: ["identity model changes", "interaction patterns update", "action layer refactors"]
+
+    crit_03_identity:
+      depends_on_stage_1:
+        - "ch03/identity/identity_model.md"
+        - "synthesis/master_concepts.md"
+      reason: "Identity criterion depends on persona definition and concept synthesis"
+      revalidate_when: ["persona files change", "character lore updates"]
+
+    crit_04_normativity:
+      depends_on_stage_1:
+        - "ch01/concepts/subjectivity_framework.md"
+        - "ch03/interaction/interaction_model.md"
+      reason: "Normativity (values) requires subjectivity framework and interaction norms"
+      revalidate_when: ["framework updates", "interaction policies change"]
+
+    crit_05_temporal:
+      depends_on_stage_1:
+        - "ch03/memory/memory_model.md"
+        - "ch03/runtime/runtime_model.md"
+      reason: "Temporal criterion requires memory and runtime models"
+      revalidate_when: ["memory architecture changes", "episodic memory implementation updates"]
+
+    crit_06_interaction:
+      depends_on_stage_1:
+        - "ch03/interaction/interaction_model.md"
+        - "synthesis/criteria_to_code.md"
+      reason: "Interaction criterion requires explicit model and code mapping"
+      revalidate_when: ["dialogue flow changes", "action layer updates", "ASR/TTS integration changes"]
+
+    crit_07_embodiment:
+      depends_on_stage_1:
+        - "ch03/architecture/system_map.md"
+        - "synthesis/code_community_labels.md"
+      reason: "Embodiment requires hardware architecture and code community structure"
+      revalidate_when: ["ESP32 firmware changes", "MCU integration updates", "peripheral configuration changes"]
+
+    crit_08_emergence:
+      depends_on_stage_1:
+        - "synthesis/master_concepts.md"
+        - "synthesis/cross_graph_map.md"
+        - "ch02/concepts/case_studies.md"
+      reason: "Emergence criterion requires comprehensive concept synthesis and case study grounding"
+      revalidate_when: ["major architectural changes", "new case studies added", "synthesis updates"]
+
+  # Section files depend on multiple criteria
+  by_section:
+    "3.1_concept":
+      depends_on_stage_1:
+        - "ch01/concepts/subjectivity_framework.md"
+        - "ch02/concepts/evaluation_criteria_extracted.md"
+        - "synthesis/master_concepts.md"
+      depends_on_stage_2:
+        - "by_criterion/"  # All 8 criterion files for completeness
+      reason: "Concept section requires theoretical framework and all criterion definitions"
+      revalidate_when: ["criteria definitions change", "theoretical framework updates"]
+
+    "3.2_application":
+      depends_on_stage_1:
+        - "ch03/architecture/system_map.md"
+        - "synthesis/criteria_to_code.md"
+      depends_on_stage_2:
+        - "by_criterion/crit_01_autonomy.md"
+        - "by_criterion/crit_02_agency.md"
+        - "by_criterion/crit_03_identity.md"
+      reason: "Application section shows how criteria map to code implementation"
+      revalidate_when: ["System/ architecture changes", "code-criteria mapping updates", "core module refactors"]
+
+    "3.3_installation":
+      depends_on_stage_1:
+        - "ch03/architecture/system_map.md"
+        - "synthesis/code_community_labels.md"
+      depends_on_stage_2:
+        - "by_criterion/crit_06_interaction.md"
+        - "by_criterion/crit_07_embodiment.md"
+      reason: "Installation/instantiation requires hardware and integration knowledge"
+      revalidate_when: ["ESP32 firmware changes", "hardware integration updates", "deployment docs change"]
+
+    "3.4_testing":
+      depends_on_stage_1:
+        - "synthesis/code_community_labels.md"
+      depends_on_stage_2:
+        - "by_criterion/"  # All 8 for comprehensive test coverage
+      reason: "Testing section validates all criteria through execution"
+      revalidate_when: ["test suite changes", "new validation methods added"]
+
+  # Blueprint depends on all section files
+  chapter3_materials_blueprint:
+    depends_on_stage_2:
+      - "by_section/3.1_concept.md"
+      - "by_section/3.2_application.md"
+      - "by_section/3.3_installation.md"
+      - "by_section/3.4_testing.md"
+      - "by_criterion/"  # All 8
+    reason: "Blueprint synthesizes all section content into a coherent chapter outline"
+    revalidate_when: ["any section file changes"]
+
+# Source code dependencies
+# What diploma materials depend on actual source code
+code_dependencies:
+  System_architecture:
+    source_files:
+      - "System/Orchestrator.py"
+      - "System/adam/inference.py"
+      - "System/adam/prompt.py"
+      - "System/adam/action.py"
+      - "System/Config.json"
+    stage_1_output: "ch03/architecture/system_map.md"
+    stage_2_output:
+      - "by_criterion/crit_01_autonomy.md"
+      - "by_criterion/crit_02_agency.md"
+      - "by_criterion/crit_07_embodiment.md"
+    revalidate_when: "graphify System/ --update detects changes in Orchestrator, adam/*, or Config.json"
+
+  Memory_and_state:
+    source_files:
+      - "System/adam/memory.py"
+      - "System/adam/episodic.py"
+    stage_1_output: "ch03/memory/memory_model.md"
+    stage_2_output:
+      - "by_criterion/crit_05_temporal.md"
+    revalidate_when: "memory.py or episodic.py changes"
+
+  Identity_and_persona:
+    source_files:
+      - "Agent Adam Chip/About/"
+      - "Agent Adam Chip/Tuning.json"
+    stage_1_output: "ch03/identity/identity_model.md"
+    stage_2_output:
+      - "by_criterion/crit_03_identity.md"
+    revalidate_when: "persona files (Identity.md, Lore.md, About/) or Tuning.json changes"
+
+  Dialogue_and_interaction:
+    source_files:
+      - "System/adam/inference.py"
+      - "System/Speech/"
+    stage_1_output: "ch03/interaction/interaction_model.md"
+    stage_2_output:
+      - "by_criterion/crit_04_normativity.md"
+      - "by_criterion/crit_06_interaction.md"
+    revalidate_when: "Speech/* or inference.py dialogue logic changes"
+
+  ESP32_firmware:
+    source_files:
+      - "Subsystem/AdamsServer/"
+    stage_1_output: "ch03/architecture/system_map.md"
+    stage_2_output:
+      - "by_criterion/crit_07_embodiment.md"
+    revalidate_when: "ESP32 firmware builds change (new version deployed)"
+
+# Diploma source dependencies
+# What stage outputs depend on theory documents
+theory_dependencies:
+  stage_1_inputs:
+    - "diploma/Diploma.md"  # Chapters 1-3 theory
+    - "diploma/evaluation_criteria.md"  # 8 criteria definitions
+
+  stage_2_always_requires:
+    - "diploma/Diploma.md"  # For criterion grounding
+    - "diploma/evaluation_criteria.md"
+    - "graphify-out/GRAPH_REPORT.md"  # Code graph
+
+  revalidate_when: "Diploma.md or evaluation_criteria.md changes"
+
+# External graphify dependencies
+# Stage 2 requires up-to-date code graph
+graphify_dependencies:
+  graph_source: "graphify-out/graph.json"
+  required_by_stage: 2
+  triggers_revalidation:
+    - "any file in System/ changes"
+    - "any file in Subsystem/AdamsServer/ changes"
+    - "System/Config.json changes"
+  update_command: "/graphify System/ --update"
+  cache_location: ".graphify_detect.json, graphify-out/graph.json"
+
+# Invalidation rules
+# When to re-run stages
+invalidation_rules:
+  stage_1:
+    rerun_when:
+      - "diploma/Diploma.md changes"
+      - "diploma/evaluation_criteria.md changes"
+      - "User manually requests 'update'"
+    cached_until: "source changes (detect via file timestamp)"
+    output_versioned: true
+    version_location: "diploma/project-analysis/.versions/"
+
+  stage_2:
+    rerun_when:
+      - "stage_1 was re-run (dependency cascade)"
+      - "graphify System/ --update detects code changes"
+      - "diploma theory files change (Diploma.md, evaluation_criteria.md)"
+      - "User manually requests 'update' or 'force'"
+    cached_until: "stage_1 or code graph updates"
+    output_versioned: true
+    version_location: "diploma/project-verification/.versions/"
+
+  stage_3:
+    rerun_when:
+      - "stage_2 was re-run (dependency cascade)"
+      - "User manually requests chapter rewrite"
+    cached_until: "stage_2 updates (but preserves manual edits)"
+    output_versioned: true
+    version_location: "diploma/chapter-3/.versions/"
+
+# Batch operation modes
+# How to interpret MODE parameter in diploma_stage_all.sh
+operation_modes:
+  normal:
+    description: "Skip already-cached outputs, rerun only if dependencies changed"
+    behavior:
+      - "Check timestamps of Stage input files"
+      - "Compare against Stage output timestamps"
+      - "Rerun only if input is newer than output"
+    use_case: "Iterative development with selective updates"
+
+  update:
+    description: "Force re-run of dependencies (e.g., after code changes)"
+    behavior:
+      - "Run: /graphify System/ --update (detect code changes)"
+      - "If changes detected: rerun Stage 2"
+      - "If Stage 2 changes: rerun Stage 3 (soft — preserve manual edits)"
+    use_case: "After code updates, to re-verify against implementation"
+
+  force:
+    description: "Ignore cache, rerun all stages completely"
+    behavior:
+      - "Rerun Stage 1 (full diploma → analysis)"
+      - "Rerun Stage 2 (full code → verification)"
+      - "WARN: does NOT auto-rerun Stage 3 (manual chapter work preserved)"
+    use_case: "Major refactors, debugging, or comprehensive re-analysis"
+
+# Metadata for CI/automation
+automation:
+  trigger_condition: "Commit to main branch touches System/ or Diploma.md"
+  action: "bash scripts/diploma_stage_all.sh all update"
+  parallelizable_stages: "No (Stage 2 requires Stage 1 output)"
+  estimated_runtime:
+    stage_1: "~5-10 min (manual Claude execution)"
+    stage_2: "~10-15 min (manual Claude execution)"
+    stage_3: "~20-30 min (manual writing)"
+    total: "~40-60 min per full pipeline run"
