@@ -43,6 +43,7 @@ from adam.episodic import SessionAccumulator, should_record
 from adam.events import EventLog, utc_now
 from adam.camera import CameraReader, SceneDescriptionBuffer
 from adam.inference import WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
+from adam.mic_reader import MicReader
 from adam.media import MediaHealth
 from adam.memory import EpisodicMemory, MemoryStore
 from adam.memory_metrics import MemoryMetrics
@@ -305,7 +306,45 @@ async def _commit_session_locked(reason: str) -> None:
     session_state["accumulator"] = None
 
 
+def _make_stereo_reader(
+    read_fn: Callable[[int], bytes],
+    normalize_factor: float,
+    level_setter: Callable[[float, float], None],
+) -> Callable[[int], bytes]:
+    """Wraps a stereo PCM read_fn to return downmixed mono (L+R)/2.
+
+    Phase 7: lifted from VoiceLoopController._make_stereo_reader (was a
+    bound method) into a free function so MicReader can inject it as
+    `stereo_reader_factory` without an Orchestrator import cycle. Algorithm
+    unchanged: read 2N bytes (interleaved 16-bit stereo), compute per-channel
+    RMS, normalise to [0..1], invoke `level_setter(level_l, level_r)`, then
+    downmix to mono. Partial reads (truncated frames) return b"" so callers
+    treat them as stream-end / reconnect trigger.
+
+    Args:
+        read_fn: blocking callable returning interleaved stereo PCM bytes.
+        normalize_factor: divisor for level normalisation (typically 8000).
+        level_setter: callback invoked with per-channel normalised levels.
+    """
+    def _read(n: int) -> bytes:
+        raw = read_fn(n * 2)
+        if not raw or len(raw) < n * 2:
+            return b""
+        rms_l = audioop.rms(audioop.tomono(raw, 2, 1.0, 0.0), 2)
+        rms_r = audioop.rms(audioop.tomono(raw, 2, 0.0, 1.0), 2)
+        level_l = round(min(1.0, (rms_l / normalize_factor) ** 0.5), 3)
+        level_r = round(min(1.0, (rms_r / normalize_factor) ** 0.5), 3)
+        level_setter(level_l, level_r)
+        return audioop.tomono(raw, 2, 0.5, 0.5)
+    return _read
+
+
 class VoiceLoopController:
+    # Phase 7 D-13/D-14: boot_warmup is the canonical entry state when
+    # voice_loop.start() is called (before warmup TTS completes). After
+    # _orchestrated_startup finishes warmup it transitions to standby.
+    VALID_VOICE_STATES = ("boot_warmup", "standby", "listening", "reply")
+
     def __init__(self, audio_config: dict[str, Any], asr_client: WhisperASRClient, mcu: Any = None) -> None:
         self.mic_source = str(audio_config.get("mic_source", "local"))
         self.esp32_mic_profile = str(audio_config.get("esp32_mic_profile", "inmp441_philips32_left"))
@@ -338,7 +377,7 @@ class VoiceLoopController:
         # 'standby' returns to listening for next wake word; 'stop' fully stops
         # the voice loop and requires explicit restart.
         self._reply_window_expired_action: str = str(asr_cfg.get("reply_window_expired_action", "standby"))
-        self._voice_state: str       = "standby"   # standby | listening | reply
+        self._voice_state: str       = "boot_warmup"   # boot_warmup | standby | listening | reply
         self._reply_start: float     = 0.0
         self.wake_word_required = bool(asr_cfg.get("wake_word_required", False))
         wake_words = asr_cfg.get("wake_words", []) or []
@@ -415,6 +454,10 @@ class VoiceLoopController:
         #   "failed"       — last attempt threw; next iteration will retry
         #   "fallback"     — _esp_mic_fallback True; local mic is feeding audio
         self._mic_stream_state: str = "n/a"
+        # Phase 7: MicReader is wired in at module scope post-construction
+        # (Orchestrator.py top-level). When None, the legacy local-mic /
+        # _run_esp32 paths are still reachable for mic_source != "esp32".
+        self.mic_reader: Any | None = None
 
     def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
         """Apply audio config changes live. Returns list of fields that require loop restart."""
@@ -464,20 +507,17 @@ class VoiceLoopController:
     def _active_audio_source_label(self) -> str:
         """Canonical short label of the mic feeding `audio_level` events.
 
-        Distinguishes the four runtime situations the UI cares about:
-          - 'esp32_stereo'   — INMP441 stereo profile, _vad_loop reading
-          - 'esp32_mono'     — INMP441 mono profile, _vad_loop reading
-          - 'local_fallback' — _esp_mic_fallback engaged, local mic feeds audio
-          - 'local'          — mic_source=local by configuration
+        Phase 7: when MicReader is wired (mic_source=="esp32"), it owns the
+        canonical label via `mic_reader.active_source`. For mic_source !=
+        "esp32" (legacy local-mic path), keep the historical labels.
         """
+        if self.mic_reader is not None:
+            return self.mic_reader.active_source
         if self.mic_source == "esp32":
+            # No mic_reader injected (tests, partial bootstrap) — treat as
+            # connecting until the consumer side proves otherwise.
             if self._esp_mic_fallback:
                 return "local_fallback"
-            if self._mic_stream_state == "active":
-                return "esp32_stereo" if self._raw_is_stereo else "esp32_mono"
-            # Pre-stream-active window — UI should treat audio_level as local
-            # until WAV header arrives. _audio_level_monitor is the actual
-            # emitter here, but be defensive.
             return "local_fallback"
         return "local"
 
@@ -504,8 +544,13 @@ class VoiceLoopController:
             # Fine-grained mic-stream state for UI badge / status dot.
             # Distinguishes "esp32 connecting" from "esp32 active" so the
             # UI never shows a false-positive INMP441 ✓ during the open
-            # window before the WAV header arrives.
-            "mic_stream_state": self._mic_stream_state,
+            # window before the WAV header arrives. Phase 7: prefer
+            # MicReader's canonical stream_state when wired.
+            "mic_stream_state": (
+                self.mic_reader.status().get("stream_state", "n/a")
+                if self.mic_reader is not None
+                else self._mic_stream_state
+            ),
             # Boot-wait + background retry telemetry for the UI button.
             # esp_boot_wait_state: n/a → waiting → ready | timeout
             # esp_bg_retry_active: true while 20×15s retry task is alive
@@ -520,6 +565,11 @@ class VoiceLoopController:
             event_log.append("voice_state_change", {
                 "from": self._voice_state, "to": state, "reason": reason,
             })
+        # Defensive — log unknown states but do not raise (D-14: boot_warmup
+        # is a real value that exists in the allow-list; surface any typo
+        # via diagnostics instead of crashing the voice loop).
+        if state not in VoiceLoopController.VALID_VOICE_STATES:
+            event_log.append("voice_state_invalid", {"requested": state})
         self._voice_state = state
         if state == "standby":
             self._utterance_id = None
@@ -530,6 +580,12 @@ class VoiceLoopController:
         self.running = True
         self.last_asr_error = ""
         self._standby_entry_time = time.perf_counter()  # arm OWW guard for first 0.5s after start
+        # Phase 7 D-14: emit boot_warmup BEFORE spawning _run, so the first
+        # voice_state_change SSE the UI receives is to=boot_warmup, not the
+        # implicit standby that the legacy stack used. Plan 07-04 hooks this
+        # in chat.js so pipelineReady waits for the standby transition.
+        self._voice_state = "boot_warmup"
+        self._set_voice_state("boot_warmup", "voice_loop_started")
         self._task = asyncio.create_task(self._run(), name="adam_voice_loop")
         await asyncio.sleep(0.2)
         if self._task.done():
@@ -577,34 +633,33 @@ class VoiceLoopController:
         await self.start()
 
     async def _run(self) -> None:
+        # Phase 7 W-5: dispatch is by mic_source ONLY. `disable_local_fallback`
+        # is a MicReader-internal retry policy knob (no fallback to local on
+        # its side); it does NOT change which consumer path voice_loop uses.
+        # Routing a `local` mic_source through the ESP-only MicReader would
+        # break local-mic dev / maintenance mode.
         if self.mic_source == "esp32":
-            # Boot-wait phase: probe ESP /api/status every 5s for up to 90s
-            # before starting voice_loop. ESP должен быть primary mic-source —
-            # даём ему время подняться вместо мгновенного fallback на local.
-            esp_ready = await self._wait_for_esp_ready(
-                max_seconds=self.esp_boot_wait_max_sec,
-                poll_interval=self.esp_boot_wait_poll_sec,
+            frame_bytes = (
+                self.mic_reader.frame_bytes if self.mic_reader is not None
+                else max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
             )
-            if esp_ready:
-                # ESP отвечает — запускаем _run_esp32 как обычно
-                frame_bytes = max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
-                await self._run_esp32(frame_bytes)
-            else:
-                # ESP молчит 90 сек → fallback на local + background retry task
-                self._esp_mic_fallback = True
-                self._mic_stream_state = "fallback"
-                self._esp_boot_wait_state = "timeout"
-                event_log.append("voice_loop_esp_boot_timeout", {
-                    "waited_sec": self.esp_boot_wait_max_sec,
-                    "background_retry_attempts": self.esp_bg_retry_attempts,
-                    "background_retry_interval_sec": self.esp_bg_retry_interval_sec,
-                })
-                self._start_background_esp_retry()
-                fb_frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
-                await self._run_local(fb_frame_bytes)
+            await self._run_via_mic_reader(frame_bytes)
         else:
             frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
             await self._run_local(frame_bytes)
+
+    async def _run_via_mic_reader(self, frame_bytes: int) -> None:
+        """Consume chunks from MicReader queue and drive _vad_loop.
+
+        MicReader handles open/retry/audio_level/drain-during-mute. We only do
+        VAD + OWW + endpointing. The producer/consumer split lives in
+        System/adam/mic_reader.py (Plan 07-02).
+        """
+        if self.mic_reader is None:
+            raise RuntimeError("mic_reader is None — Orchestrator wiring missing")
+        # _vad_loop branches on `self.mic_reader is not None` to pull from
+        # MicReader.get_chunk() instead of calling read_fn.
+        await self._vad_loop(read_fn=None, frame_bytes=frame_bytes)
 
     async def _wait_for_esp_ready(self, max_seconds: int = 90, poll_interval: int = 5) -> bool:
         """Probe ESP /api/status every poll_interval seconds for up to max_seconds.
@@ -739,176 +794,41 @@ class VoiceLoopController:
         self.running = False
         event_log.append("voice_loop_stopped", self.status())
 
-    async def _run_esp32(self, frame_bytes: int) -> None:
-        if self._mcu is None:
-            raise RuntimeError("mic_source=esp32 requires mcu client — not configured")
-        url = self._mcu.mic_stream_url()
-        _session_fail_count = 0
-        _STREAM_STABLE_THRESHOLD_SEC = 30.0
-        while self.running:
-            profile = self.esp32_mic_profile
-            is_stereo = profile.endswith("stereo")
-            event_log.append("esp32_mic_profile_applied", {"profile": profile})
-            await self._mcu.request("POST", "/api/audio", {"profile": profile})
-            _stream_open_t = 0.0
-            resp = None
-            # Mark "connecting" before the long-poll urlopen so the UI shows
-            # "ESP32 подключается" instead of the previous false-positive
-            # "ESP32 ✓" during the 0-30 s window before WAV header arrives.
-            self._mic_stream_state = "connecting"
-            try:
-                # Use no-proxy opener — env HTTP proxy (v2ray) hijacks LAN
-                # connections to ESP32 and leaks sockets on long-poll mic stream
-                # disconnects. _NO_PROXY_OPENER guarantees direct TCP to ESP32:81.
-                resp = await asyncio.to_thread(_NO_PROXY_OPENER.open, url, None, 30)
-                event_log.append("esp32_mic_stream_opened", {"url": url, "profile": profile})
-                header = await asyncio.to_thread(resp.read, 44)
-                if len(header) < 44:
-                    raise RuntimeError(f"ESP32 WAV header truncated ({len(header)}/44 bytes)")
-                event_log.append("esp32_mic_wav_header", {"bytes": len(header), "is_stereo": is_stereo})
-                if is_stereo:
-                    self._raw_is_stereo = True
-                    read_fn = self._make_stereo_reader(resp.read)
-                else:
-                    self._raw_is_stereo = False
-                    read_fn = resp.read
-                _stream_open_t = time.perf_counter()
-                # WAV header received → stream is truly live. Flip the state
-                # AFTER read_fn is bound so the first audio_level.source label
-                # already reflects "active".
-                self._mic_stream_state = "active"
-                event_log.append("esp32_mic_stream_active", {
-                    "profile": profile, "is_stereo": is_stereo,
-                })
-                await self._vad_loop(read_fn, frame_bytes)
-            except asyncio.CancelledError:
-                # Closing resp on cancel is critical: ESP32:81 has only 4 socket
-                # slots — leaked half-open sockets there block reconnect.
-                if resp is not None:
-                    try: resp.close()
-                    except Exception: pass
-                raise
-            except Exception as exc:
-                if resp is not None:
-                    try: resp.close()
-                    except Exception: pass
-                self._raw_is_stereo = False
-                self._mic_stream_state = "failed"
-                self.vad_state = "error"
-                self.last_asr_error = str(exc)
-                # Reset failure counter only if the stream stayed alive long enough
-                # to count as a proven-stable session. Without this guard, every
-                # urlopen success resets the counter and the fallback threshold
-                # can never be reached under repeated short-lived stream failures.
-                stream_alive_sec = (time.perf_counter() - _stream_open_t) if _stream_open_t else 0.0
-                if stream_alive_sec > _STREAM_STABLE_THRESHOLD_SEC:
-                    _session_fail_count = 0
-                    self._esp_mic_fail_count = 0
-                event_log.append("voice_loop_error", {
-                    "stage": "esp32_mic", "error": str(exc),
-                    "stream_alive_sec": round(stream_alive_sec, 1),
-                })
-                _session_fail_count += 1
-                self._esp_mic_fail_count += 1
-                if _session_fail_count >= self.esp_mic_fail_threshold:
-                    self._esp_mic_fallback = True
-                    self._mic_stream_state = "fallback"
-                    self._esp_mic_last_retry = time.perf_counter()
-                    event_log.append("esp32_mic_fallback_start", {
-                        "fail_count": _session_fail_count, "error": str(exc),
-                    })
-                    break
-                if self.running:
-                    await asyncio.sleep(2.0)
-            finally:
-                # Catch the normal-exit path too (vad_loop returned without
-                # exception, e.g. self.running flipped to False during shutdown).
-                # Without this the underlying TCP socket leaks until GC, which
-                # under v2ray's hood means an extra ESP32 socket slot stays held.
-                if resp is not None:
-                    try: resp.close()
-                    except Exception: pass
-        if self._esp_mic_fallback and self.running:
-            fb_frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
-            await self._run_local(fb_frame_bytes)
-        self.running = False
-        self.vad_state = "idle"
+    # Phase 7: _run_esp32, _esp32_drain_during_mute, and the
+    # VoiceLoopController._make_stereo_reader method were DELETED. The ESP32
+    # stream-open / drain / reconnect logic now lives in MicReader
+    # (System/adam/mic_reader.py). _make_stereo_reader is now a module-level
+    # free function and is injected into MicReader via set_stereo_reader_factory.
+    # The legacy _run_local / _wait_for_esp_ready / _background_esp_retry /
+    # force_esp_retry methods stay reachable when mic_source != "esp32" (D-16,
+    # W-5).
 
-    async def _esp32_drain_during_mute(
-        self,
-        read_fn: Callable[[int], bytes],
-        frame_bytes: int,
-    ) -> None:
-        """Continuously read and discard ESP32 audio bytes while voice_loop is muted.
+    async def _vad_loop(self, read_fn: Callable[[int], bytes] | None, frame_bytes: int) -> None:
+        """VAD + endpointing + ASR dispatch.
 
-        ESP32 keeps writing PCM @ 64 KB/s into the TCP stream regardless of whether
-        the Jetson is reading. The W5500 SPI Ethernet send buffer (~64 KB) overflows
-        within ~1 second if nothing drains it; ESP firmware then closes the
-        connection. Without this drainer, every turn ends with IncompleteRead after
-        the transcribe + LLM + TTS dispatch.
-
-        Runs as a background task spawned at mic_muted and cancelled at unmute.
-        Discarded bytes are not used — the goal is to keep the TCP socket alive
-        so the same connection survives across the dispatch window.
-
-        Cancellation by the caller is the normal exit path. Stream errors are
-        logged and ignored — the next read from the main loop will surface the
-        same error and trigger retry in _run_esp32.
+        Phase 7: when `self.mic_reader is not None` (mic_source=="esp32" path),
+        chunks come from MicReader.get_chunk(). Otherwise read_fn is a blocking
+        callable, always called via to_thread (local-mic legacy path).
         """
-        drained_bytes = 0
-        try:
-            while True:
-                try:
-                    chunk = await asyncio.to_thread(read_fn, frame_bytes)
-                except Exception as exc:
-                    event_log.append("esp32_mic_drainer_error", {
-                        "error": str(exc), "drained_bytes": drained_bytes,
-                    })
-                    return
-                if not chunk:
-                    # Stream empty or closed — short sleep avoids busy loop.
-                    # On real closure the next main-loop read will get the
-                    # same empty / exception and trigger reconnect.
-                    await asyncio.sleep(0.02)
-                    continue
-                drained_bytes += len(chunk)
-        except asyncio.CancelledError:
-            event_log.append("esp32_mic_drainer_stopped", {
-                "drained_bytes": drained_bytes,
-            })
-            raise
-
-    def _make_stereo_reader(self, read_fn: Callable[[int], bytes]) -> Callable[[int], bytes]:
-        """Wraps a stereo PCM read_fn to return downmixed mono (L+R)/2.
-
-        Also tracks per-channel RMS in self._raw_level_l / _raw_level_r for UI diagnostics.
-        read_fn is expected to produce interleaved 16-bit stereo (2× the mono byte count).
-        Partial reads return empty bytes to trigger reconnect in _run_esp32.
-        """
-        normalize = self.normalize_factor
-        def _read(n: int) -> bytes:
-            raw = read_fn(n * 2)
-            if not raw or len(raw) < n * 2:
-                return b""
-            rms_l = audioop.rms(audioop.tomono(raw, 2, 1.0, 0.0), 2)
-            rms_r = audioop.rms(audioop.tomono(raw, 2, 0.0, 1.0), 2)
-            self._raw_level_l = round(min(1.0, (rms_l / normalize) ** 0.5), 3)
-            self._raw_level_r = round(min(1.0, (rms_r / normalize) ** 0.5), 3)
-            return audioop.tomono(raw, 2, 0.5, 0.5)
-        return _read
-
-    async def _vad_loop(self, read_fn: Callable[[int], bytes], frame_bytes: int) -> None:
-        """VAD + endpointing + ASR dispatch. read_fn is a blocking callable, always called via to_thread."""
         speech_frames: list[bytes] = []
         speech_ms = 0
         silence_ms = 0
-        level_tick = 0
         _reader = [read_fn]  # mutable ref — updated when arecord restarts during transcription
         _empty_streak = 0
         _was_endpointing = False
         try:
             while self.running:
-                chunk = await asyncio.to_thread(_reader[0], frame_bytes)
+                if self.mic_reader is not None:
+                    chunk = await self.mic_reader.get_chunk(timeout=1.0)
+                    if chunk is None:
+                        # Queue starvation — could mean MicReader is in retry.
+                        # Don't fail; voice_loop just idles a tick. Empty-streak
+                        # counter stays at zero because None != b"" (b"" signals
+                        # stream end, not retry).
+                        await asyncio.sleep(0.005)
+                        continue
+                else:
+                    chunk = await asyncio.to_thread(_reader[0], frame_bytes)
                 if not chunk:
                     _empty_streak += 1
                     if self.mic_source == "esp32":
@@ -927,22 +847,17 @@ class VoiceLoopController:
                 voiced = vad_voiced and (
                     self._silence_rms_threshold <= 0 or _rms >= self._silence_rms_threshold
                 )
-                level_tick += 1
-                if level_tick >= 5:
-                    level_tick = 0
-                    norm = round(min(1.0, (_rms / self.normalize_factor) ** 0.5), 3)
-                    payload: dict[str, Any] = {"level": norm, "state": self._voice_state}
-                    if self._raw_is_stereo:
-                        payload["channels"] = 2
-                        payload["level_l"] = self._raw_level_l
-                        payload["level_r"] = self._raw_level_r
-                    if self._utterance_id:
-                        payload["utterance_id"] = self._utterance_id
-                    # T17 fix #6 — tag every audio_level with its actual mic
-                    # source so the UI badge/colour can stay in sync without
-                    # guessing from channels-count alone.
-                    payload["source"] = self._active_audio_source_label()
-                    event_log.append("audio_level", payload)
+
+                # D-10: audio_level emission is now owned by MicReader (single
+                # emitter). _vad_loop no longer fires audio_level events here.
+
+                # D-13/D-14: boot_warmup is a drain-only state. We keep
+                # get_chunk()/read_fn() pumping so MicReader's queue doesn't
+                # fill up (drop_oldest would stay silent but still wastes CPU),
+                # but skip OWW + endpointing entirely while warmup TTS plays.
+                if self._voice_state == "boot_warmup":
+                    self.vad_state = "boot_warmup"
+                    continue
 
                 # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
                 if self._voice_state == "standby":
@@ -1093,34 +1008,11 @@ class VoiceLoopController:
                         event_log.append("mic_muted", {"reason": "asr_transcribing"})
                         self.vad_state = "transcribing"
 
-                        # ESP32 mode: spawn background drainer to keep the TCP
-                        # stream alive during the dispatch window. Without this,
-                        # ESP closes the connection after ~10 s of no reads
-                        # (W5500 send buffer overflow) and the next main-loop
-                        # read raises IncompleteRead. See notes/voice-pipeline-
-                        # vs-ui-layering.md.
-                        _drainer_task: asyncio.Task | None = None
-                        if not _using_process and self.mic_source == "esp32":
-                            _drainer_task = asyncio.create_task(
-                                self._esp32_drain_during_mute(_reader[0], frame_bytes),
-                                name="adam_esp32_drainer",
-                            )
-                            event_log.append("esp32_mic_drainer_started", {})
+                        # Phase 7 B-2: MicReader continuously drains the socket
+                        # in its own task; no per-turn drainer needed. Local
+                        # mode also no longer needs special drainer handling.
 
-                        try:
-                            spoke = await self._transcribe_and_dispatch(pcm)
-                        finally:
-                            if _drainer_task is not None:
-                                _drainer_task.cancel()
-                                try:
-                                    await _drainer_task
-                                except asyncio.CancelledError:
-                                    pass
-                                except Exception:
-                                    # Drainer logs its own errors. We don't want
-                                    # an error here to block the unmute path —
-                                    # the next main-loop read will re-surface it.
-                                    pass
+                        spoke = await self._transcribe_and_dispatch(pcm)
 
                         # Local mode: restart arecord and update _reader (clean
                         # buffer). ESP32 mode: drainer kept stream live and at
@@ -1344,6 +1236,24 @@ class SceneWorker:
 
 
 voice_loop = VoiceLoopController(settings.section("media").get("audio", {}), asr, mcu=mcu)
+_asr_cfg = settings.section("services").get("asr", {})
+mic_reader = MicReader(
+    asr_cfg=_asr_cfg,
+    audio_cfg=settings.section("media").get("audio", {}),
+    mcu=mcu,
+    voice_loop=voice_loop,
+    on_event=lambda t, p: event_log.append(t, p),
+)
+# Back-reference so VoiceLoopController._run_via_mic_reader (Task 2) can pull
+# chunks from the MicReader queue. Module-level wiring keeps the construction
+# order linear (mic_reader needs voice_loop ref; voice_loop needs mic_reader
+# ref — the cycle is resolved by post-construction assignment).
+voice_loop.mic_reader = mic_reader
+# Inject the module-level stereo→mono downmix factory so MicReader can
+# produce mono PCM + per-channel RMS for stereo INMP441 profiles. The
+# factory lives at module scope (not on VoiceLoopController) so MicReader
+# does not need an Orchestrator import (would be a cycle).
+mic_reader.set_stereo_reader_factory(_make_stereo_reader)
 scene_worker = SceneWorker(settings.section("media"), vlm, camera_reader, scene_buffer)
 
 
@@ -1684,56 +1594,6 @@ class EspAudioHealthMonitor:
 esp_audio_health = EspAudioHealthMonitor()
 
 
-async def _audio_level_monitor() -> None:
-    """Read Jetson ALSA mic and emit audio_level SSE events for the UI equalizer.
-    Yields the device automatically when the voice loop is active (to avoid conflict).
-    Uses subprocess.Popen + asyncio.to_thread — same pattern as the voice loop."""
-    audio_cfg = settings.section("media").get("audio", {})
-    raw_dev = str(audio_cfg.get("input_device", "hw:1,0"))
-    device = f"plughw:{raw_dev[3:]}" if raw_dev.startswith("hw:") else raw_dev
-    sample_rate = int(audio_cfg.get("sample_rate", 16000))
-    frame_bytes = sample_rate * 2 // 10  # 100 ms of 16-bit mono
-    normalize_factor = float(audio_cfg.get("normalize_factor", 8000))
-
-    while True:
-        try:
-            if voice_loop.device_in_use:
-                await asyncio.sleep(0.3)
-                continue
-
-            proc = subprocess.Popen(
-                ["arecord", "-q", "-D", device, "-f", "S16_LE",
-                 "-r", str(sample_rate), "-c", "1", "-t", "raw"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            try:
-                while not voice_loop.device_in_use:
-                    chunk = await asyncio.to_thread(proc.stdout.read, frame_bytes)  # type: ignore[union-attr]
-                    if not chunk:
-                        await asyncio.sleep(1.0)  # back off before retry when arecord exits early
-                        break  # arecord exited
-                    raw_level = audioop.rms(chunk, 2)
-                    norm = round(min(1.0, (raw_level / normalize_factor) ** 0.5), 3)
-                    # T17 fix #6 — this monitor runs ONLY while the voice loop
-                    # isn't holding the mic device (i.e. maintenance-mode idle
-                    # equaliser), so the source is always the local ALSA mic.
-                    event_log.append("audio_level", {
-                        "level": norm, "state": "idle", "source": "local",
-                    })
-            finally:
-                try:
-                    proc.kill()
-                    proc.wait()
-                except Exception:
-                    pass
-
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            await asyncio.sleep(2.0)
-
-
 async def _wait_for_services(expected: set[str]) -> bool:
     """Poll expected AI services until all healthy or 120 s deadline. Returns True if all OK."""
     clients = {k: v for k, v in {"llm": llm, "tts": tts, "asr": asr, "vlm": vlm}.items()
@@ -1823,6 +1683,23 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
             await _play_error_sound("startup_services_failed")
 
     event_log.append("voice_loop_boot_muted", {"reason": "warmup_in_progress"})
+
+    # Phase 7 (D-04..D-06, W-3): MicReader's network task started at
+    # lifespan-entry (analog to camera_reader). _orchestrated_startup only
+    # AWAITS its readiness here, before warmup begins. CONTEXT D-04 reads
+    # "стартует в _orchestrated_startup до warmup" as "is guaranteed active
+    # by _orchestrated_startup before warmup begins". The mic stream must be
+    # live during warmup TTS so:
+    #   (a) it survives the muted_by_tts window without ESP buffer overflow
+    #   (MicReader continuously drains the socket regardless of mute), and
+    #   (b) audio_level events flow throughout the boot UI animation.
+    active = await mic_reader.wait_active(timeout=90.0)
+    if not active:
+        # Non-fatal: warmup TTS still proceeds. MicReader keeps retrying in
+        # the background; once it reaches stream_active, audio_level events
+        # start flowing. Mirrors legacy _wait_for_esp_ready 90 s budget.
+        event_log.append("mic_reader_active_timeout", {"timeout_sec": 90.0})
+
     # N6: pre-synthesize filler WAV BEFORE warmup_wakeup. If we ran it after,
     # the streaming pipeline inside _warmup_wakeup would itself trigger
     # _filler_task → on-demand synth → cache populated. Then _prewarm_filler
@@ -1841,6 +1718,11 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
         result = await voice_loop.start()
         if result.get("ok"):
             event_log.append("voice_loop_boot_ready", {"retry": _retry})
+            # D-14 transition: boot_warmup → standby. The _standby_entry_time
+            # reset arms the OWW guard window for the first 0.3 s after
+            # standby entry, matching existing post-stop behaviour.
+            voice_loop._set_voice_state("standby", "warmup_done")
+            voice_loop._standby_entry_time = time.perf_counter()
             break
         await asyncio.sleep(2.0)
 
@@ -1853,7 +1735,11 @@ async def lifespan(_: FastAPI):
     await scene_worker.start()
     await session_watcher.start()
     await esp_audio_health.start()
-    level_monitor = asyncio.create_task(_audio_level_monitor(), name="audio_level_monitor")
+    # Phase 7 W-3: MicReader starts at lifespan-entry (analog to camera_reader).
+    # _orchestrated_startup will only AWAIT readiness via wait_active() before
+    # warmup begins. MicReader is the single emitter of `audio_level` events
+    # (D-10), so the legacy _audio_level_monitor was deleted in 07-03 Task 1.
+    await mic_reader.start()
     services_confirmed = False
     if runtime_state["mode"] == "exhibition" and settings.section("power").get("enforce_in_exhibition", True):
         status_payload = await _status_payload()
@@ -1868,9 +1754,11 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
-        level_monitor.cancel()
-        await asyncio.gather(level_monitor, return_exceptions=True)
         await voice_loop.stop()
+        # voice_loop must release any in-flight mic_reader.get_chunk() awaits
+        # before MicReader cancels — otherwise the queue.get() consumer raises
+        # CancelledError back at voice_loop after it's already stopped.
+        await mic_reader.stop()
         await esp_audio_health.stop()
         await session_watcher.stop()
         # финальный коммит, если сессия осталась открытой
@@ -2072,6 +1960,7 @@ async def _ui_status_payload() -> dict[str, Any]:
         "errors": errors,
         "voice_loop": voice_loop.status(),
         "esp_audio_health": esp_audio_health.status(),
+        "mic_reader": mic_reader.status(),
         **data,
     }
 
@@ -2164,6 +2053,7 @@ async def _status_payload() -> dict[str, Any]:
         "exhibition_gate": gate,
         "voice_loop": voice_loop.status(),
         "esp_audio_health": esp_audio_health.status(),
+        "mic_reader": mic_reader.status(),
         "camera": camera_reader.status(),
         "scene_cache": scene_cache.as_dict(),
         "scene_worker": scene_worker.status(),
@@ -3306,6 +3196,13 @@ def _rebuild_clients(section_path: str) -> list[str]:
         asr = create_asr_client(services.get("asr", {}))
         voice_loop.asr_client = asr
         restarted.append("asr")
+        # Phase 7: propagate ASR config into MicReader (open_timeout, probe,
+        # backoff, disable_local_fallback). audio-side stays as-is here.
+        asr_cfg_new = services.get("asr", {})
+        audio_cfg_new = settings.section("media").get("audio", {})
+        if mic_reader.apply_config(asr_cfg_new, audio_cfg_new):
+            asyncio.ensure_future(mic_reader.restart())
+        restarted.append("mic_reader")
     if section_path.startswith("services.vlm") or section_path == "services":
         vlm = VLMClient(services.get("vlm", {}))
         scene_worker.vlm_client = vlm
@@ -3330,12 +3227,20 @@ def _rebuild_clients(section_path: str) -> list[str]:
         # stale URL silently.
         voice_loop._mcu = mcu
         tts._mcu_speaker_url = (mcu.speaker_endpoint_url() or "").strip() or None
-        restarted.extend(["mcu", "voice_loop", "tts"])
+        mic_reader._mcu = mcu
+        restarted.extend(["mcu", "voice_loop", "tts", "mic_reader"])
     if section_path.startswith("media.audio") or section_path == "media":
         audio_cfg = settings.section("media").get("audio", {})
         changed = voice_loop.apply_audio_config(audio_cfg)
         if changed and voice_loop.running:
             asyncio.ensure_future(voice_loop.restart())
+        # Phase 7: also propagate audio config into MicReader. Restart is only
+        # required when profile / sample_rate / frame_ms change (apply_config
+        # decides) — timeout / backoff are picked up live.
+        asr_cfg_new = settings.section("services").get("asr", {})
+        if mic_reader.apply_config(asr_cfg_new, audio_cfg):
+            asyncio.ensure_future(mic_reader.restart())
+        restarted.append("mic_reader")
         # Auto-apply per-source OWW calibration profile when mic source changes.
         new_mic_source = str(audio_cfg.get("mic_source", "local"))
         new_mic_profile = str(audio_cfg.get("esp32_mic_profile", ""))
