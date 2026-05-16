@@ -107,7 +107,11 @@ export function mount(target) {
   // Live updates arrive via audio_level SSE events. Pre-snapshot we show "—"
   // instead of lying with a default "local" label.
   const initialVL = state.get("status")?.voice_loop;
-  let micSource = initialVL?.mic_active_source || null;
+  // Suppress mic badge during boot_warmup — wait until standby before
+  // revealing the source. Mirrors the audio_level handler below which also
+  // skips badge refresh while in boot phase.
+  const _initiallyBooting = (!initialVL || !initialVL.running || initialVL.voice_state === "boot_warmup");
+  let micSource = _initiallyBooting ? null : (initialVL?.mic_active_source || null);
   const micSourceBadge = el("span", {
     style: "font-size:10px; color:var(--muted); font-family:var(--font-mono); padding:2px 6px; border-radius:3px; background:var(--bg-2)",
   }, "Mic: —");
@@ -235,7 +239,12 @@ export function mount(target) {
     // status snapshot arrives — the contract is that the UI shows
     // Инициализация during boot, never a generic "— ожидаем данных".
     if (vl == null) return "loading";
-    return vl.running ? "standby" : "loading";
+    if (!vl.running) return "loading";
+    // voice_state may already be "boot_warmup" if we connect mid-warmup
+    // (page opened while Adam is still playing his greeting). Honor it so
+    // the UI stays in "Инициализация" instead of briefly showing standby.
+    if (vl.voice_state === "boot_warmup") return "boot_warmup";
+    return "standby";
   })();
   let dotsTick = 0;
   const DOTS_PERIOD_MS = 400;
@@ -283,9 +292,22 @@ export function mount(target) {
   const dotsTimer = setInterval(tickDots, DOTS_PERIOD_MS);
 
   function updateHearing(newState) {
+    const wasInBoot = (hearingState === "loading" || hearingState === "boot_warmup");
     hearingState = newState;
+    const stillInBoot = (newState === "loading" || newState === "boot_warmup");
     hearingDot.style.background = HEARING_COLORS[newState] || "var(--muted)";
-    asrBox.style.color = newState === "loading" ? "var(--muted)" : "var(--text)";
+    asrBox.style.color = (newState === "loading" || newState === "boot_warmup") ? "var(--muted)" : "var(--text)";
+    // Exiting boot phase → push the source we've been holding back from
+    // the latest audio_level events into the Mic badge. The same event-
+    // handler that suppresses badge updates while in boot will resume
+    // applying them on the very next audio_level frame.
+    if (wasInBoot && !stillInBoot) {
+      const snapSource = state.get("status")?.voice_loop?.mic_active_source;
+      if (snapSource && snapSource !== micSource) {
+        micSource = snapSource;
+        refreshMicSourceBadge();
+      }
+    }
     dotsTick = 0;
     renderHearing();
   }
@@ -299,8 +321,14 @@ export function mount(target) {
     // initialiser above for the rationale.
     if (vl == null) {
       updateHearing("loading");
+    } else if (!vl.running) {
+      updateHearing("loading");
+    } else if (vl.voice_state === "boot_warmup") {
+      // Status snapshot landed mid-warmup — stay in Инициализация until
+      // the boot_warmup → standby transition arrives over SSE.
+      updateHearing("boot_warmup");
     } else {
-      updateHearing(vl.running ? "standby" : "loading");
+      updateHearing("standby");
     }
   }
 
@@ -548,8 +576,15 @@ export function mount(target) {
         vuLevelMono = ev.payload?.level ?? 0;
       }
       // T17 fix #7 — refresh source badge live from per-event tag.
+      // BUT: during boot_warmup / loading we want the UI to honestly stay
+      // in "Инициализация" mode. Stream may be up and tagged "esp32_stereo"
+      // already, but the user hasn't heard the greeting yet — so neither
+      // the Mic badge nor the equaliser should reveal the source until
+      // standby. We keep tracking vuLevel* so the bars are at the live edge
+      // the moment we exit boot_warmup.
       const incomingSource = ev.payload?.source;
-      if (incomingSource && incomingSource !== micSource) {
+      const inBootPhase = (hearingState === "loading" || hearingState === "boot_warmup");
+      if (!inBootPhase && incomingSource && incomingSource !== micSource) {
         micSource = incomingSource;
         refreshMicSourceBadge();
       }
