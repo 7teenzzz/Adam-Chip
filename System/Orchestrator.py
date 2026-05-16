@@ -2640,12 +2640,15 @@ async def _stream_llm_and_speak(
         _playback_speed = float(tuning_store.current().voice.speed_multiplier)
     except Exception:
         _playback_speed = 1.0
-    # Snapshot Adam-specific TTS volume (software gain). Applied to every WAV
-    # chunk before playback — independent of system / PulseAudio master volume.
-    try:
-        _playback_volume = float(tuning_store.current().voice.volume)
-    except Exception:
-        _playback_volume = 1.0
+    # Adam-specific TTS volume (software gain). Read PER CHUNK so UI slider
+    # changes apply within the current reply, not only on the next turn. The
+    # mtime-poll inside tuning_store.current() is O(1) when Config.json is
+    # unchanged, so calling this per-chunk costs ~one stat() per chunk.
+    def _current_volume() -> float:
+        try:
+            return float(tuning_store.current().voice.volume)
+        except Exception:
+            return 1.0
 
     async def _producer() -> None:
         buf = ""
@@ -2750,7 +2753,7 @@ async def _stream_llm_and_speak(
                     # Store for future turns (best-effort, no lock — single-writer loop).
                     _FILLER_WAV_CACHE[cache_key] = wav
             if wav is not None:
-                wav = _apply_wav_volume(wav, _playback_volume)
+                wav = _apply_wav_volume(wav, _current_volume())
             # Wait until either delay elapses OR real TTS has already started.
             try:
                 await asyncio.wait_for(asyncio.sleep(delay_s), timeout=delay_s + 0.1)
@@ -2801,7 +2804,7 @@ async def _stream_llm_and_speak(
             wav = await asyncio.to_thread(tts._get_wav_bytes_sync, chunk)
             if wav is not None:
                 wav = _apply_wav_speed(wav, _playback_speed)
-                wav = _apply_wav_volume(wav, _playback_volume)
+                wav = _apply_wav_volume(wav, _current_volume())
 
             if wav is None:
                 # /wav endpoint failed. For jetson_hdmi target, fall back to /speak
