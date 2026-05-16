@@ -221,6 +221,18 @@ Plans:
 
 **Requirements:** ESP-mic должен открыться к моменту warmup TTS; никаких `voice_loop_error stage=esp32_mic` в первые 60 сек после старта; recovery после disconnect <5 сек; никаких переходов на local mic пока `disable_local_fallback=true`.
 
+**Requirement IDs:** REQ-ESP-OPEN-BEFORE-WARMUP, REQ-NO-ESP-ERRORS-AT-BOOT, REQ-RECOVERY-UNDER-5SEC, REQ-NO-LOCAL-FALLBACK, REQ-UI-INIT-STATUS, REQ-UI-STANDBY-LIVE
+
+**Plans:** 4 plans
+
+Plans:
+
+- [ ] 07-01-PLAN.md — Config + Schema: 4 new asr keys (disable_local_fallback, esp_open_timeout_sec, esp_probe_after_fails, esp_retry_backoff_sec)
+- [ ] 07-02-PLAN.md — MicReader module: new System/adam/mic_reader.py with class MicReader (producer + audio_level emitter + drain-on-mute)
+- [ ] 07-03-PLAN.md — Orchestrator integration: wire MicReader; delete _run_esp32, _esp32_drain_during_mute, _audio_level_monitor; introduce boot_warmup state; rearrange _orchestrated_startup
+- [ ] 07-04-PLAN.md — UI integration: chat.js boot_warmup label/placeholder, wakeMeter.js pipelineReady gating on voice_state_change(to=standby)
+
+
 ---
 
 ## Backlog (неспланированные задачи)
