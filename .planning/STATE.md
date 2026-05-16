@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 7 в работе (V-S07.3-ESP32_mic_fix) — Plan 07-03 завершён, готовится Plan 07-04 (UI gate)
-last_updated: "2026-05-16T20:58:00.000Z"
+status: Phase 7 ✓ COMPLETE (V-S07.3 mic stream stable). Phase 8 открыт — Reply-Echo-Hang debug.
+last_updated: "2026-05-17T00:30:00.000Z"
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 8
-  completed_plans: 4
-  percent: 50
+  completed_plans: 8
+  percent: 100
 ---
 
 # Adam-Chip — Project State
 
-**Last Updated:** 2026-05-16
-**Status:** Phase 7 ESP32 Mic Pipeline Refactor — Plan 07-03 завершён (MicReader интегрирован в Orchestrator). Готовится Plan 07-04 (UI pipelineReady gate).
+**Last Updated:** 2026-05-17
+**Status:** Phase 7 ✓ COMPLETE — ESP32 mic stream stable (+108 ms boot, 0 errors per session). Phase 8 открыт для устранения reply-echo-hang (заморозка voice_loop после reply_window_expired absolute_deadline из-за акустического эха TTS через ESP32 mic).
 
 ## Active Phase
 

@@ -200,7 +200,7 @@ Plans:
 
 ---
 
-## Phase 7: ESP32 Mic Pipeline Refactor — MicReader keep-alive
+## Phase 7: ESP32 Mic Pipeline Refactor — MicReader keep-alive ✓ COMPLETE (2026-05-17)
 
 **Branch:** `V-S07.3-ESP32_mic_fix`
 
@@ -230,8 +230,45 @@ Plans:
 - [x] 07-01-PLAN.md — Config + Schema: 4 new asr keys (`disable_local_fallback`, `esp_open_timeout_sec`, `esp_probe_after_fails`, `esp_retry_backoff_sec`) — commit `f5529b5`
 - [x] 07-02-PLAN.md — MicReader module: new `System/adam/mic_reader.py` with class MicReader (producer + audio_level emitter + drain-on-mute) — commit `d67d6d4`
 - [x] 07-03-PLAN.md — Orchestrator integration: wire MicReader; delete `_run_esp32`, `_esp32_drain_during_mute`, `_audio_level_monitor`; introduce `boot_warmup` state; rearrange `_orchestrated_startup` — commit `0c358a8`
-- [ ] 07-04-PLAN.md — UI integration: chat.js boot_warmup label/placeholder, wakeMeter.js pipelineReady gating on voice_state_change(to=standby)
+- [x] 07-04-PLAN.md — UI integration: chat.js boot_warmup label/placeholder, wakeMeter.js pipelineReady gating on voice_state_change(to=standby) — commit `7177d58`
 
+**Verified on user test session 2026-05-17 00:01:05 — 00:10:40 MSK:** mic stream active +108 ms after orchestrator_started, **0** `voice_loop_error stage=esp32_mic`, all 1695 audio_level events `source=esp32_stereo`. See `.planning/phases/07-esp32-mic-pipeline-refactor-micreader-keep-alive/07-SUMMARY.md`.
+
+---
+
+## Phase 8: Reply-Echo-Hang debug — устранить заморозку voice_loop после reply window
+
+**Branch:** TBD (suggest `V-S07.4-reply-echo-hang`)
+
+**Goal:** Устранить полную заморозку Orchestrator (event_log замолкает на 6+ минут), наблюдаемую после `reply_window_expired` с `reason=absolute_deadline`. Корневая причина — повторное срабатывание `endpointing_started` (8 раз за 7 сек) в reply mode из-за акустического эха собственной TTS Адама через ESP32 mic, что не даёт VAD'у закрыть endpointing до hard cutoff. Это pre-existing bug, выявленный после стабилизации mic stream в Phase 7.
+
+**Requires:** Phase 7 завершена (стабильный mic stream — необходимое условие чтобы воспроизвести bug; на flaky stream он маскировался).
+
+**Symptoms (test session 2026-05-17 00:08:50–00:09:20):**
+
+- В reply window между 21:03:38 и 21:03:45 (UTC) 8 событий `endpointing_started` с интервалом 5–26 ms — VAD скачет voiced↔silenced на хвосте TTS-эхо.
+- 21:03:52 — `reply_window_expired absolute_deadline elapsed=16.6s` (hard cutoff).
+- 21:04:00 — последний нормальный `esp32_audio_health`.
+- 21:04:15.979 — последний event (`audio_level state=standby source=esp32_stereo`).
+- Далее — **6 минут полной тишины** в `events.jsonl`. Пользователь делал запросы 00:08:50–00:09:20 (UTC 21:08:50+), реакции не было; UI VU/equaliser замёрз.
+
+**Investigation hypotheses:**
+
+- `_REPLY_GUARD_SEC` (0.6 s) недостаточно для затухания акустического эха ESP32 speaker → ESP32 mic (расстояние, реверберация). Hard cutoff попадает не на тишину, а на хвост эха.
+- Endpointing flicker (`_was_endpointing` flag toggling каждые 20 ms) создаёт спам в event_log; lock contention в `event_log.append` (синхронный `with self._lock: handle.write`) может затянуть main loop.
+- Возможна другая бесконечная задача / deadlock между `_vad_loop` consumer и MicReader producer при определённом sequence событий после hard cutoff.
+
+**Tentative deliverables:**
+
+- Воспроизведение hang в контролируемом scenario (e.g. force_TTS playback с loopback mic).
+- Увеличение `_REPLY_GUARD_SEC` до 1.0–1.5 s (или config-параметр).
+- Debounce на `_was_endpointing` flag — не эмитить `endpointing_started` чаще раза в 200 ms.
+- Возможно: half-duplex hard mute на reply mode (не просто `_REPLY_GUARD_SEC`, а полный suppress voiced detection пока `time.perf_counter() - last_tts_finished_at < N`).
+- Async stack snapshot mechanism для будущей диагностики hang (e.g. SIGUSR1 → dump all task stacks).
+
+**Mode:** debug → standard fix
+
+**Requirements:** REQ-NO-HANG-AFTER-REPLY, REQ-NO-SELF-ECHO-VAD, REQ-DIAGNOSTIC-DUMP-ON-DEMAND (TBD при /gsd-discuss-phase 8)
 
 ---
 
