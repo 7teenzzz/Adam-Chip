@@ -1866,13 +1866,6 @@ async def listen_status() -> dict[str, Any]:
     return {"ok": True, **voice_loop.status()}
 
 
-@app.post("/api/voice/force_esp_retry")
-async def voice_force_esp_retry() -> dict[str, Any]:
-    """Single-shot ESP probe + voice_loop restart (UI button).
-    Active only when mic_source=esp32 AND in local fallback."""
-    return await voice_loop.force_esp_retry()
-
-
 def _ui_settings_public() -> dict[str, Any]:
     public = settings.to_public_dict()
     public["_ui"] = {
