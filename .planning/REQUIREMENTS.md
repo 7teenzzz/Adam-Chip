@@ -54,3 +54,12 @@
 | AGT-03 | Добавить в `docs/AGENT-PROTOCOL.md` секция "Гэпы контекста": классификация Branch gap / Phase gap / Config gap / Invariant gap / Stale gap + поведение агента для каждого |
 | AGT-04 | Добавить в `docs/AGENT-PROTOCOL.md` секция "Протокол планирования": GSD-first (проверить ROADMAP.md → рекомендовать `/gsd-plan-phase` → inline GSD-формат для малых задач) |
 | AGT-05 | Обновить `CLAUDE.md`: добавить `@docs/AGENT-PROTOCOL.md` в строку с `@`-референсами и однострочную подпись |
+
+## Phase 8 — Reply-Echo-Hang debug: устранить заморозку voice_loop после reply window
+
+| ID | Requirement |
+| --- | ----------- |
+| REQ-NO-HANG-AFTER-REPLY | После перехода `reply → standby` (по любой причине: silence timeout, max_segment_ms, успешный submit) voice_loop в `System/Orchestrator.py` продолжает эмитить события (`voice_loop_heartbeat` минимум раз в N секунд, плюс reaction на wake word). Заморозка > 60 сек = регрессия. |
+| REQ-NO-SELF-ECHO-VAD | Защитный буфер `_REPLY_GUARD_SEC = 0.6` сохранён в `_vad_loop` reply-блоке и не убран (defence-in-depth для будущих сценариев акустического контура speaker↔mic, даже если сейчас эхо не root cause). `half_duplex_mute=true` остаётся инвариантом. |
+| REQ-REPLY-MATCHES-LISTENING | Логика accumulation/endpointing в `_vad_loop` для reply идентична listening (один общий блок кода, без дубликата). Единственное отличие reply от listening — таймер silence 4.0 сек → standby (если `speech_ms == 0`). Защита от бесконечной диктовки — общий `max_segment_ms`. Поле `services.asr.reply_absolute_deadline_sec` удалено из `System/Config.json` и `System/Config.schema.json`. |
+| REQ-DIAGNOSTIC-LOGS-VOICE-STATE | `_vad_loop` эмитит событие `voice_state_changed` (поля: from, to, reason, timestamp) при каждом `_set_voice_state` и `voice_loop_heartbeat` периодически (например раз в 5 сек), чтобы при повторении hang можно было точно установить место заморозки по `events.jsonl`. SIGUSR1 → asyncio task stack dump deferred to follow-up phase (см. CONTEXT §Deferred). |

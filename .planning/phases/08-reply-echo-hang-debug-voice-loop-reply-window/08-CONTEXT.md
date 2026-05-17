@@ -24,6 +24,14 @@
 **Корневая причина по результату обсуждения:**
 ROADMAP исходно фиксировал акустическое эхо как root cause. После проверки логов (Адам **молчал** в момент hang 21:04:15) — гипотеза опровергнута. Новая гипотеза: **избыточность и расхождение `reply` mode с `listening` mode**, плюс отдельный возможный deadlock в voice_loop после `reply_window_expired → standby`.
 
+**Финальные REQ-IDs Phase 8 (зафиксированы в `.planning/REQUIREMENTS.md`):**
+- `REQ-NO-HANG-AFTER-REPLY` — voice_loop не замораживается после reply→standby (heartbeat + reaction на wake word).
+- `REQ-NO-SELF-ECHO-VAD` — `_REPLY_GUARD_SEC=0.6` сохранён как defence-in-depth; `half_duplex_mute=true` остаётся инвариантом.
+- `REQ-REPLY-MATCHES-LISTENING` — reply mode идентичен listening + единственное отличие — таймер silence 4.0 сек → standby; общий `max_segment_ms`; `reply_absolute_deadline_sec` удалён из Config.json+schema.
+- `REQ-DIAGNOSTIC-LOGS-VOICE-STATE` — `voice_state_changed` + `voice_loop_heartbeat` события в `_vad_loop`. SIGUSR1 dump deferred.
+
+Исходный `REQ-DIAGNOSTIC-DUMP-ON-DEMAND` из ROADMAP заменён на более конкретный `REQ-DIAGNOSTIC-LOGS-VOICE-STATE` (логи всегда, не on-demand). SIGUSR1 task stack dump on-demand — отдельная фаза.
+
 </domain>
 
 <decisions>

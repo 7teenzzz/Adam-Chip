@@ -268,7 +268,7 @@ Plans:
 
 **Mode:** debug → standard fix
 
-**Requirements:** REQ-NO-HANG-AFTER-REPLY, REQ-NO-SELF-ECHO-VAD, REQ-DIAGNOSTIC-DUMP-ON-DEMAND (TBD при /gsd-discuss-phase 8)
+**Requirement IDs:** REQ-NO-HANG-AFTER-REPLY, REQ-NO-SELF-ECHO-VAD, REQ-REPLY-MATCHES-LISTENING, REQ-DIAGNOSTIC-LOGS-VOICE-STATE
 
 ---
 
