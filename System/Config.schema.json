@@ -395,6 +395,13 @@
               "description": "BCP-47 language code for ASR. Must match the language the agent listens in.",
               "default": "ru"
             },
+            "listening_silence_timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30,
+              "description": "Seconds of silence in LISTENING phase (after wake word fires, before any speech is detected) before voice_loop returns to STANDBY. Reference logic = 6s. Protects against spurious wake-word detections — if OWW fires on noise but no one speaks, Adam returns to STANDBY instead of hanging in LISTENING forever. Replaces wake_word.wake_silence_timeout_sec (deprecated alias). Once speech is detected, silence_after_speech_ms takes over for end-of-utterance detection.",
+              "default": 6
+            },
             "silence_after_speech_ms": {
               "type": "integer",
               "description": "How many consecutive milliseconds of silence after detected speech are required to mark the user's request as finished and forward it to ASR. Applies in both LISTENING (after wake word) and REPLY (after Adam's response) modes. Lower = faster Adam reaction but cuts off slow speakers; higher = more patient but introduces delay.",
@@ -713,7 +720,7 @@
         },
         "wake_silence_timeout_sec": {
           "type": "integer",
-          "description": "Seconds of silence in LISTENING phase (after wake word, before any speech is detected) before voice_loop returns to STANDBY. Reference logic specifies 6s. NOTE: this field will be relocated to services.asr.listening_silence_timeout_sec in a follow-up — the timer is semantically part of the ASR pipeline, not the wake-word engine.",
+          "description": "DEPRECATED — moved to services.asr.listening_silence_timeout_sec in Phase 11. The timer is semantically part of the ASR pipeline (it counts silence within LISTENING phase), not the wake-word engine. Reader prefers the new key; this one is kept as a fallback for backwards compatibility with old Config.json files.",
           "default": 6
         }
       }

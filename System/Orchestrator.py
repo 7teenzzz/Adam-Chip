@@ -449,8 +449,15 @@ class VoiceLoopController:
         self._wake_detected_at: float = 0.0
         # LISTENING-phase silence timer: how long the voice loop waits for the
         # user to start speaking after the wake word fires. Reference logic = 6s.
-        # Fallback default mirrors Config.json so missing-config startup behaves the same.
-        self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
+        # Canonical knob is services.asr.listening_silence_timeout_sec (Phase 11);
+        # wake_word.wake_silence_timeout_sec is a deprecated alias kept for
+        # backwards compatibility with old Config.json files.
+        self._listening_silence_timeout_sec: float = float(
+            asr_cfg.get(
+                "listening_silence_timeout_sec",
+                ww_cfg.get("wake_silence_timeout_sec", 6.0),
+            )
+        )
         self._utterance_id: str | None = None  # set on wake_word_detected, cleared on standby
         # Phase 7: MicReader is wired in at module scope post-construction
         # (Orchestrator.py top-level). For mic_source != "esp32" (maintenance
@@ -796,7 +803,7 @@ class VoiceLoopController:
                                 })
                             if triggered:
                                 self._utterance_id = str(uuid4())[:8]
-                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None, "silence_timeout_sec": self._wake_silence_timeout_sec, "utterance_id": self._utterance_id})
+                                event_log.append("wake_word_detected", {"engine": "openwakeword", "score": round(score, 3) if score is not None else None, "silence_timeout_sec": self._listening_silence_timeout_sec, "utterance_id": self._utterance_id})
                                 self._set_voice_state("listening", "wake_word")
                                 self._webrtc_vad.reset_states()
                                 self._wake_detected_at = time.perf_counter()
@@ -863,7 +870,7 @@ class VoiceLoopController:
                 # timeout window, return to standby rather than waiting indefinitely.
                 if self._voice_state == "listening" and speech_ms == 0:
                     elapsed = time.perf_counter() - self._wake_detected_at
-                    if elapsed >= self._wake_silence_timeout_sec:
+                    if elapsed >= self._listening_silence_timeout_sec:
                         event_log.append("wake_silence_timeout", {
                             "action": "standby",
                             "elapsed_sec": round(elapsed, 1),
@@ -3139,10 +3146,18 @@ def _rebuild_clients(section_path: str) -> list[str]:
     if section_path.startswith("services.asr") or section_path == "services":
         asr = create_asr_client(services.get("asr", {}))
         voice_loop.asr_client = asr
+        # Refresh LISTENING silence timer live from the canonical knob.
+        asr_cfg_new = services.get("asr", {})
+        ww_cfg_now = settings.section("wake_word") or {}
+        voice_loop._listening_silence_timeout_sec = float(
+            asr_cfg_new.get(
+                "listening_silence_timeout_sec",
+                ww_cfg_now.get("wake_silence_timeout_sec", 6.0),
+            )
+        )
         restarted.append("asr")
         # Phase 7: propagate ASR config into MicReader (open_timeout, probe,
         # backoff, disable_local_fallback). audio-side stays as-is here.
-        asr_cfg_new = services.get("asr", {})
         audio_cfg_new = settings.section("media").get("audio", {})
         if mic_reader.apply_config(asr_cfg_new, audio_cfg_new):
             asyncio.ensure_future(mic_reader.restart())
@@ -3158,7 +3173,17 @@ def _rebuild_clients(section_path: str) -> list[str]:
     if section_path.startswith("wake_word"):
         ww_cfg = settings.section("wake_word") or {}
         voice_loop._wake_engine = _create_wake_engine(ww_cfg)
-        voice_loop._wake_silence_timeout_sec = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
+        # Phase 11: wake_silence_timeout_sec is a deprecated alias — keep
+        # hot-reload working for old Config.json files but only use it as
+        # a fallback when the new services.asr.listening_silence_timeout_sec
+        # is missing.
+        asr_cfg_now = settings.section("services").get("asr", {})
+        voice_loop._listening_silence_timeout_sec = float(
+            asr_cfg_now.get(
+                "listening_silence_timeout_sec",
+                ww_cfg.get("wake_silence_timeout_sec", 6.0),
+            )
+        )
         voice_loop._ww_buf.clear()
         restarted.append("voice_loop")
     if section_path.startswith("mcu"):

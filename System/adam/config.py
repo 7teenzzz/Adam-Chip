@@ -102,6 +102,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "base_url": "http://127.0.0.1:8095",
             "model": "small",
             "language": "ru",
+            "listening_silence_timeout_sec": 6,
             "reply_window_sec": 3.75,
             "reply_silence_timeout_sec": 5.0,
             "endpointing_debounce_frames": 5,

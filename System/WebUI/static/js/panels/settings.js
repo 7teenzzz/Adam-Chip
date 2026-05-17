@@ -158,19 +158,22 @@ const SCHEMA = [
       { key: "vad_threshold", label: "VAD порог (Silero внутри OWW)", type: "number",
         hint: "0–1 · 0 — выключено · выше = строже фильтрует тишину",
         min: 0, max: 1, step: 0.05 },
-      { key: "wake_silence_timeout_sec", label: "Тишина после wake word (с)", type: "number",
-        hint: "5 рекомендуется · после истечения — обратно в standby",
-        min: 0.5, max: 10, step: 0.5 },
     ],
     extras: () => buildWakeWordExtras(),
   },
 
-  // ── Завершение запроса от пользователя ──────────────────────────────────────
+  // ── Тайминги голосового пайплайна ────────────────────────────────────────────
   {
-    source: "config", section: "services.asr", title: "Завершение запроса от пользователя",
+    source: "config", section: "services.asr", title: "Тайминги голосового пайплайна",
     fields: [
-      { key: "silence_after_speech_ms", label: "Длительность тишины (мс)", type: "number",
-        hint: "Сколько миллисекунд подряд должно быть тихо после речи, чтобы считать запрос завершённым. Действует и в режиме «Слушаю», и в режиме ожидания продолжения после ответа Адама. 1500 — рекомендуемое значение.",
+      { key: "listening_silence_timeout_sec", label: "LISTENING — тишина → STANDBY (с)", type: "number",
+        hint: "Если после wake word пользователь молчит N секунд — возврат в ожидание. Защита от ложных wake-word. 6 рекомендуется.",
+        min: 1, max: 30, step: 0.5 },
+      { key: "reply_silence_timeout_sec", label: "REPLY — тишина → STANDBY (с)", type: "number",
+        hint: "После ответа Адама микрофон ждёт продолжения N секунд (без wake word). 5 рекомендуется.",
+        min: 1, max: 10, step: 0.5 },
+      { key: "silence_after_speech_ms", label: "Конец фразы — длительность тишины (мс)", type: "number",
+        hint: "Сколько миллисекунд подряд должно быть тихо ПОСЛЕ начала речи, чтобы считать запрос завершённым. Действует и в LISTENING, и в REPLY. 1500 — рекомендуемое значение.",
         min: 200, max: 5000, step: 100 },
       { key: "silence_rms_threshold", label: "Чувствительность тишины (RMS)", type: "number",
         hint: "Уровень звука, ниже которого аудио считается тишиной (даже если VAD считает иначе). Повысьте, если фоновый шум зала мешает закончить фразу. 0 — отключить фильтр (только WebRTC VAD). Типично 200–500.",
