@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 7 ✓ COMPLETE (V-S07.3 mic stream stable). Phase 8 открыт — Reply-Echo-Hang debug.
-last_updated: "2026-05-17T00:30:00.000Z"
+status: completed
+last_updated: "2026-05-17T00:06:09.313Z"
 progress:
-  total_phases: 8
-  completed_phases: 1
+  total_phases: 9
+  completed_phases: 0
   total_plans: 8
-  completed_plans: 8
-  percent: 100
+  completed_plans: 4
+  percent: 50
 ---
 
 # Adam-Chip — Project State
