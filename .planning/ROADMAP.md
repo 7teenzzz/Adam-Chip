@@ -274,6 +274,16 @@ Plans:
 
 **Mode:** standard
 
+**Requirements:** PLAN9-01, PLAN9-02, PLAN9-03, PLAN9-04, PLAN9-05, PLAN9-06, PLAN9-07, PLAN9-08, PLAN9-09, PLAN9-10
+
+**Plans:** 4 plans
+
+Plans:
+- [ ] 09-01-PLAN.md — CANDIDATES.md: реестр ~13 кандидатов из Ф8 §4.1 + Backlog + активных веток
+- [ ] 09-02-PLAN.md — 09-PRIORITIZATION.md: матрица 4 критериев (Impact/Effort/Strategic/Exhibition) + P0–P3 группы
+- [ ] 09-03-PLAN.md — 09-PHASE-DRAFTS.md: полные ROADMAP-style drafts для P0 (10A/10B/11) + компактные для P1–P3
+- [ ] 09-04-PLAN.md — 09-SUMMARY.md: финальные рекомендации для Phase 10 (что копировать + открытые вопросы + milestone-предложение)
+
 ---
 
 ## Phase 10: Roadmap Global Update
