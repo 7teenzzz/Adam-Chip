@@ -1010,6 +1010,24 @@ class VoiceLoopController:
                         speech_ms = 0
                         silence_ms = 0
                         self._ww_buf.clear()
+                        # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION): flush
+                        # any TCP / queue buildup that accumulated during the
+                        # reply window. Safe here because:
+                        #  (a) user just timed out without speaking, so no
+                        #      ongoing utterance to clip;
+                        #  (b) _STANDBY_GUARD_SEC=0.3 immediately follows,
+                        #      blocking OWW for 300 ms anyway;
+                        #  (c) next wake-word will fire only on the user's
+                        #      next attempt, well after the 200 ms discard
+                        #      window closes.
+                        # NOT called on wake_word_detected (would eat the
+                        # user's request — Phase 10 v1 regression).
+                        if self.mic_reader is not None:
+                            _dropped = self.mic_reader.flush_queue(200.0)
+                            event_log.append("mic_queue_flushed", {
+                                "frames": _dropped, "ms": _dropped * self.frame_ms,
+                                "trigger": "reply_silence_timeout", "discard_window_ms": 200,
+                            })
                         continue
 
                 # ── LISTENING: 3s silence timeout after wake word ────────────────
@@ -1128,6 +1146,25 @@ class VoiceLoopController:
                         speech_ms = 0
                         silence_ms = 0
                         self._ww_buf.clear()
+                        # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION) — V-S07.1
+                        # equivalent of _drain_esp32_backlog. During transcribe
+                        # + LLM + TTS (16-22 sec mute window) MicReader was
+                        # muted (drained socket but did not queue). If MicReader's
+                        # drain_loop was starved at any point in that window,
+                        # kernel TCP buffer accumulated stale frames. Flush them
+                        # now BEFORE state transitions to reply/standby so
+                        # WhisperX never sees TTS self-echo as user speech on
+                        # the next utterance. Safe here because (a) user is not
+                        # speaking right when Adam's reply text arrives, and
+                        # (b) downstream _REPLY_GUARD_SEC=0.6 covers any overlap
+                        # if the user did start. NOT called on wake — that would
+                        # eat the user's request (Phase 10 v1 regression).
+                        if self.mic_reader is not None:
+                            _dropped = self.mic_reader.flush_queue(200.0)
+                            event_log.append("mic_queue_flushed", {
+                                "frames": _dropped, "ms": _dropped * self.frame_ms,
+                                "trigger": "post_transcribe", "discard_window_ms": 200,
+                            })
                         if spoke:
                             self._set_voice_state("reply", "agent_spoke")
                             self._reply_start = time.perf_counter()

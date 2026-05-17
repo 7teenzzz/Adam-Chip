@@ -300,6 +300,41 @@ Plans:
 
 ---
 
+## Phase 10: Flush stale audio on safe state transitions (V-S07.1 backport)
+
+**Branch:** TBD (suggest `V-S07.5-flush-on-transition`)
+
+**Goal:** Восстановить принципы V-S07.1 `_drain_esp32_backlog` в архитектуре V-S07.3 (MicReader-стрим), но **только в безопасных точках** где пользователь точно не говорит. Устранить feeding stale TCP-buffered аудио в WhisperX после долгих mute-окон и reply EXPIR.
+
+**Requires:** Phase 9 завершена; реверт Phase 10 v1 (commit 5664121) изучен — v1 ошибочно вызывал flush на wake_word, что съедало первые 200ms запроса пользователя (Test 5: 33% success vs 64% baseline).
+
+**Root cause (от Phase 9 анализа):**
+V-S07.1 после `_transcribe_and_dispatch` явно вызывал `_drain_esp32_backlog(read_fn, frame_bytes, mute_start)` — отбрасывал stale байты из raw socket. V-S07.3 (Phase 7 refactor) этот шаг удалил, предполагая что MicReader's `_drain_loop` всегда успевает читать socket в фоне. На практике `_drain_loop` стопится на 200-500 мс из-за CPU нагрузки и W5500 SPI конкуренции с MJPEG → kernel TCP буфер ESP32 накапливает 1-3 сек аудио → flood приходит в queue и засоряет speech_frames.
+
+**Принципы из V-S07.1, адаптированные для MicReader-стрима:**
+
+1. **Drain после `_transcribe_and_dispatch`** (V-S07.1 эквивалент): после возврата transcribe, перед transition в reply/standby. Безопасно потому что (a) пользователь не говорит когда Адам только что озвучил ответ, (b) `_REPLY_GUARD_SEC=0.6` сразу за этим прикроет любой overlap.
+
+2. **Drain на `reply_silence_timeout`**: пользователь только что не успел ответить, в TCP буфере могут быть стале-фрагменты из reply window. Безопасно потому что (a) пользователь по определению молчал, (b) `_STANDBY_GUARD_SEC=0.3` сразу блокирует OWW на 300 мс.
+
+3. **Защита TCP-буфера ESP32** (не Drain socket напрямую как V-S07.1, а через MicReader): после `flush_queue()` ставится `_discard_until_ts` — drain_loop ПРОДОЛЖАЕТ читать socket (kernel TCP buffer дренируется, W5500 SPI не переполняется), но скип `_put_or_drop` 200 мс. Это адаптация V-S07.1 под MicReader-стрим — собственный socket-read MicReader'а сохраняется, drain происходит на уровне queue.
+
+**Чего НЕ делается:**
+- Flush на `wake_word_detected` — Phase 10 v1 показал что это убивает первые 200 мс речи пользователя (regression 64%→33% success).
+- Прямое чтение socket из `_vad_loop` — это бы сломало MicReader-стрим архитектуру (пользователь запретил).
+
+**Deliverables:**
+- `MicReader.flush_queue(discard_window_ms=200.0)` — публичный метод.
+- `_discard_until_ts` поле + gate в `_drain_loop` (mirror of mute-gate).
+- 2 вызова в Orchestrator: post-transcribe + reply_silence_timeout. БЕЗ wake.
+- Событие `mic_queue_flushed {frames, ms, trigger, discard_window_ms}` для диагностики.
+
+**Mode:** debug fix — устраняет регрессию Phase 7 refactor без регрессии Phase 10 v1.
+
+**Requirement IDs:** REQ-FLUSH-ON-SAFE-TRANSITIONS
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.
