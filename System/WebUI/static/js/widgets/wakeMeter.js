@@ -175,15 +175,8 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
         ctx.lineWidth = 1;
         ctx.stroke();
       }
-
-      ctx.fillStyle = "rgba(220,220,220,0.78)";
-      ctx.font = "10px ui-monospace,monospace";
-      ctx.textBaseline = "top";
-      ctx.fillText(
-        `t=${state.threshold.toFixed(2)}  s=${state.scoreDecay.toFixed(2)}  max=${state.scorePeak.toFixed(2)}`,
-        4,
-        3,
-      );
+      // Phase 9 (REQ-UI-CHAT-CLEANUP): textual overlay (t/s/max) removed —
+      // the visual bars + threshold line already convey the same information.
     }
     rafId = requestAnimationFrame(draw);
   }

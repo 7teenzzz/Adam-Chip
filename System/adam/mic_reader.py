@@ -132,6 +132,18 @@ class MicReader:
         self._start_t: float = 0.0
         self._level_tick: int = 0
         self._active_event: asyncio.Event = asyncio.Event()
+        # Phase 9 (REQ-AUDIO-LEVEL-CONTINUOUS): wall-clock fallback emitter.
+        # _drain_loop is the primary path (per-frame, 5-frame cadence ≈ 100 ms),
+        # but when the ESP32 stream stalls / reconnects / TTS playback blocks
+        # downstream consumers, drain emissions go silent for seconds. The
+        # _level_emit_loop task fills those gaps so the UI VU-meter never
+        # freezes for more than ~250 ms.
+        self._level_emit_task: asyncio.Task[None] | None = None
+        # perf_counter() of the most recent _emit_audio_level call (any source).
+        # Used by the watchdog task to decide whether to backfill.
+        self._last_level_emit_t: float = 0.0
+        # Cached last mono RMS for the watchdog task (filled by _emit_audio_level).
+        self._last_mono_rms: float = 0.0
 
     # ── External wiring ────────────────────────────────────────────────
 
@@ -171,6 +183,11 @@ class MicReader:
         self._start_t = time.perf_counter()
         self._active_event.clear()
         self._task = asyncio.create_task(self._run(), name="adam_mic_reader")
+        # Phase 9 (REQ-AUDIO-LEVEL-CONTINUOUS): start the watchdog emitter.
+        if self._level_emit_task is None or self._level_emit_task.done():
+            self._level_emit_task = asyncio.create_task(
+                self._level_emit_loop(), name="adam_mic_level_emit"
+            )
         self._emit(
             "mic_reader_started",
             {
@@ -183,6 +200,18 @@ class MicReader:
     async def stop(self) -> None:
         """Cancel `_run`, await it, drain the queue, emit stopped event."""
         self._running = False
+        # Phase 9 (REQ-AUDIO-LEVEL-CONTINUOUS): tear down the watchdog before
+        # the drain task so the watchdog cannot race the queue cleanup below.
+        emit_task = self._level_emit_task
+        if emit_task is not None and not emit_task.done():
+            emit_task.cancel()
+            try:
+                await emit_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        self._level_emit_task = None
         task = self._task
         if task is not None and not task.done():
             task.cancel()
@@ -384,6 +413,12 @@ class MicReader:
         can see whether the ESP32 mic is still streaming (silence vs echo).
         """
         rms = audioop.rms(mono_chunk, 2)
+        # Phase 9 (REQ-AUDIO-LEVEL-CONTINUOUS): cache the latest mono RMS so
+        # _level_emit_loop can backfill audio_level events when drain_loop is
+        # stalled. Also stamp _last_level_emit_t so the watchdog only fills
+        # actual gaps, not steady-state cadence.
+        self._last_mono_rms = float(rms)
+        self._last_level_emit_t = time.perf_counter()
         norm = round(min(1.0, (rms / self._normalize_factor) ** 0.5), 3)
         payload: dict[str, Any] = {
             "level": norm,
@@ -405,6 +440,53 @@ class MicReader:
                 payload["utterance_id"] = utt_id
 
         self._emit("audio_level", payload)
+
+    async def _level_emit_loop(self) -> None:
+        """Phase 9 (REQ-AUDIO-LEVEL-CONTINUOUS): wall-clock fallback emitter.
+
+        Wakes every 200 ms. If _emit_audio_level has fired within the last
+        250 ms, skip (drain_loop is keeping the UI updated). Otherwise
+        synthesise an audio_level event using the last cached RMS values so
+        the UI VU-meter does not freeze for multi-second stretches when the
+        drain loop is blocked on reconnect, stall, or downstream backpressure.
+
+        Marks the synthetic event with source field unchanged but adds
+        `synthetic: true` so log consumers can distinguish backfill from real
+        per-frame emissions.
+        """
+        period_sec = 0.2
+        gap_threshold_sec = 0.25
+        try:
+            while self._running:
+                await asyncio.sleep(period_sec)
+                if not self._running:
+                    break
+                now = time.perf_counter()
+                if now - self._last_level_emit_t < gap_threshold_sec:
+                    continue
+                # Backfill — synthesise from cached RMS.
+                rms = self._last_mono_rms
+                norm = round(min(1.0, (rms / self._normalize_factor) ** 0.5), 3)
+                payload: dict[str, Any] = {
+                    "level": norm,
+                    "state": self._voice_state_for_event(),
+                    "source": self.active_source,
+                    "synthetic": True,
+                }
+                if self._is_stereo:
+                    payload["channels"] = 2
+                    payload["level_l"] = self._raw_level_l
+                    payload["level_r"] = self._raw_level_r
+                else:
+                    payload["channels"] = 1
+                if self._voice_loop is not None:
+                    utt_id = getattr(self._voice_loop, "_utterance_id", "") or ""
+                    if utt_id:
+                        payload["utterance_id"] = utt_id
+                self._emit("audio_level", payload)
+                self._last_level_emit_t = now
+        except asyncio.CancelledError:
+            raise
 
     # ── Internal: probe + backoff ──────────────────────────────────────
 

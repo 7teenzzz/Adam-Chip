@@ -63,3 +63,13 @@
 | REQ-NO-SELF-ECHO-VAD | Защитный буфер `_REPLY_GUARD_SEC = 0.6` сохранён в `_vad_loop` reply-блоке и не убран (defence-in-depth для будущих сценариев акустического контура speaker↔mic, даже если сейчас эхо не root cause). `half_duplex_mute=true` остаётся инвариантом. |
 | REQ-REPLY-MATCHES-LISTENING | Логика accumulation/endpointing в `_vad_loop` для reply идентична listening (один общий блок кода, без дубликата). Единственное отличие reply от listening — таймер silence 4.0 сек → standby (если `speech_ms == 0`). Защита от бесконечной диктовки — общий `max_segment_ms`. Поле `services.asr.reply_absolute_deadline_sec` удалено из `System/Config.json` и `System/Config.schema.json`. |
 | REQ-DIAGNOSTIC-LOGS-VOICE-STATE | `_vad_loop` эмитит событие `voice_state_changed` (поля: from, to, reason, timestamp) при каждом `_set_voice_state` и `voice_loop_heartbeat` периодически (например раз в 5 сек), чтобы при повторении hang можно было точно установить место заморозки по `events.jsonl`. SIGUSR1 → asyncio task stack dump deferred to follow-up phase (см. CONTEXT §Deferred). |
+
+## Phase 9 — VAD debounce + UI smoothness + chat panel cleanup
+
+| ID | Requirement |
+| --- | ----------- |
+| REQ-VAD-DEBOUNCE | `_vad_loop` НЕ эмитит `endpointing_started` чаще чем раз в N silence-кадров подряд (default 5 ≈ 100 ms). Параметр в Config (`services.asr.endpointing_debounce_frames`). На длинной речевой фразе одна реплика даёт ≤ 2 emit'а endpointing_started (а не 40, как в Test 2). |
+| REQ-AUDIO-LEVEL-CONTINUOUS | `MicReader` имеет отдельную asyncio-task, которая эмитит `audio_level` event каждые ≤ 200 ms на основе последних известных значений, даже если drain_loop стал из-за stall/reconnect или I/O задержки. UI VU/equaliser обновляется без длинных gap'ов (> 500 ms) кроме реальных потерь сигнала. |
+| REQ-HEARTBEAT-INDEPENDENT | `voice_loop_heartbeat` эмитится из отдельной asyncio-task `_heartbeat_loop` (не из `_vad_loop`), интервал 5 sec ± 200 ms независимо от ASR/TTS блокировок в `_vad_loop`. Hang voice_loop'а немедленно виден как остановка heartbeat. |
+| REQ-UI-CHAT-CLEANUP | В chat-панели (System/WebUI/static/js/panels/chat.js, widgets/wakeMeter.js): убраны текстовые подписи (`t=X s=Y max=Z`) с эквалайзера; кнопка «Калибровать» убрана из chat (остаётся в settings.js); `micSourceBadge` перенесён над эквалайзером, выровнен по правому краю (там где была кнопка Калибровать); VU-метр (`vuCanvas`) высота = 96 px (под высоту эквалайзера). |
+| REQ-ESP32-AUDIO-REPORT | Создан отчёт о текущей конфигурации ESP32 INMP441 микрофона: sample rate, bit depth, slot bits, формат. Сравнение с рекомендуемой частотой 44.1/48 kHz и 16-bit. Включён в `09-SUMMARY.md`. |

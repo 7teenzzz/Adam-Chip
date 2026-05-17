@@ -272,6 +272,34 @@ Plans:
 
 ---
 
+## Phase 9: VAD debounce + UI smoothness + chat panel cleanup
+
+**Branch:** TBD (suggest `V-S07.4-vad-debounce-ui`)
+
+**Goal:** Устранить VAD-флапп (40 emissions endpointing_started на одну фразу), сделать audio_level и heartbeat независимыми от блокировок `_vad_loop`, обновить UI чат-панели (убрать дублирующиеся надписи и калибровку, переставить mic plate, выровнять высоты эквалайзера и VU-меттера). Дополнительно — отчёт по конфигурации ESP32 mic (sample rate, bit depth).
+
+**Requires:** Phase 8 завершена (рефактор reply mode, heartbeat). Phase 9 расширяет тот же файл `Orchestrator.py` + `mic_reader.py` + `WebUI/static/js/`.
+
+**Tentative deliverables:**
+
+- Debounce на `endpointing_started`: требовать N (default 5 ≈ 100 ms) подряд silence-кадров перед эмиссией. Параметр в Config.
+- Heartbeat вынести из `_vad_loop` в отдельную asyncio-task (живёт независимо от блокировок ASR/TTS).
+- `audio_level` continuous emission: добавить wall-clock task в `MicReader`, эмитит каждые ~100 ms из последних известных уровней — даже если drain_loop стал на reconnect/stall. Существующий event-emit per-frame оставляется в виде primary path; новый task — fallback от sticking.
+- WebUI chat panel (System/WebUI/static/js/panels/chat.js + widgets/wakeMeter.js):
+  - Убрать текстовые подписи (`t=0.08 s=0.00 max=0.00`) из эквалайзера.
+  - Убрать кнопку «Калибровать» из chat — остаётся только на странице настроек.
+  - Перенести `micSourceBadge` на место кнопки Калибровать (над эквалайзером, выровнено по правому краю).
+  - VU-метр (vuCanvas) высота 96 px (под высоту эквалайзера).
+- Verification report: ESP32 sample rate (16 kHz vs рекомендация 44.1/48), bit depth (16 vs 16 — соответствует).
+
+**Note:** WebUI уже использует SSE (`/api/agent/stream`) — отдельный fix не нужен. Polling `/api/agent/status` 4-сек интервалом — для общей health-данных, не для UI VU/equalizer.
+
+**Mode:** debug + UI polish
+
+**Requirement IDs:** REQ-VAD-DEBOUNCE, REQ-AUDIO-LEVEL-CONTINUOUS, REQ-HEARTBEAT-INDEPENDENT, REQ-UI-CHAT-CLEANUP, REQ-ESP32-AUDIO-REPORT
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.

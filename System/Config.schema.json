@@ -431,6 +431,13 @@
               "description": "Phase 8 (REQ-REPLY-MATCHES-LISTENING): single silence timer for reply mode. After voice_state transitions to 'reply' and the post-TTS guard (_REPLY_GUARD_SEC=0.6) elapses, if no qualifying speech has accumulated (speech_ms == 0) for this many seconds, voice loop returns to standby. Replaces the legacy two-timer pair (reply_window_sec + reply_absolute_deadline_sec — the latter is removed). Runaway-dictation protection in reply is provided by the shared media.audio.max_segment_ms (same path as listening), not by a separate hard cutoff.",
               "default": 4.0
             },
+            "endpointing_debounce_frames": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "Phase 9 (REQ-VAD-DEBOUNCE): minimum number of CONSECUTIVE silence-classified VAD frames (at frame_ms granularity, default 20 ms) required after speech before emitting the `endpointing_started` event. WebRTC VAD flickers voiced↔silenced at 20 ms granularity on tail syllables, quiet consonants, and far-field audio; without debounce a single user utterance can emit 20-40 `endpointing_started` events. Default 5 frames ≈ 100 ms — enough to filter sub-100 ms transients without delaying real end-of-speech detection.",
+              "default": 5
+            },
             "sample_rate": {
               "type": "integer",
               "description": "Audio sample rate in Hz sent to the ASR service. Must match the service expectation (16000 Hz for WhisperX).",

@@ -377,6 +377,12 @@ class VoiceLoopController:
         # Replaces the legacy reply_absolute_deadline_sec. Runaway-dictation is
         # guarded by the shared max_segment_ms — same as listening.
         self._reply_silence_timeout_sec: float = float(asr_cfg.get("reply_silence_timeout_sec", 4.0))
+        # Phase 9 (REQ-VAD-DEBOUNCE): minimum consecutive silence frames before
+        # emitting endpointing_started. WebRTC VAD flickers voiced↔silenced at
+        # 20 ms granularity, producing 20-40 endpointing_started emissions per
+        # utterance without debounce. 5 frames ≈ 100 ms is enough to filter
+        # sub-100 ms transients without delaying real end-of-speech.
+        self._endpointing_debounce_frames: int = max(1, int(asr_cfg.get("endpointing_debounce_frames", 5)))
         # 'standby' returns to listening for next wake word; 'stop' fully stops
         # the voice loop and requires explicit restart.
         self._reply_window_expired_action: str = str(asr_cfg.get("reply_window_expired_action", "standby"))
@@ -393,6 +399,10 @@ class VoiceLoopController:
             if self.wake_words else None
         )
         self._task: asyncio.Task[None] | None = None
+        # Phase 9 (REQ-HEARTBEAT-INDEPENDENT): separate task that emits
+        # voice_loop_heartbeat at a steady cadence regardless of _vad_loop
+        # blocking on ASR/TTS. None when voice loop is not running.
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self.running = False
         self.vad_state = "idle"
@@ -590,6 +600,10 @@ class VoiceLoopController:
         self._voice_state = "boot_warmup"
         self._set_voice_state("boot_warmup", "voice_loop_started")
         self._task = asyncio.create_task(self._run(), name="adam_voice_loop")
+        # Phase 9 (REQ-HEARTBEAT-INDEPENDENT): independent heartbeat ticker.
+        # Cancelled in stop(); restarted on every start(). Survives _vad_loop
+        # blocks on ASR/TTS, so loop liveness is always visible in events.jsonl.
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="adam_voice_heartbeat")
         await asyncio.sleep(0.2)
         if self._task.done():
             self.running = False
@@ -615,6 +629,14 @@ class VoiceLoopController:
                 await self._esp_retry_task
             except asyncio.CancelledError:
                 pass
+        # Phase 9 (REQ-HEARTBEAT-INDEPENDENT): cancel the heartbeat ticker too.
+        if self._heartbeat_task and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        self._heartbeat_task = None
         if self._task and not self._task.done():
             self._task.cancel()
             try:
@@ -806,6 +828,31 @@ class VoiceLoopController:
     # force_esp_retry methods stay reachable when mic_source != "esp32" (D-16,
     # W-5).
 
+    async def _heartbeat_loop(self) -> None:
+        """Phase 9 (REQ-HEARTBEAT-INDEPENDENT): wall-clock heartbeat ticker.
+
+        Runs as a separate asyncio task so voice_loop_heartbeat keeps firing
+        even when _vad_loop is blocked on ASR transcription or TTS playback.
+        Period 5 sec is a diagnostic-only detail (not Config) — matches the
+        Phase 8 cadence. If this task stops emitting, _vad_loop OR the event
+        loop itself is wedged — direct signal of a hang.
+        """
+        period_sec = 5.0
+        iter_count = 0
+        try:
+            while self.running:
+                iter_count += 1
+                event_log.append("voice_loop_heartbeat", {
+                    "state": self._voice_state,
+                    "iter": iter_count,
+                    "uptime_sec": round(time.perf_counter(), 2),
+                    "vad_state": self.vad_state,
+                    "source": "heartbeat_task",
+                })
+                await asyncio.sleep(period_sec)
+        except asyncio.CancelledError:
+            raise
+
     async def _vad_loop(self, read_fn: Callable[[int], bytes] | None, frame_bytes: int) -> None:
         """VAD + endpointing + ASR dispatch.
 
@@ -819,26 +866,18 @@ class VoiceLoopController:
         _reader = [read_fn]  # mutable ref — updated when arecord restarts during transcription
         _empty_streak = 0
         _was_endpointing = False
-        # Phase 8 (REQ-DIAGNOSTIC-LOGS-VOICE-STATE): periodic heartbeat event so
-        # a 6-minute hang shows up as a 5-second gap in events.jsonl rather than
-        # silent disappearance. Combined with the existing voice_state_change
-        # event (emitted in _set_voice_state), this gives operators a clear
-        # signal of WHERE the loop froze without needing SIGUSR1 dump (deferred).
-        _heartbeat_period_sec = 5.0
-        _last_heartbeat_ts = 0.0
-        _loop_iter_count = 0
+        # Phase 9 (REQ-VAD-DEBOUNCE): consecutive silence-frame counter used to
+        # debounce endpointing_started emission. Resets to 0 on every voiced
+        # frame so brief sub-100 ms silences inside a word do not trigger
+        # endpointing_started. Threshold = self._endpointing_debounce_frames.
+        _silence_run_frames = 0
+        # Phase 9 (REQ-HEARTBEAT-INDEPENDENT): heartbeat is now emitted by a
+        # separate asyncio task (_heartbeat_loop) started in self.start(), so
+        # voice_loop_heartbeat keeps ticking even when _vad_loop blocks on
+        # ASR or TTS playback. The inline emitter that used to live here has
+        # been removed — see _heartbeat_loop below.
         try:
             while self.running:
-                _loop_iter_count += 1
-                _now = time.perf_counter()
-                if _now - _last_heartbeat_ts >= _heartbeat_period_sec:
-                    event_log.append("voice_loop_heartbeat", {
-                        "state": self._voice_state,
-                        "iter": _loop_iter_count,
-                        "uptime_sec": round(_now, 2),
-                        "vad_state": self.vad_state,
-                    })
-                    _last_heartbeat_ts = _now
                 if self.mic_reader is not None:
                     chunk = await self.mic_reader.get_chunk(timeout=1.0)
                     if chunk is None:
@@ -982,14 +1021,25 @@ class VoiceLoopController:
                         silence_ms = 0
                         self.vad_state = "speech"
                         _was_endpointing = False
+                        # Phase 9 (REQ-VAD-DEBOUNCE): voiced frame resets the
+                        # silence-run counter so brief intra-word silences (5 frames)
+                        # do not trigger endpointing_started prematurely.
+                        _silence_run_frames = 0
                     elif speech_frames:
                         silence_ms += self.frame_ms
-                        if not _was_endpointing:
+                        _silence_run_frames += 1
+                        # Debounce: emit endpointing_started only after N consecutive
+                        # silence frames (default 5 ≈ 100 ms). Without the run-count
+                        # check WebRTC VAD flicker produces 20-40 emissions per
+                        # utterance. _was_endpointing still guards against repeat
+                        # emissions within the same silence run.
+                        if not _was_endpointing and _silence_run_frames >= self._endpointing_debounce_frames:
                             _was_endpointing = True
                             event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms, "utterance_id": self._utterance_id})
-                        self.vad_state = "endpointing"
+                        self.vad_state = "endpointing" if _was_endpointing else "speech"
                     else:
                         self.vad_state = "silence"
+                        _silence_run_frames = 0
                 speech_frames.append(chunk)
 
                 if speech_frames and (
@@ -1002,6 +1052,7 @@ class VoiceLoopController:
                     speech_ms = 0
                     silence_ms = 0
                     _was_endpointing = False
+                    _silence_run_frames = 0  # Phase 9: reset debounce counter on submission
                     if enough_speech:
                         # mute_start tracks total mute duration for diagnostics.
                         mute_start = time.perf_counter()

@@ -1,7 +1,7 @@
 import { api } from "../api.js";
 import { state } from "../state.js";
 import { toast } from "../widgets/toast.js";
-import { createWakeMeter, createCalibrateButton } from "../widgets/wakeMeter.js";
+import { createWakeMeter } from "../widgets/wakeMeter.js";
 
 function el(tag, attrs, children = []) {
   const node = document.createElement(tag);
@@ -94,8 +94,10 @@ export function mount(target) {
   const wakeMeter = createWakeMeter({ draggable: false, height: 96 });
   const eqCanvas = wakeMeter.canvas;
 
+  // Phase 9 (REQ-UI-CHAT-CLEANUP): VU-meter height matches equalizer (96 px)
+  // so the two bars align visually.
   const vuCanvas = el("canvas", {
-    style: "width:44px; flex-shrink:0; height:52px; border-radius:4px; display:block; background:var(--bg-2)",
+    style: "width:44px; flex-shrink:0; height:96px; border-radius:4px; display:block; background:var(--bg-2)",
   });
   let vuChannels = 1;
   let vuLevelL = 0, vuLevelR = 0, vuLevelMono = 0;
@@ -411,9 +413,9 @@ export function mount(target) {
   const sendBtn = el("button", { class: "btn btn-primary", onclick: () => send() }, "Отправить ⏎");
   const clearBtn = el("button", { class: "btn btn-ghost", onclick: () => { input.value = ""; input.focus(); } }, "Очистить");
 
-  // ---- Wake-word noise calibration ----
-  // Shared widget — same button lives on the Settings page too.
-  const { btn: calibrateBtn, status: calibStatus } = createCalibrateButton();
+  // Phase 9 (REQ-UI-CHAT-CLEANUP): calibrate button removed from chat panel.
+  // The shared widget still lives on the Settings page (settings.js) — that
+  // is the canonical place to recalibrate noise threshold.
 
   // ---- Layout ----
   const card = el("section", { class: "card", style: "flex:1; display:flex; flex-direction:column; min-height:0" }, [
@@ -442,24 +444,21 @@ export function mount(target) {
         jetImg,
         el("div", { class: "caps", style: "font-size:10px; color:var(--muted); margin-top:4px" }, "Сцена"),
         sceneCaption,
+        // Phase 9 (REQ-UI-CHAT-CLEANUP): mic-source badge moved up into the
+        // header row (right-aligned, where the calibrate button used to live).
         el("div", { style: "display:flex; align-items:center; gap:8px; margin-top:4px" }, [
           el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Микрофон · OWW"),
           el("span", { class: "spacer" }),
-          calibrateBtn,
+          micSourceBadge,
         ]),
         el("div", { style: "display:flex; gap:6px; align-items:stretch" }, [
           el("div", { style: "flex:1; min-width:0" }, [eqCanvas]),
           vuCanvas,
         ]),
-        el("div", { style: "display:flex; align-items:center; gap:8px; margin-top:2px" }, [
-          micSourceBadge,
-          el("span", { class: "spacer" }),
-        ]),
         el("div", { style: "display:flex; align-items:center; gap:8px" }, [
           el("span", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.4" },
             "Оранжевый — порог wake-word, циан — текущий OWW-score. Настройка порога — в разделе Настройки → OWW."),
           el("span", { class: "spacer" }),
-          calibStatus,
         ]),
         el("div", { style: "display:flex; align-items:center; gap:6px; margin-top:4px" }, [
           hearingDot,
