@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import audioop
+import queue as _queue_module
+import threading
 import time
 from typing import Any, Callable, Optional
 from urllib.request import build_opener, ProxyHandler
@@ -594,6 +596,62 @@ class MicReader:
         idx = min(max(0, fail_idx - 1), len(self._backoff_seq) - 1)
         return float(self._backoff_seq[idx])
 
+    # ── Internal: socket reader thread ────────────────────────────────
+
+    def _socket_reader_thread(
+        self,
+        read_fn: Callable[[int], bytes],
+        out_q: "_queue_module.Queue[bytes | None]",
+        stop_ev: threading.Event,
+    ) -> None:
+        """Read ESP32 socket into out_q in a dedicated OS thread.
+
+        Root-cause fix for the 2.3-second post-TTS dead zone: the original
+        asyncio.to_thread(read_fn, N) per-chunk pattern cannot guarantee
+        continuous socket draining during the 16-22s mute window (ASR + LLM
+        + TTS + playback). Event-loop scheduling delays let the TCP receive
+        buffer fill, the W5500 RTR/RCR timer expire, and the connection reset —
+        producing a 2-second reconnect-backoff dead zone after every turn.
+
+        This thread runs at OS-thread priority, decoupled from the asyncio
+        event loop entirely. out_q uses drop-oldest overflow (mirrors
+        _put_or_drop) so the live audio edge is always preserved when
+        _drain_loop is momentarily behind.
+        """
+        empty_streak = 0
+        while not stop_ev.is_set():
+            try:
+                chunk = read_fn(self._frame_bytes)
+            except Exception:
+                try:
+                    out_q.put(None, timeout=1.0)
+                except Exception:
+                    pass
+                return
+            if not chunk:
+                empty_streak += 1
+                if empty_streak >= 3:
+                    try:
+                        out_q.put(None, timeout=1.0)
+                    except Exception:
+                        pass
+                    return
+                time.sleep(0.005)
+                continue
+            empty_streak = 0
+            try:
+                out_q.put_nowait(chunk)
+            except _queue_module.Full:
+                # Drop oldest, keep live edge (mirrors _put_or_drop policy).
+                try:
+                    out_q.get_nowait()
+                except _queue_module.Empty:
+                    pass
+                try:
+                    out_q.put_nowait(chunk)
+                except Exception:
+                    pass
+
     # ── Internal: drain loop (per-chunk consumer logic) ────────────────
 
     async def _drain_loop(self, read_fn: Callable[[int], bytes]) -> None:
@@ -601,76 +659,88 @@ class MicReader:
         a propagating exception (caller's outer loop triggers reconnect).
 
         Per-chunk sequence (B-1 final rule):
-          1. read chunk
-          2. handle empty (3 consecutive empties => raise)
-          3. tally drained_bytes_total
-          4. tick level counter
-          5. if tick threshold reached: emit audio_level (ALWAYS, even
+          1. read chunk from socket reader thread via _frame_q
+          2. tally drained_bytes_total
+          3. tick level counter
+          4. if tick threshold reached: emit audio_level (ALWAYS, even
              when muted) and reset tick
-          6. mute gate: skip _put_or_drop only if voice_loop.muted_by_tts
-          7. else: put on queue
+          5. mute gate: skip _put_or_drop only if voice_loop.muted_by_tts
+          6. else: put on queue
+
+        Socket reading is decoupled from the asyncio event loop via
+        _socket_reader_thread — see that method for rationale.
         """
-        empty_streak = 0
-        while self._running:
-            chunk = await asyncio.to_thread(read_fn, self._frame_bytes)
+        # 2048 frames ≈ 40s at 50 fps — 2× headroom over worst-case 22s mute
+        # window. Drop-oldest overflow is handled by _socket_reader_thread.
+        _frame_q: "_queue_module.Queue[bytes | None]" = _queue_module.Queue(maxsize=2048)
+        _stop_ev = threading.Event()
+        _reader = threading.Thread(
+            target=self._socket_reader_thread,
+            args=(read_fn, _frame_q, _stop_ev),
+            daemon=True,
+            name="adam_mic_socket_reader",
+        )
+        _reader.start()
+        try:
+            while self._running:
+                try:
+                    chunk = await asyncio.to_thread(_frame_q.get, True, 0.5)
+                except _queue_module.Empty:
+                    continue
 
-            if not chunk:
-                empty_streak += 1
-                if empty_streak >= 3:
-                    raise RuntimeError("audio source ended: 3 consecutive empty reads")
-                await asyncio.sleep(0.005)
-                continue
-            empty_streak = 0
+                if chunk is None:
+                    raise RuntimeError("audio source ended: socket reader thread signaled EOF")
 
-            self._drained_bytes_total += len(chunk)
+                self._drained_bytes_total += len(chunk)
 
-            self._level_tick += 1
-            if self._level_tick >= _AUDIO_LEVEL_EMIT_EVERY_N_FRAMES:
-                self._emit_audio_level(chunk)
-                self._level_tick = 0
+                self._level_tick += 1
+                if self._level_tick >= _AUDIO_LEVEL_EMIT_EVERY_N_FRAMES:
+                    self._emit_audio_level(chunk)
+                    self._level_tick = 0
 
-            now_perf = time.perf_counter()
+                now_perf = time.perf_counter()
 
-            # Phase 11 diagnostic: RMS envelope log.
-            # Emit per-chunk RMS during the lag-diag window so we can plot
-            # the audio envelope and correlate against tts_finished /
-            # mute_unmute timestamps. Cheap — ~50 events/s for 1-2s.
-            if self._lag_diag_until_ts > 0.0 and now_perf < self._lag_diag_until_ts:
-                muted_now = bool(
-                    self._voice_loop is not None
-                    and getattr(self._voice_loop, "muted_by_tts", False)
-                )
-                discard_now = self._discard_until_ts > 0.0 and now_perf < self._discard_until_ts
-                self._emit("mic_lag_diag_chunk", {
-                    "t_offset_ms": int((now_perf - self._lag_diag_started_t) * 1000),
-                    "rms": audioop.rms(chunk, 2),
-                    "muted": muted_now,
-                    "discarded": discard_now,
-                    "origin": self._lag_diag_origin,
-                })
-            elif self._lag_diag_until_ts > 0.0:
-                # Window just closed — emit terminator and disarm.
-                self._emit("mic_lag_diag_finished", {"origin": self._lag_diag_origin})
-                self._lag_diag_until_ts = 0.0
-                self._lag_diag_origin = ""
+                # Phase 11 diagnostic: RMS envelope log.
+                # Emit per-chunk RMS during the lag-diag window so we can plot
+                # the audio envelope and correlate against tts_finished /
+                # mute_unmute timestamps. Cheap — ~50 events/s for 1-2s.
+                if self._lag_diag_until_ts > 0.0 and now_perf < self._lag_diag_until_ts:
+                    muted_now = bool(
+                        self._voice_loop is not None
+                        and getattr(self._voice_loop, "muted_by_tts", False)
+                    )
+                    discard_now = self._discard_until_ts > 0.0 and now_perf < self._discard_until_ts
+                    self._emit("mic_lag_diag_chunk", {
+                        "t_offset_ms": int((now_perf - self._lag_diag_started_t) * 1000),
+                        "rms": audioop.rms(chunk, 2),
+                        "muted": muted_now,
+                        "discarded": discard_now,
+                        "origin": self._lag_diag_origin,
+                    })
+                elif self._lag_diag_until_ts > 0.0:
+                    # Window just closed — emit terminator and disarm.
+                    self._emit("mic_lag_diag_finished", {"origin": self._lag_diag_origin})
+                    self._lag_diag_until_ts = 0.0
+                    self._lag_diag_origin = ""
 
-            # B-1 mute gate: drain-and-discard while voice_loop is muted
-            # by TTS. The socket still drains, audio_level still emits;
-            # only the queue write is skipped. Without the drain the
-            # W5500 SPI send buffer (~64 KB) overflows in ~1 s and the
-            # ESP firmware closes the connection.
-            if self._voice_loop is not None and getattr(self._voice_loop, "muted_by_tts", False):
-                continue
+                # B-1 mute gate: drain-and-discard while voice_loop is muted
+                # by TTS. The socket still drains (socket reader thread handles
+                # that now), audio_level still emits; only the queue write is
+                # skipped.
+                if self._voice_loop is not None and getattr(self._voice_loop, "muted_by_tts", False):
+                    continue
 
-            # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION): post-flush discard
-            # window. After flush_queue(window_ms), drain_loop keeps reading
-            # socket bytes (kernel TCP buffer keeps draining, W5500 SPI safe)
-            # but skips the queue put so the consumer never sees stale audio.
-            # Same drain-but-don't-queue semantics as the mute gate above.
-            if self._discard_until_ts > 0.0 and now_perf < self._discard_until_ts:
-                continue
+                # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION): post-flush discard
+                # window. After flush_queue(window_ms), drain_loop keeps reading
+                # from the thread queue (socket is already draining) but skips
+                # the consumer queue put so the consumer never sees stale audio.
+                if self._discard_until_ts > 0.0 and now_perf < self._discard_until_ts:
+                    continue
 
-            self._put_or_drop(chunk)
+                self._put_or_drop(chunk)
+        finally:
+            _stop_ev.set()
+            _reader.join(timeout=2.0)
 
     # ── Internal: main loop ────────────────────────────────────────────
 
