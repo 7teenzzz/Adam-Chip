@@ -278,11 +278,13 @@ Plans:
 
 **Plans:** 4 plans
 
+**Completed:** 2026-05-17 (13 фаз спроектированы, 32 REQUIREMENTS-IDs, dependency graph, 4 артефакта)
+
 Plans:
-- [ ] 09-01-PLAN.md — CANDIDATES.md: реестр ~13 кандидатов из Ф8 §4.1 + Backlog + активных веток
-- [ ] 09-02-PLAN.md — 09-PRIORITIZATION.md: матрица 4 критериев (Impact/Effort/Strategic/Exhibition) + P0–P3 группы
-- [ ] 09-03-PLAN.md — 09-PHASE-DRAFTS.md: полные ROADMAP-style drafts для P0 (10A/10B/11) + компактные для P1–P3
-- [ ] 09-04-PLAN.md — 09-SUMMARY.md: финальные рекомендации для Phase 10 (что копировать + открытые вопросы + milestone-предложение)
+- [x] 09-01-PLAN.md — CANDIDATES.md: реестр ~13 кандидатов из Ф8 §4.1 + Backlog + активных веток
+- [x] 09-02-PLAN.md — 09-PRIORITIZATION.md: матрица 4 критериев (Impact/Effort/Strategic/Exhibition) + P0–P3 группы
+- [x] 09-03-PLAN.md — 09-PHASE-DRAFTS.md: полные ROADMAP-style drafts для P0 (10A/10B/11) + компактные для P1–P3
+- [x] 09-04-PLAN.md — 09-SUMMARY.md: финальные рекомендации для Phase 10 (что копировать + открытые вопросы + milestone-предложение)
 
 ---
 
@@ -308,6 +310,280 @@ Plans:
 - `.planning/STATE.md` обновлён: новая активная фаза
 
 **Mode:** standard
+
+---
+
+## Phase 10A: Diploma Convergence Pass
+
+**Branch:** `diploma-chapter3` (existing — текущая ветка, продолжение)
+
+**Goal:** Применить все оставшиеся текстовые правки диплома из Phase 8 (4 A-path + 7 C-path + 10 оставшихся EMERGENT), финализировать диплом и подготовить ветку `diploma-chapter3` к мёржу в `main`.
+
+**Requires:**
+- Phase 8 завершена ✓ (08-SUMMARY.md создан, топ-3 EMERGENT применены)
+- Phase 9 завершена ✓ (09-SUMMARY.md создан)
+
+**Delivers:**
+- Правка ch01.1.1.4 — мета-параграф «AIIM как философский мост Брайдотти↔Латур↔код» (EMERGENT #13, F-04)
+- Правка ch03.3.2.3 — раздел «Динамическая модуляция AIIM» с TuningStore hot-reload (EMERGENT #2, F-05) + centralность AIIM как god-node (EMERGENT #1) + future-work «Профили активации AIIM» (EMERGENT #4)
+- Правка ch03.3.3.4 — полная state-diagram Voice Loop FSM с Config-параметрами (EMERGENT #9, F-06, Mermaid)
+- Правка ch03.3.2.6 — таблица 5 mood-состояний + Mood enum (EMERGENT #3, #8, path A Α-24)
+- Правка ch03.3.4 — формула salience scoring + сигналы входа (EMERGENT #7, path B Τ-36 diploma side)
+- Правка ch03.3.2.2 — раздел SceneWorker background pattern + pull-mode VLM (EMERGENT #6, path A Χ-46)
+- Ремарки и footnotes: C-paths Φ-13, Τ-28, Α-25 + EMERGENT #10/#12/#5 (7 C-path упрощений)
+- Готовность к мёржу: `diploma-chapter3` → `main`
+
+**Requirements:** DIPL-09, DIPL-10, DIPL-11, DIPL-12, DIPL-13, DIPL-14, DIPL-15
+
+**Mode:** standard | **Priority:** P0
+
+---
+
+## Phase 10B: Config-First Refactor
+
+**Branch:** `config-refactor` (new — создаётся при старте фазы)
+
+**Goal:** Вынести все хардкодированные числовые параметры в `Config.json` / `Config.schema.json` и устранить BUG F-07 (рассинхронизацию `history_turns=2` vs `limit=8`), закрыв Pattern 4 из Phase 8.
+
+**Requires:**
+- Phase 8 завершена ✓ (F-07 BUG, Τ-30/31/36 задокументированы)
+- Не блокируется другими фазами (независима)
+
+**Delivers:**
+- Новый Config-ключ `agent.session_turn_limit` (limit=8 из `prompt.py` → Config) — устраняет Τ-30
+- Новый Config-ключ `memory.episodic_decay_days` (14d из `episodic.py` → Config) — устраняет Τ-31
+- Новый Config-ключ `memory.salience_weights` (dict из `episodic.py` → Config) — устраняет Τ-36
+- Два явных ключа вместо рассинхрона: `agent.prompt_history_limit` (=8) и `agent.context_history_turns` (=2) — устраняет F-07
+- Обновлённые `System/Config.json` и `System/Config.schema.json` с descriptions
+- Рефакторинг `prompt.py`, `episodic.py`, `Engineering/consolidator.py` (чтение из конфига)
+- Unit-тесты для каждого нового Config-ключа (с env-override `ADAM_CONFIG_OVERRIDE`)
+- Разблокирует Phase 16 (UI Rebuild) и Phase 18 (Structural Refactor)
+
+**Requirements:** CFG-01, CFG-02, CFG-03, CFG-04
+
+**Mode:** standard | **Priority:** P0
+
+---
+
+## Phase 11: AIIM Dynamic — Рефлексивный уровень идентичности
+
+**Branch:** `dynamic-aiim` (existing)
+
+**Goal:** После каждой сессии консолидатор анализирует паттерны взаимодействия и автоматически корректирует параметры `Tuning.json` (drive, verbosity, доминирующие аспекты) в пределах заданных magnitude limits, реализуя рефлексивный уровень AIIM.
+
+**Requires:**
+- Phase 13 (Memory Consolidation) — желательно; integration hook требует работающего consolidator (можно вести параллельно)
+- Phase 10A (Diploma Convergence Pass) — согласование diploma-side описания AIIM Dynamic (DIPL-10)
+
+**Delivers:**
+- Новый модуль `System/adam/aiim_reflection.py` с функцией `adjust_tuning(session_summary, current_tuning) -> dict`
+- Whitelist параметров для автокоррекции в `Config.json::aiim.adjustable_params` (drive, verbosity, aspect_weights)
+- Magnitude limits per parameter в `Config.json::aiim.magnitude_limits` — защита от дрейфа
+- Интеграция в consolidator hook: после каждой консолидации вызывается `aiim_reflection.adjust_tuning`
+- API endpoint `GET /api/agent/aiim/last-adjustment` — последнее корректирующее воздействие с delta и timestamp
+- Регрессионный тест: суммарный дрейф параметров за N сессий ≤ magnitude_limit
+- Разблокирует Phase 12 (RDI metric source — рефлексивный уровень даёт данные для метрики)
+
+**Requirements:** AIIM-01, AIIM-02, AIIM-03, AIIM-04
+
+**Mode:** standard | **Priority:** P0
+
+---
+
+## Phase 13: Memory Consolidation
+
+**Branch:** `memory-consolidation` (new — отдельно от `Memory-upgrade`, чтобы изолировать риски)
+
+**Goal:** Интегрировать `Engineering/consolidator.py` в Orchestrator runtime с daily cron или post-session trigger, создав работающий механизм консолидации эпизодической памяти.
+
+**Requires:**
+- Phase 6A завершена ✓ (consolidator.py создан с llama.cpp API + rule-based fallback)
+- Независима от других активных фаз
+
+**Delivers:**
+- Интеграция `consolidator.py` в Orchestrator runtime (daily cron scheduler или post-session event hook)
+- Daily cron scheduler или Orchestrator event hook для запуска консолидации после сессии
+- Корректный flow флага `Episode.consolidated: bool` — от `episodic.py` до diary
+- Тесты интеграции: консолидация запускается корректно, флаги проставляются
+- Разблокирует Phase 12 (LMRR metric source), Phase 15 (prereq), Phase 19 (context history)
+
+**Requirements:** MEM-01, MEM-02, MEM-03
+
+**Mode:** standard | **Priority:** P1 | **Net-unlock: 3 фазы**
+
+---
+
+## Phase 21: Identity Calibration Финализация
+
+**Branch:** `Identity-tuning` (existing)
+
+**Goal:** Завершить разработку в `Identity-tuning` (Φ-13 path C, Α-24 path A, калибровка 5 mood-состояний) и выполнить merge в `main`.
+
+**Requires:**
+- Phase 10A (Diploma Convergence Pass) — согласование diploma-side правок Α-24 и Φ-13
+
+**Delivers:**
+- Финализация кода в ветке `Identity-tuning` (Φ-13 path C параграф + Α-24 mood калибровка)
+- Code review пройден (`/gsd-code-review`)
+- Merge `Identity-tuning` → `main` выполнен
+- Регрессионный тест диалогового pipeline после мёржа (тон и поведение агента)
+- Согласованность Φ-13 path C параграфа (diploma) с Identity.md изменениями
+
+**Requirements:** ID-01, ID-02, ID-03
+
+**Mode:** standard | **Priority:** P1 | **Effort:** L (code review + merge)
+
+---
+
+## Phase 14: Mood LLM-driven
+
+**Branch:** `mood-llm` (new — создаётся при старте фазы)
+
+**Goal:** Доработать `action.py` для парсинга явных mood-маркеров из LLM-ответа вместо текущего keyword matching по `reply_text`.
+
+**Requires:**
+- Независима (улучшает NVR метрику Phase 12)
+
+**Delivers:**
+- Доработка `action.py`: парсинг явных mood-маркеров из структуры LLM-ответа (не keyword matching)
+- Обновлённый системный промпт: шаблон для генерации mood-маркеров в формате, парсируемом action.py
+- A/B тест: сравнение качества mood detection (keyword vs LLM-маркеры)
+- Тесты для нового парсера
+
+**Requirements:** MOOD-01, MOOD-02
+
+**Mode:** standard | **Priority:** P2 | **Риск:** изменение промпта влияет на качество ответов — A/B тест обязателен
+
+---
+
+## Phase 15: Memory Wave 2 (Neural Search)
+
+**Branch:** `Memory-upgrade` (existing, Wave 2)
+
+**Goal:** Заменить TF-IDF векторизацию в `FaissEpisodeIndex` на llama.cpp `/embeddings` endpoint для семантического поиска по эпизодической памяти.
+
+**Requires:**
+- Phase 13 (Memory Consolidation) завершена — prereq
+- Свободная VRAM ≥ 4 GB при работающем Gemma 4 E4B
+
+**Delivers:**
+- Замена TF-IDF → llama.cpp `/embeddings` в `FaissEpisodeIndex` (интерфейс `.build()/.search()/.save()/.load()` не меняется)
+- VRAM check при запуске Wave 2 (≥4 GB свободной VRAM при работающем LLM)
+- Тесты семантического поиска (релевантность vs keyword matching)
+- Обновлённый `memory_search.py` с embeddings backend
+
+**Requirements:** MEMN-01, MEMN-02
+
+**Mode:** standard | **Priority:** P2
+
+---
+
+## Phase 17: Remote Access
+
+**Branch:** `remote-access` (new — создаётся при старте фазы)
+
+**Goal:** Расширить `scripts/adam_pull_logs.py` и API до полноценного удалённого мониторинга pipeline-этапов с фильтрацией по turn_id / stage / временному диапазону.
+
+**Requires:**
+- Независима (частично реализована: `adam_pull_logs.py` + `/api/agent/turns` + `/api/agent/events`)
+
+**Delivers:**
+- Расширение `adam_pull_logs.py`: фильтрация по stage, временному диапазону, turn_id
+- Расширение `/api/agent/events` API: дополнительные фильтры
+- Опциональная базовая auth (token) для удалённого API при exposition за пределами локальной сети
+- Документация новых параметров CLI и API
+
+**Requirements:** REM-01, REM-02
+
+**Mode:** standard | **Priority:** P2 | **Effort:** M (без архитектурных изменений)
+
+---
+
+## Phase 20: VLM Upgrade Финализация
+
+**Branch:** `VLM-upgrade` (existing)
+
+**Goal:** Завершить разработку в ветке `VLM-upgrade` и выполнить merge в `main`.
+
+**Requires:**
+- Независима (Phase 8 не выявила блокеров)
+
+**Delivers:**
+- Финализация кода в ветке `VLM-upgrade`
+- Code review пройден (`/gsd-code-review`)
+- Merge `VLM-upgrade` → `main` выполнен
+- Регрессионный тест: scene_worker_enabled, scene_interval_sec, scene_stale_after_sec корректно читаются из Config.json
+- После мёржа Phase 15 может использовать VLM embeddings
+
+**Requirements:** VLM-01, VLM-02
+
+**Mode:** standard | **Priority:** P2 | **Effort:** L (code review + merge)
+
+---
+
+## Phase 19: Proactive Speech
+
+**Branch:** `proactive-speech` (new — создаётся при старте фазы)
+
+**Goal:** Добавить idle-scheduler — фоновый процесс, который при наличии посетителей и тишине дольше N секунд вызывает LLM с промптом-затравкой и воспроизводит ответ без wake word.
+
+**Requires:**
+- Phase 13 (Memory Consolidation) завершена — контекст истории сессий
+
+**Delivers:**
+- idle-scheduler в Orchestrator: при тишине > N секунд и наличии посетителей (VLM engagement) вызывать LLM
+- Промпт-затравка для спонтанных реплик (без wake word) — отдельный системный промпт в Config или Tuning.json
+- Rate limiter (не чаще M минут) + соблюдение half_duplex_mute инварианта (idle не перекрывает активный диалог)
+- Config-параметры: `proactive.idle_threshold_sec`, `proactive.rate_limit_min`, `proactive.enabled`
+- Связана с Phase 12 SIAR метрика (Spontaneous Initiative Activity Ratio)
+
+**Requirements:** PROAC-01, PROAC-02, PROAC-03
+
+**Mode:** standard | **Priority:** P2 | **Exhibition:** H — высокая ценность для выставки
+
+---
+
+## Phase 16: UI Rebuild
+
+**Branch:** `ui-rebuild` (new — создаётся при старте фазы)
+
+**Goal:** Пересобрать операторский веб-интерфейс (`:8080`) с перегруппировкой параметров по доменным блокам (ESP / Agent / Identity), визуализацией уровня микрофона, настройкой silence timeout и управлением громкостью.
+
+**Requires:**
+- Phase 10B (Config-First Refactor) завершена — параметры должны быть в Config.json до UI-привязки
+
+**Delivers:**
+- Перегруппировка операторского UI по доменным блокам: ESP (камера/mic/PCA9685/PCM5102A), Agent (ASR/VLM/LLM/TTS), Adam Identity
+- Real-time визуализация уровня микрофона (mic эквалайзер / VU-meter)
+- Настройка silence timeout (command_endpointing_ms, reply_window_sec) через UI без рестарта
+- Управление громкостью TTS (output device volume) через UI
+- **Open question:** поднять до P2 если дата выставки близко (см. [09-PRIORITIZATION.md R-03](phases/09-next-phases-planning/09-PRIORITIZATION.md))
+
+**Requirements:** UI-01, UI-02, UI-03, UI-04
+
+**Mode:** standard | **Priority:** P3
+
+---
+
+## Phase 18: Structural Refactor
+
+**Branch:** `refactor` (new — создаётся при старте фазы, требует feature-freeze)
+
+**Goal:** Провести структурный рефакторинг кодовой базы: пересмотр директорий `System/`, `Subsystem/`, `Engineering/`, единый реестр параметров и глубокий Config-аудит поверх Phase 10B.
+
+**Requires:**
+- Phase 10B (Config-First Refactor) завершена и смёржена
+- Feature-freeze других веток на время рефакторинга
+
+**Delivers:**
+- Единый реестр всех параметров системы (глубокий аудит поверх Phase 10B — второй слой параметров)
+- Пересмотр директорной структуры `System/`, `Subsystem/`, `Engineering/` — логическая группировка по доменам
+- Все тесты зелёные после рефакторинга
+- systemd units проверены и обновлены под новую структуру (если нужно)
+
+**Requirements:** REF-01, REF-02
+
+**Mode:** standard | **Priority:** P3 | **Риск:** H — масштабный рефакторинг; необходим feature-freeze
 
 ---
 

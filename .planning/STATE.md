@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-16T19:46:26.818Z"
+last_updated: "2026-05-17T00:00:00.000Z"
 progress:
   total_phases: 11
   completed_phases: 0
@@ -19,14 +19,22 @@ progress:
 
 ## Active Phase
 
-**Phase 9: Next-Phases Planning** — CONTEXT gathered, ready for plan
-Context: [phases/09-next-phases-planning/09-CONTEXT.md](phases/09-next-phases-planning/09-CONTEXT.md)
+**Phase 10: Roadmap Global Update** — plan ready, executing
+Context: [phases/10-roadmap-global-update/10-CONTEXT.md](phases/10-roadmap-global-update/10-CONTEXT.md)
 Branch: `diploma-chapter3`
-Next step: `/gsd-plan-phase 9`
+Next step: execute 10-01-PLAN.md
 
-**Recently completed:** Phase 7 (Diploma Analysis); Phase 8 (Theory-Code Verification); top-3 EMERGENT applied to diploma
+**Recently completed:** Phase 9 (Next-Phases Planning); Phase 8 (Theory-Code Verification); Phase 7 (Diploma Analysis)
 
-**Recently completed:** Phase 7 (Diploma Analysis); Phase 8 (Theory-Code Verification)
+### Phase 9 ✓ COMPLETE (2026-05-17) — Next-Phases Planning
+
+Что сделано:
+
+- Wave 1: CANDIDATES.md — реестр 13 кандидатов из 3 источников (Ф8 + Backlog + активные ветки)
+- Wave 2: 09-PRIORITIZATION.md — матрица 4 критериев (Impact/Effort/Strategic/Exhibition) + P0/P1/P2/P3 + dependency graph
+- Wave 3: 09-PHASE-DRAFTS.md — полные drafts P0 (Phase 10A/10B/11) + compact drafts P1-P3 + 32 REQUIREMENTS-IDs
+- Wave 4: 09-SUMMARY.md — финальные рекомендации для Phase 10 (инструкции по обновлению ROADMAP + REQUIREMENTS + Milestones M1-M4)
+- Результат: 12 фаз спроектированы (10A, 10B, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21) с dependency graph и sequential/parallel clusters
 
 ### Phase 8 ✓ COMPLETE (2026-05-17) — Theory-Code Verification
 
