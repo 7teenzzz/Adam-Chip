@@ -891,7 +891,8 @@
           "properties": {
             "log_level": { "type": "string", "enum": ["debug", "info", "warning", "error"], "default": "info", "description": "Effective log level for adam.* loggers." },
             "metrics_enabled": { "type": "boolean", "default": true, "description": "Whether per-turn timing metrics are recorded." },
-            "trace_prompts": { "type": "boolean", "default": false, "description": "When true, captures full system+user prompts into the ring buffer (visible under /metrics in WebUI). Heavy — only enable for debugging." }
+            "trace_prompts": { "type": "boolean", "default": false, "description": "When true, captures full system+user prompts into the ring buffer (visible under /metrics in WebUI). Heavy — only enable for debugging." },
+            "trace_post_tts_lag": { "type": "boolean", "default": false, "description": "When true, MicReader emits a mic_lag_diag_chunk event for every drained chunk during 4 s after each post-TTS mic_unmute. Use with scripts/diag_lag_source.py to plot the RMS envelope and identify whether the ~2.3 s tail-of-Adam echo originates in ALSA HDMI buffer drain, room acoustic reverb, or the ESP32 firmware's internal audio FIFO. Heavy — ~200 events per turn." }
           }
         }
       }

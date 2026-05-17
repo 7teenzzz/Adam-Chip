@@ -381,7 +381,12 @@ class VoiceLoopController:
         # drains but does not queue. Covers the ESP32 stream-lag of ~2.3s so
         # TTS-tail audio captured by INMP441 during playback does not leak into
         # REPLY ASR. 2500ms = observed worst-case lag + safety margin.
-        self._post_tts_discard_window_ms: int = int(asr_cfg.get("post_tts_discard_window_ms", 2500))
+        self._post_tts_discard_window_ms: int = int(asr_cfg.get("post_tts_discard_window_ms", 500))
+        # Phase 11 diagnostic flag — when true, MicReader logs 4 s of RMS
+        # envelope after each mute_unmute. Default off (diagnostic only).
+        self._lag_diag_enabled: bool = bool(
+            settings.section("tuning").get("diagnostics", {}).get("trace_post_tts_lag", False)
+        )
         # Phase 9 (REQ-VAD-DEBOUNCE): minimum consecutive silence frames before
         # emitting endpointing_started. WebRTC VAD flickers voiced↔silenced at
         # 20 ms granularity, producing 20-40 endpointing_started emissions per
@@ -1012,6 +1017,13 @@ class VoiceLoopController:
                                 "frames": _dropped, "ms": _dropped * self.frame_ms,
                                 "trigger": "post_transcribe", "discard_window_ms": _window_ms,
                             })
+                            # Phase 11 diagnostic: capture 4s of post-mute RMS
+                            # envelope so we can pinpoint the ~2.3s lag source
+                            # (ALSA HDMI drain vs ESP32 firmware FIFO vs room
+                            # reverb). Per-chunk events go to events.jsonl;
+                            # analyse with scripts/diag_lag_source.py.
+                            if self._lag_diag_enabled:
+                                self.mic_reader.begin_lag_diag(4000.0, "post_transcribe")
                         if spoke:
                             self._set_voice_state("reply", "agent_spoke")
                             self._reply_start = time.perf_counter()

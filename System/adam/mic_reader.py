@@ -154,6 +154,15 @@ class MicReader:
         # NEVER called on wake_word_detected — that would eat the user's
         # request (Phase 10 v1 regression in Test 5: 33% success rate).
         self._discard_until_ts: float = 0.0
+        # Phase 11 diagnostic (lag-source detection):
+        # When set to a positive perf_counter() value, drain_loop logs RMS of
+        # every chunk drained (or queued) until time exceeds this value. Used
+        # to capture the audio envelope right after mute_unmute so we can
+        # distinguish "TTS-tail leaking through" from "ALSA buffer drain" from
+        # "ESP32 firmware buffer". Set via begin_lag_diag().
+        self._lag_diag_until_ts: float = 0.0
+        self._lag_diag_started_t: float = 0.0
+        self._lag_diag_origin: str = ""
 
     # ── External wiring ────────────────────────────────────────────────
 
@@ -270,6 +279,30 @@ class MicReader:
             return await asyncio.wait_for(self._queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
+
+    def begin_lag_diag(self, duration_ms: float, origin: str) -> None:
+        """Start RMS-envelope logging on _drain_loop for `duration_ms`.
+
+        Emits one ``mic_lag_diag_chunk`` event per drained chunk:
+          {"t_offset_ms": <ms since start>, "rms": <int>, "muted": bool,
+           "discarded": bool, "origin": str}
+
+        Used to pinpoint the ~2.3s post-TTS lag source — by overlaying the
+        envelope against tts_finished / mute_unmute timestamps we can tell
+        whether echo is ALSA buffer drain, room reverb, or ESP32 firmware FIFO.
+
+        Light overhead — ~one event per 20 ms frame.
+        """
+        if duration_ms <= 0:
+            return
+        now = time.perf_counter()
+        self._lag_diag_started_t = now
+        self._lag_diag_until_ts = now + (duration_ms / 1000.0)
+        self._lag_diag_origin = origin
+        self._emit("mic_lag_diag_started", {
+            "duration_ms": duration_ms,
+            "origin": origin,
+        })
 
     def flush_queue(self, discard_window_ms: float = 200.0) -> int:
         """Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION): drain stale audio.
@@ -596,6 +629,31 @@ class MicReader:
                 self._emit_audio_level(chunk)
                 self._level_tick = 0
 
+            now_perf = time.perf_counter()
+
+            # Phase 11 diagnostic: RMS envelope log.
+            # Emit per-chunk RMS during the lag-diag window so we can plot
+            # the audio envelope and correlate against tts_finished /
+            # mute_unmute timestamps. Cheap — ~50 events/s for 1-2s.
+            if self._lag_diag_until_ts > 0.0 and now_perf < self._lag_diag_until_ts:
+                muted_now = bool(
+                    self._voice_loop is not None
+                    and getattr(self._voice_loop, "muted_by_tts", False)
+                )
+                discard_now = self._discard_until_ts > 0.0 and now_perf < self._discard_until_ts
+                self._emit("mic_lag_diag_chunk", {
+                    "t_offset_ms": int((now_perf - self._lag_diag_started_t) * 1000),
+                    "rms": audioop.rms(chunk, 2),
+                    "muted": muted_now,
+                    "discarded": discard_now,
+                    "origin": self._lag_diag_origin,
+                })
+            elif self._lag_diag_until_ts > 0.0:
+                # Window just closed — emit terminator and disarm.
+                self._emit("mic_lag_diag_finished", {"origin": self._lag_diag_origin})
+                self._lag_diag_until_ts = 0.0
+                self._lag_diag_origin = ""
+
             # B-1 mute gate: drain-and-discard while voice_loop is muted
             # by TTS. The socket still drains, audio_level still emits;
             # only the queue write is skipped. Without the drain the
@@ -609,7 +667,7 @@ class MicReader:
             # socket bytes (kernel TCP buffer keeps draining, W5500 SPI safe)
             # but skips the queue put so the consumer never sees stale audio.
             # Same drain-but-don't-queue semantics as the mute gate above.
-            if self._discard_until_ts > 0.0 and time.perf_counter() < self._discard_until_ts:
+            if self._discard_until_ts > 0.0 and now_perf < self._discard_until_ts:
                 continue
 
             self._put_or_drop(chunk)
