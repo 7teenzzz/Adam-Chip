@@ -372,6 +372,9 @@ class VoiceLoopController:
         # RMS gate against constant background noise — 0 means "trust WebRTC VAD alone".
         self._silence_rms_threshold = int(asr_cfg.get("silence_rms_threshold", 0))
         self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
+        # Reference logic: REPLY phase uses a shorter max (10s vs 15s) — REPLY is a follow-up
+        # turn without wake word, the user's response is expected to be more concise.
+        self.reply_max_segment_ms    = int(audio_config.get("reply_max_segment_ms", 10000))
         self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
         # Phase 8 (REQ-REPLY-MATCHES-LISTENING): single silence timer for reply mode.
         # Replaces the legacy reply_absolute_deadline_sec. Runaway-dictation is
@@ -448,8 +451,9 @@ class VoiceLoopController:
         self._STANDBY_GUARD_SEC: float = 0.3    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
         self._REPLY_GUARD_SEC: float = 0.6      # post-TTS guard for reply state — suppress echo of own TTS picked up by ESP32 mic
         self._wake_detected_at: float = 0.0
-        # Fallback default 6.0 is only for missing-config startup; Config.json
-        # supplies the authoritative value (3 per reference logic).
+        # LISTENING-phase silence timer: how long the voice loop waits for the
+        # user to start speaking after the wake word fires. Reference logic = 6s.
+        # Fallback default mirrors Config.json so missing-config startup behaves the same.
         self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
         self.esp_mic_fail_threshold: int = int(audio_config.get("esp_mic_fail_threshold", 3))
         self.esp_mic_retry_interval_sec: float = float(audio_config.get("esp_mic_retry_interval_sec", 30.0))
@@ -502,6 +506,7 @@ class VoiceLoopController:
         self.vad_threshold = int(audio_cfg.get("vad_threshold", self.vad_threshold))
         self.min_speech_ms = int(audio_cfg.get("min_speech_ms", self.min_speech_ms))
         self.max_segment_ms = int(audio_cfg.get("max_command_segment_ms", self.max_segment_ms))
+        self.reply_max_segment_ms = int(audio_cfg.get("reply_max_segment_ms", self.reply_max_segment_ms))
         new_sr = int(audio_cfg.get("sample_rate", self.sample_rate))
         if new_sr != self.sample_rate:
             self.sample_rate = new_sr
@@ -1098,9 +1103,14 @@ class VoiceLoopController:
                         _voiced_run_frames = 0
                 speech_frames.append(chunk)
 
+                # REPLY uses a tighter max (10s) than LISTENING (15s) per reference logic.
+                _active_max_segment_ms = (
+                    self.reply_max_segment_ms if self._voice_state == "reply"
+                    else self.max_segment_ms
+                )
                 if speech_frames and (
                     silence_ms >= self._command_endpointing_ms
-                    or speech_ms >= self.max_segment_ms
+                    or speech_ms >= _active_max_segment_ms
                 ):
                     pcm = b"".join(speech_frames)
                     enough_speech = speech_ms >= self.min_speech_ms

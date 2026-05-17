@@ -255,8 +255,13 @@
             },
             "max_command_segment_ms": {
               "type": "integer",
-              "description": "Hard cap on command recording length in milliseconds. Prevents runaway recording from stuck VAD.",
+              "description": "Hard cap on LISTENING-phase command recording length in milliseconds. Prevents runaway recording from stuck VAD. REPLY phase uses reply_max_segment_ms instead.",
               "default": 15000
+            },
+            "reply_max_segment_ms": {
+              "type": "integer",
+              "description": "Hard cap on REPLY-phase command recording length in milliseconds. Reference logic specifies a shorter REPLY window than LISTENING (10s vs 15s) — REPLY is a follow-up turn without wake word, so the user's response is expected to be more concise.",
+              "default": 10000
             },
             "normalize_factor": {
               "type": "integer",
@@ -428,8 +433,8 @@
               "type": "number",
               "minimum": 1.0,
               "maximum": 10.0,
-              "description": "Phase 8 (REQ-REPLY-MATCHES-LISTENING): single silence timer for reply mode. After voice_state transitions to 'reply' and the post-TTS guard (_REPLY_GUARD_SEC=0.6) elapses, if no qualifying speech has accumulated (speech_ms == 0) for this many seconds, voice loop returns to standby. Replaces the legacy two-timer pair (reply_window_sec + reply_absolute_deadline_sec — the latter is removed). Runaway-dictation protection in reply is provided by the shared media.audio.max_segment_ms (same path as listening), not by a separate hard cutoff.",
-              "default": 4.0
+              "description": "Single silence timer for REPLY mode. After voice_state transitions to 'reply' and the post-TTS guard (_REPLY_GUARD_SEC=0.6) elapses, if no qualifying speech has accumulated (speech_ms == 0) for this many seconds, voice loop returns to STANDBY. Runaway-dictation protection in REPLY is provided by media.audio.reply_max_segment_ms (10s by reference logic), not by a separate hard cutoff.",
+              "default": 5.0
             },
             "endpointing_debounce_frames": {
               "type": "integer",
@@ -723,8 +728,8 @@
         },
         "wake_silence_timeout_sec": {
           "type": "integer",
-          "description": "Seconds of silence after wake word activation before the voice loop resets to listening state without completing a turn.",
-          "default": 3
+          "description": "Seconds of silence in LISTENING phase (after wake word, before any speech is detected) before voice_loop returns to STANDBY. Reference logic specifies 6s. NOTE: this field will be relocated to services.asr.listening_silence_timeout_sec in a follow-up — the timer is semantically part of the ASR pipeline, not the wake-word engine.",
+          "default": 6
         }
       }
     },

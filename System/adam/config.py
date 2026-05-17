@@ -73,6 +73,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             },
             "webrtc_vad_aggressiveness": 2,
             "max_command_segment_ms": 15000,
+            "reply_max_segment_ms": 10000,
             "normalize_factor": 8000,
         },
         "scene_worker_enabled": True,
@@ -105,7 +106,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "language": "ru",
             "command_endpointing_ms": 1500,
             "reply_window_sec": 3.75,
-            "reply_silence_timeout_sec": 4.0,
+            "reply_silence_timeout_sec": 5.0,
             "endpointing_debounce_frames": 5,
             "endpointing_voiced_debounce_frames": 3,
             "sample_rate": 16000,
@@ -157,7 +158,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "threshold": 0.20,
         "debounce_hits": 2,
         "vad_threshold": 0,
-        "wake_silence_timeout_sec": 3,
+        "wake_silence_timeout_sec": 6,
     },
     "tuning": {
         "memory": {
