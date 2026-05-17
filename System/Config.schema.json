@@ -421,6 +421,13 @@
               "description": "Soft reply window in seconds (used by dialog-level no-reply heuristic in _set_voice_state('standby','no_reply')). Distinct from reply_silence_timeout_sec which is the in-loop VAD silence timer.",
               "default": 3.75
             },
+            "post_tts_discard_window_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "description": "Milliseconds after TTS playback finishes during which MicReader continues to drain the ESP32 socket but does NOT queue chunks to the consumer. This flushes the ESP32's internal stream buffer of self-echo audio (Adam's own voice picked up by INMP441 across the room) before the REPLY window starts accepting user speech. Reference observation: ESP32 stream lag is ~2300ms — chunks read at t=T contain audio captured at t=T-2.3s. Without this window, ~2 seconds of TTS-tail audio enters the queue right after mic_unmuted and gets transcribed as user speech in REPLY. Default 2500ms covers the worst observed lag with a small safety margin. Set to 0 to disable (only safe in setups with negligible mic→speaker acoustic coupling).",
+              "default": 2500
+            },
             "reply_silence_timeout_sec": {
               "type": "number",
               "minimum": 1.0,

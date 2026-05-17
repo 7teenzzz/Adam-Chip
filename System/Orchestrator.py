@@ -377,6 +377,11 @@ class VoiceLoopController:
         # Replaces the legacy reply_absolute_deadline_sec. Runaway-dictation is
         # guarded by the shared max_segment_ms — same as listening.
         self._reply_silence_timeout_sec: float = float(asr_cfg.get("reply_silence_timeout_sec", 4.0))
+        # Phase 11 hotfix: window (ms) after mic_unmuted during which MicReader
+        # drains but does not queue. Covers the ESP32 stream-lag of ~2.3s so
+        # TTS-tail audio captured by INMP441 during playback does not leak into
+        # REPLY ASR. 2500ms = observed worst-case lag + safety margin.
+        self._post_tts_discard_window_ms: int = int(asr_cfg.get("post_tts_discard_window_ms", 2500))
         # Phase 9 (REQ-VAD-DEBOUNCE): minimum consecutive silence frames before
         # emitting endpointing_started. WebRTC VAD flickers voiced↔silenced at
         # 20 ms granularity, producing 20-40 endpointing_started emissions per
@@ -814,21 +819,22 @@ class VoiceLoopController:
                     continue
 
                 # ── REPLY: single silence timer → standby ────────────────────────
-                # Phase 8 (REQ-REPLY-MATCHES-LISTENING): reply mode is identical
-                # to listening, plus one timer: if no qualifying speech accumulates
-                # within reply_silence_timeout_sec after _REPLY_GUARD_SEC elapses,
-                # return to standby. Runaway dictation (once user starts talking)
-                # is bounded by the shared max_segment_ms in the submission block
-                # below — same as listening, no reply-specific hard cutoff.
+                # Phase 11: reply silence timer is rebased to start AFTER the
+                # post_tts_discard_window. While discard is active MicReader does
+                # not queue chunks, so the user cannot speak anyway — counting
+                # those seconds against reply_silence_timeout_sec would shorten
+                # the real user-facing window. Guard kept as a small additional
+                # safety margin against any chunks that slip past discard.
                 if self._voice_state == "reply":
                     elapsed = time.perf_counter() - self._reply_start
-                    # Guard window after listening→reply: skip VAD for _REPLY_GUARD_SEC so the
-                    # tail of own TTS (heard by ESP32 mic across the room) does not feed the
-                    # endpointer. Chunk is still drained from the stream — buffer cannot grow.
-                    if elapsed < self._REPLY_GUARD_SEC:
+                    _discard_sec = self._post_tts_discard_window_ms / 1000.0
+                    guard_until = max(_discard_sec, self._REPLY_GUARD_SEC)
+                    if elapsed < guard_until:
                         self.vad_state = "reply_guard"
                         continue
-                    if speech_ms == 0 and elapsed >= self._reply_silence_timeout_sec:
+                    # Effective user-time = elapsed - discard window.
+                    elapsed_after_discard = elapsed - _discard_sec
+                    if speech_ms == 0 and elapsed_after_discard >= self._reply_silence_timeout_sec:
                         # Action policy: 'standby' returns mic to OWW; 'stop' halts the loop.
                         action = self._reply_window_expired_action
                         event_log.append("reply_window_expired", {
@@ -1000,16 +1006,28 @@ class VoiceLoopController:
                         # if the user did start. NOT called on wake — that would
                         # eat the user's request (Phase 10 v1 regression).
                         if self.mic_reader is not None:
-                            _dropped = self.mic_reader.flush_queue(200.0)
+                            _window_ms = self._post_tts_discard_window_ms
+                            _dropped = self.mic_reader.flush_queue(_window_ms)
                             event_log.append("mic_queue_flushed", {
                                 "frames": _dropped, "ms": _dropped * self.frame_ms,
-                                "trigger": "post_transcribe", "discard_window_ms": 200,
+                                "trigger": "post_transcribe", "discard_window_ms": _window_ms,
                             })
                         if spoke:
                             self._set_voice_state("reply", "agent_spoke")
                             self._reply_start = time.perf_counter()
+                            # UI countdown = TOTAL time until reply window expires
+                            # (= post_tts_discard + reply_silence). Backend rebases
+                            # the silence timer to start AFTER discard ends, but
+                            # from the user's POV the countdown should reflect
+                            # "how long until Adam gives up and returns to STANDBY".
+                            total_timeout = (
+                                self._post_tts_discard_window_ms / 1000.0
+                                + self._reply_silence_timeout_sec
+                            )
                             event_log.append("asr_reply_window_open", {
-                                "timeout_sec": self._reply_window_sec
+                                "timeout_sec": round(total_timeout, 2),
+                                "silence_timeout_sec": self._reply_silence_timeout_sec,
+                                "discard_window_sec": self._post_tts_discard_window_ms / 1000.0,
                             })
                         else:
                             self._set_voice_state("standby", "no_reply")
@@ -3154,6 +3172,12 @@ def _rebuild_clients(section_path: str) -> list[str]:
                 "listening_silence_timeout_sec",
                 ww_cfg_now.get("wake_silence_timeout_sec", 6.0),
             )
+        )
+        voice_loop._reply_silence_timeout_sec = float(
+            asr_cfg_new.get("reply_silence_timeout_sec", voice_loop._reply_silence_timeout_sec)
+        )
+        voice_loop._post_tts_discard_window_ms = int(
+            asr_cfg_new.get("post_tts_discard_window_ms", voice_loop._post_tts_discard_window_ms)
         )
         restarted.append("asr")
         # Phase 7: propagate ASR config into MicReader (open_timeout, probe,
