@@ -23,7 +23,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "Agent Adam Chip/About/Lore.md",
             "Agent Adam Chip/About/Abilities.md",
         ],
-        "history_turns": 2,
         "prompt_trace_max": 50,
     },
     "power": {

@@ -92,7 +92,7 @@ const SCHEMA = [
     source: "tuning", tuningSectionPath: "prompt", title: "Сборка промта",
     fields: [
       { key: "history_turns",   label: "Ходов истории",            type: "int",  min: 0, max: 50,
-        hint: "2–4 рекомендуется · меньше = быстрее · дублирует agent.history_turns в Config" },
+        hint: "2–4 рекомендуется · меньше = быстрее" },
       { key: "include_scene",   label: "Включить описание сцены",  type: "bool",
         hint: "добавляет VLM-описание в промт" },
       { key: "include_sensors", label: "Включить данные сенсоров", type: "bool" },

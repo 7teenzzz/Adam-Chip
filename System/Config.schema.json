@@ -41,11 +41,6 @@
             "Agent Adam Chip/About/Abilities.md"
           ]
         },
-        "history_turns": {
-          "type": "integer",
-          "description": "Number of dialogue turns kept in LLM context window. Higher = more conversational memory but longer prompt prefill (~9s per turn for Gemma 4 E4B due to SWA cache reset).",
-          "default": 2
-        },
         "prompt_trace_max": {
           "type": "integer",
           "description": "Maximum number of prompt trace entries kept in the in-memory ring buffer for the debug UI.",
