@@ -73,3 +73,9 @@
 | REQ-HEARTBEAT-INDEPENDENT | `voice_loop_heartbeat` эмитится из отдельной asyncio-task `_heartbeat_loop` (не из `_vad_loop`), интервал 5 sec ± 200 ms независимо от ASR/TTS блокировок в `_vad_loop`. Hang voice_loop'а немедленно виден как остановка heartbeat. |
 | REQ-UI-CHAT-CLEANUP | В chat-панели (System/WebUI/static/js/panels/chat.js, widgets/wakeMeter.js): убраны текстовые подписи (`t=X s=Y max=Z`) с эквалайзера; кнопка «Калибровать» убрана из chat (остаётся в settings.js); `micSourceBadge` перенесён над эквалайзером, выровнен по правому краю (там где была кнопка Калибровать); VU-метр (`vuCanvas`) высота = 96 px (под высоту эквалайзера). |
 | REQ-ESP32-AUDIO-REPORT | Создан отчёт о текущей конфигурации ESP32 INMP441 микрофона: sample rate, bit depth, slot bits, формат. Сравнение с рекомендуемой частотой 44.1/48 kHz и 16-bit. Включён в `09-SUMMARY.md`. |
+
+## Phase 10 — Flush stale audio on state transitions
+
+| ID | Requirement |
+| --- | ----------- |
+| REQ-FLUSH-ON-STATE-TRANSITION | `MicReader` имеет публичный метод `flush_queue(discard_window_ms: float = 200.0) -> int`: дренирует все чанки из очереди + ставит `_discard_until_ts = perf_counter() + window/1000` чтобы `_drain_loop` discard'ил всё что приходит из socket в этом окне (drain TCP buffer но не push в queue). VoiceLoopController вызывает `flush_queue(200.0)` в трёх точках: (1) после возврата `_transcribe_and_dispatch` — V-S07.1 эквивалент `_drain_esp32_backlog`; (2) на `wake_word_detected` — defensive; (3) на `reply_silence_timeout` — чтобы следующее listening не унаследовало стале-аудио. Событие `mic_queue_flushed {frames, ms, trigger, discard_window_ms}` эмитится в events.jsonl при каждом вызове. Регрессия Phase 7 refactor устранена: WhisperX больше не получает TTS self-echo / стале комнатный шум вместо живой речи. |
