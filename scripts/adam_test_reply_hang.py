@@ -94,8 +94,8 @@ def analyze_heartbeats(
         warn_count, error_count: how many gaps crossed each threshold
         last_state_change: most recent voice_state_change before the worst gap
     """
-    heartbeats = [e for e in events if e.get("name") == "voice_loop_heartbeat"]
-    state_changes = [e for e in events if e.get("name") == "voice_state_change"]
+    heartbeats = [e for e in events if e.get("type") == "voice_loop_heartbeat"]
+    state_changes = [e for e in events if e.get("type") == "voice_state_change"]
 
     gaps: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
     prev: dict[str, Any] | None = None
@@ -197,7 +197,7 @@ def follow_mode(path: Path, warn_gap: float, error_gap: float) -> int:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if obj.get("name") != "voice_loop_heartbeat":
+                if obj.get("type") != "voice_loop_heartbeat":
                     continue
                 p = obj.get("payload") or {}
                 uptime = p.get("uptime_sec")
