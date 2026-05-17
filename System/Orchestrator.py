@@ -382,11 +382,6 @@ class VoiceLoopController:
         # TTS-tail audio captured by INMP441 during playback does not leak into
         # REPLY ASR. 2500ms = observed worst-case lag + safety margin.
         self._post_tts_discard_window_ms: int = int(asr_cfg.get("post_tts_discard_window_ms", 500))
-        # Phase 11 diagnostic flag — when true, MicReader logs 4 s of RMS
-        # envelope after each mute_unmute. Default off (diagnostic only).
-        self._lag_diag_enabled: bool = bool(
-            settings.section("tuning").get("diagnostics", {}).get("trace_post_tts_lag", False)
-        )
         # Phase 9 (REQ-VAD-DEBOUNCE): minimum consecutive silence frames before
         # emitting endpointing_started. WebRTC VAD flickers voiced↔silenced at
         # 20 ms granularity, producing 20-40 endpointing_started emissions per
@@ -1022,7 +1017,14 @@ class VoiceLoopController:
                             # (ALSA HDMI drain vs ESP32 firmware FIFO vs room
                             # reverb). Per-chunk events go to events.jsonl;
                             # analyse with scripts/diag_lag_source.py.
-                            if self._lag_diag_enabled:
+                            # Re-read flag LIVE on every turn so PATCH /api/config
+                            # toggle takes effect without restart.
+                            _diag_on = bool(
+                                settings.section("tuning")
+                                .get("diagnostics", {})
+                                .get("trace_post_tts_lag", False)
+                            )
+                            if _diag_on:
                                 self.mic_reader.begin_lag_diag(4000.0, "post_transcribe")
                         if spoke:
                             self._set_voice_state("reply", "agent_spoke")
@@ -2124,6 +2126,35 @@ async def reset_tuning() -> dict[str, Any]:
 async def tuning_schema() -> dict[str, Any]:
     from adam.tuning import Tuning
     return Tuning.model_json_schema()
+
+
+# ---------- Phase 11 lag-source diagnostic toggle ----------
+
+
+@app.post("/api/diag/lag/toggle")
+async def toggle_lag_diag(payload: dict[str, Any] = Body(default=None)) -> dict[str, Any]:
+    """Enable/disable post-TTS lag diagnostic. Hot, no restart needed.
+
+    Payload (optional):
+        {"enabled": true}   — explicit
+        {}  or no body      — flip current value
+
+    On enable: next ~3-5 turns will produce mic_lag_diag_chunk events. Run
+    `scripts/diag_lag_source.py` to analyse the envelope.
+    """
+    diag_section = settings.section("tuning").get("diagnostics", {}) or {}
+    current = bool(diag_section.get("trace_post_tts_lag", False))
+    if payload and "enabled" in payload:
+        new_value = bool(payload.get("enabled"))
+    else:
+        new_value = not current
+    try:
+        settings.apply_patch("tuning.diagnostics", {"trace_post_tts_lag": new_value})
+        settings.save()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    event_log.append("lag_diag_toggled", {"from": current, "to": new_value})
+    return {"ok": True, "enabled": new_value, "previous": current}
 
 
 # ---------- Prompt trace (UI диагностика) ----------

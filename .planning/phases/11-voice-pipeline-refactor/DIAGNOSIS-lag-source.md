@@ -21,19 +21,24 @@
 - Старт/конец помечается `mic_lag_diag_started` / `mic_lag_diag_finished`
 - Запускается автоматически после каждого `mic_unmute` (origin=`post_transcribe`) на **4 секунды**, если `tuning.diagnostics.trace_post_tts_lag = true`
 
-## Как запустить диагностику
+## Как запустить диагностику (правильно)
 
-1. **Включить флаг** (hot-reload):
+> Адам должен быть запущен (`./scripts/adam_start.sh`). Все команды — на той же Jetson или с любой машины с доступом к `http://JETSON_IP:8080`.
+
+**Шаг 1.** Включить диагностику одной командой (hot, без рестарта):
 
 ```bash
-curl --noproxy '*' -X PATCH http://127.0.0.1:8080/api/config \
-     -H "Content-Type: application/json" \
-     -d '{"tuning":{"diagnostics":{"trace_post_tts_lag":true}}}'
+curl --noproxy '*' -X POST http://127.0.0.1:8080/api/diag/lag/toggle \
+     -H "Content-Type: application/json" -d '{"enabled": true}'
 ```
 
-2. **Сделать 3–5 диалоговых turn'ов** через wake word «Адам». Важно: НЕ говорите в окно REPLY, чтобы envelope не смешивался с речью пользователя.
+Должен вернуть `{"ok":true,"enabled":true,"previous":false}`.
 
-3. **Запустить анализатор:**
+**Шаг 2.** Сделать **3–5 диалоговых turn'ов** через wake word «Адам».
+
+> **ВАЖНО:** НЕ говорите в окно REPLY — нам нужен envelope **без** речи пользователя, только хвост речи Адама. То есть: скажите «Адам, расскажи о себе» → Адам ответит → **молчите** 5+ секунд → возврат в STANDBY → следующий turn через «Адам, …».
+
+**Шаг 3.** Запустить анализатор:
 
 ```bash
 PYTHONPATH=System python3 scripts/diag_lag_source.py 5
@@ -41,12 +46,22 @@ PYTHONPATH=System python3 scripts/diag_lag_source.py 5
 
 Скрипт выведет per-window RMS envelope (по бакетам 100ms) и для каждого окна найдёт **biggest drop** — момент, когда аудио стало тише всего.
 
-4. **Выключить флаг** (он шумит ~200 событий/turn):
+**Шаг 4.** Выключить (диагностика шумит ~200 событий/turn в events.jsonl):
 
 ```bash
-curl --noproxy '*' -X PATCH http://127.0.0.1:8080/api/config \
-     -H "Content-Type: application/json" \
-     -d '{"tuning":{"diagnostics":{"trace_post_tts_lag":false}}}'
+curl --noproxy '*' -X POST http://127.0.0.1:8080/api/diag/lag/toggle \
+     -H "Content-Type: application/json" -d '{"enabled": false}'
+```
+
+## Проверка что флаг включился
+
+```bash
+# Должно вернуть "trace_post_tts_lag": true
+curl --noproxy '*' -s http://127.0.0.1:8080/api/tuning | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print('trace_post_tts_lag =', d['diagnostics']['trace_post_tts_lag'])
+"
 ```
 
 ## Как читать результат

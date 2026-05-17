@@ -158,6 +158,9 @@ class DiagnosticsTuning(BaseModel):
     log_level: Literal["debug", "info", "warning", "error"] = "info"
     metrics_enabled: bool = True
     trace_prompts: bool = False
+    # Phase 11 lag-source diagnostic — emits ~200 mic_lag_diag_chunk events
+    # per post-TTS turn while True. Use scripts/diag_lag_source.py to analyse.
+    trace_post_tts_lag: bool = False
 
 
 class Tuning(BaseModel):
