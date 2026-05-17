@@ -117,18 +117,14 @@ export function mount(target) {
   const micSourceBadge = el("span", {
     style: "font-size:10px; color:var(--muted); font-family:var(--font-mono); padding:2px 6px; border-radius:3px; background:var(--bg-2)",
   }, "Mic: —");
-  // Equaliser colour tracks the mic source so the user never confuses an
-  // ESP32 stream with the local fallback.
-  //   esp32_stereo / esp32_mono → green (--accent path)
-  //   local_fallback            → amber/warn (ESP32 down)
-  //   local                     → muted grey (idle equaliser, no pipeline)
+  // Equaliser colour tracks the mic source.
+  //   esp32_stereo / esp32_mono → green
+  //   connecting / failed       → muted grey (MicReader handshake state)
+  //   local                     → muted grey (maintenance-mode ALSA)
   //   null / unknown            → "—", pre-snapshot
   function vuColorTriplet() {
     if (micSource === "esp32_stereo" || micSource === "esp32_mono") {
       return { rgb: "67,209,122", emoji: "🟢", label: micSource === "esp32_stereo" ? "ESP32 stereo" : "ESP32 mono" };
-    }
-    if (micSource === "local_fallback") {
-      return { rgb: "240,184,74", emoji: "🟡", label: "Local (ESP32 down)" };
     }
     if (micSource === "local") {
       return { rgb: "150,150,160", emoji: "⚪", label: "Local" };

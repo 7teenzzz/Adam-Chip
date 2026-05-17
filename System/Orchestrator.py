@@ -362,13 +362,10 @@ class VoiceLoopController:
         self.min_speech_ms = int(audio_config.get("min_speech_ms", 280))
         self.asr_client = asr_client
         asr_cfg = settings.section("services").get("asr", {})
-        # silence_after_speech_ms is the canonical knob; command_endpointing_ms
-        # remains as a deprecated fallback so old configs keep working.
-        self._silence_after_speech_ms = int(asr_cfg.get(
-            "silence_after_speech_ms",
-            asr_cfg.get("command_endpointing_ms", 2500),
-        ))
-        self._command_endpointing_ms = self._silence_after_speech_ms
+        # End-of-utterance silence threshold (1.5s by reference logic). Applies
+        # to both LISTENING and REPLY phases — once user has started speaking,
+        # this many ms of silence triggers ASR submission.
+        self._silence_after_speech_ms = int(asr_cfg.get("silence_after_speech_ms", 1500))
         # RMS gate against constant background noise — 0 means "trust WebRTC VAD alone".
         self._silence_rms_threshold = int(asr_cfg.get("silence_rms_threshold", 0))
         self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
@@ -426,7 +423,6 @@ class VoiceLoopController:
         self.last_transcript_at = ""
         self.last_asr_error = ""
         self.muted_by_tts = False
-        self.last_wake_skip = ""
         # Local wake word engine (openWakeWord, CPU) — None → no wake word detection
         ww_cfg = settings.section("wake_word") or {}
         self._wake_engine = _create_wake_engine(ww_cfg)
@@ -526,7 +522,6 @@ class VoiceLoopController:
             "frame_ms": self.frame_ms,
             "wake_word_required": self.wake_word_required,
             "wake_words": self.wake_words,
-            "last_wake_skip": self.last_wake_skip,
             "voice_state": self._voice_state,
             "mic_active_source": mic_active_source,
             "mic_stream_state": mic_stream_state,
@@ -923,7 +918,7 @@ class VoiceLoopController:
                                 and (time.perf_counter() - _last_endpointing_emit_ts) >= _ENDPOINTING_EMIT_MIN_INTERVAL_SEC):
                             _was_endpointing = True
                             _last_endpointing_emit_ts = time.perf_counter()
-                            event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms, "utterance_id": self._utterance_id})
+                            event_log.append("endpointing_started", {"duration_ms": self._silence_after_speech_ms, "utterance_id": self._utterance_id})
                         self.vad_state = "endpointing" if _was_endpointing else "speech"
                     else:
                         self.vad_state = "silence"
@@ -937,7 +932,7 @@ class VoiceLoopController:
                     else self.max_segment_ms
                 )
                 if speech_frames and (
-                    silence_ms >= self._command_endpointing_ms
+                    silence_ms >= self._silence_after_speech_ms
                     or speech_ms >= _active_max_segment_ms
                 ):
                     pcm = b"".join(speech_frames)

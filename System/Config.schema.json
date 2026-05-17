@@ -395,11 +395,6 @@
               "description": "BCP-47 language code for ASR. Must match the language the agent listens in.",
               "default": "ru"
             },
-            "command_endpointing_ms": {
-              "type": "integer",
-              "description": "DEPRECATED — kept as fallback only. Use silence_after_speech_ms instead. If silence_after_speech_ms is missing, this value is used.",
-              "default": 1500
-            },
             "silence_after_speech_ms": {
               "type": "integer",
               "description": "How many consecutive milliseconds of silence after detected speech are required to mark the user's request as finished and forward it to ASR. Applies in both LISTENING (after wake word) and REPLY (after Adam's response) modes. Lower = faster Adam reaction but cuts off slow speakers; higher = more patient but introduces delay.",
