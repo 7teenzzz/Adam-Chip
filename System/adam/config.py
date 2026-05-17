@@ -107,6 +107,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "reply_window_sec": 3.75,
             "reply_silence_timeout_sec": 4.0,
             "endpointing_debounce_frames": 5,
+            "endpointing_voiced_debounce_frames": 3,
             "sample_rate": 16000,
             "timeout_sec": 30,
             "wake_words": "адам",

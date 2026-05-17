@@ -438,6 +438,13 @@
               "description": "Phase 9 (REQ-VAD-DEBOUNCE): minimum number of CONSECUTIVE silence-classified VAD frames (at frame_ms granularity, default 20 ms) required after speech before emitting the `endpointing_started` event. WebRTC VAD flickers voiced↔silenced at 20 ms granularity on tail syllables, quiet consonants, and far-field audio; without debounce a single user utterance can emit 20-40 `endpointing_started` events. Default 5 frames ≈ 100 ms — enough to filter sub-100 ms transients without delaying real end-of-speech detection.",
               "default": 5
             },
+            "endpointing_voiced_debounce_frames": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "description": "Phase 9.1 (REQ-VAD-DEBOUNCE follow-up): symmetric voiced-side debounce. After endpointing_started latches, this many CONSECUTIVE voiced frames (default 3 ≈ 60 ms) are required to release the latch and allow the next silence run to emit again. Without this counter, a single voiced flicker frame (breath/click) immediately re-opens emission, producing 20-40 emissions per utterance even with silence-side debounce active (observed in Phase 9 Test 3: max 32 emissions per utterance). Does NOT affect ASR submission timing — silence_ms still resets on any voiced frame, so end-of-speech detection latency is unchanged. Diagnostic/logging concern only.",
+              "default": 3
+            },
             "sample_rate": {
               "type": "integer",
               "description": "Audio sample rate in Hz sent to the ASR service. Must match the service expectation (16000 Hz for WhisperX).",

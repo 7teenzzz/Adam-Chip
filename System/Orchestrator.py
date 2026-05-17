@@ -383,6 +383,19 @@ class VoiceLoopController:
         # utterance without debounce. 5 frames ≈ 100 ms is enough to filter
         # sub-100 ms transients without delaying real end-of-speech.
         self._endpointing_debounce_frames: int = max(1, int(asr_cfg.get("endpointing_debounce_frames", 5)))
+        # Phase 9.1 (REQ-VAD-DEBOUNCE follow-up): symmetric voiced-debounce —
+        # require N consecutive voiced frames before clearing _was_endpointing.
+        # Without this, a single voiced flicker frame (60 ms breath/click) resets
+        # the latch and lets the next silence run emit endpointing_started again,
+        # producing 20-40 emissions per real utterance (Test 3 worst case 32).
+        # Default 3 frames (~60 ms) — enough to filter sub-frame jitter while
+        # remaining instant for real speech resumption. Does NOT affect ASR
+        # submission timing (silence_ms still resets on any voiced frame).
+        self._endpointing_voiced_debounce_frames: int = max(1, int(asr_cfg.get("endpointing_voiced_debounce_frames", 3)))
+        # Phase 9.1: defence-in-depth time throttle. Even if the frame-debounce
+        # gates above allow two emissions to slip through within a tight window,
+        # this hard floor (300 ms wall-clock) caps emission rate. Code constant,
+        # not Config — it is a diagnostic ceiling, not a user-facing tuning.
         # 'standby' returns to listening for next wake word; 'stop' fully stops
         # the voice loop and requires explicit restart.
         self._reply_window_expired_action: str = str(asr_cfg.get("reply_window_expired_action", "standby"))
@@ -871,6 +884,16 @@ class VoiceLoopController:
         # frame so brief sub-100 ms silences inside a word do not trigger
         # endpointing_started. Threshold = self._endpointing_debounce_frames.
         _silence_run_frames = 0
+        # Phase 9.1: symmetric voiced-side counter. Resets _was_endpointing only
+        # after N consecutive voiced frames (default 3 ≈ 60 ms) so a single
+        # voiced flicker frame mid-silence does not allow re-emission.
+        _voiced_run_frames = 0
+        # Phase 9.1: wall-clock floor on endpointing_started emission rate.
+        # Even if frame-debounce gates allow rapid re-emission, this throttles
+        # to one event per ENDPOINTING_EMIT_MIN_INTERVAL_SEC. Diagnostic-only —
+        # event timing, not VAD logic.
+        _last_endpointing_emit_ts = 0.0
+        _ENDPOINTING_EMIT_MIN_INTERVAL_SEC = 0.3
         # Phase 9 (REQ-HEARTBEAT-INDEPENDENT): heartbeat is now emitted by a
         # separate asyncio task (_heartbeat_loop) started in self.start(), so
         # voice_loop_heartbeat keeps ticking even when _vad_loop blocks on
@@ -1019,27 +1042,42 @@ class VoiceLoopController:
                             event_log.append("asr_partial", {"state": "speech_started", "level": _rms, "utterance_id": self._utterance_id})
                         speech_ms += self.frame_ms
                         silence_ms = 0
-                        self.vad_state = "speech"
-                        _was_endpointing = False
                         # Phase 9 (REQ-VAD-DEBOUNCE): voiced frame resets the
                         # silence-run counter so brief intra-word silences (5 frames)
                         # do not trigger endpointing_started prematurely.
                         _silence_run_frames = 0
+                        # Phase 9.1: symmetric voiced-side debounce. Only clear
+                        # _was_endpointing latch after N consecutive voiced frames
+                        # (default 3 ≈ 60 ms). A single flicker frame keeps the
+                        # latch True so the next silence run cannot re-emit.
+                        _voiced_run_frames += 1
+                        if _voiced_run_frames >= self._endpointing_voiced_debounce_frames:
+                            _was_endpointing = False
+                        # vad_state shows speech as soon as voiced is observed —
+                        # responsiveness is preserved; only the latch is debounced.
+                        self.vad_state = "speech"
                     elif speech_frames:
                         silence_ms += self.frame_ms
                         _silence_run_frames += 1
+                        _voiced_run_frames = 0
                         # Debounce: emit endpointing_started only after N consecutive
                         # silence frames (default 5 ≈ 100 ms). Without the run-count
                         # check WebRTC VAD flicker produces 20-40 emissions per
                         # utterance. _was_endpointing still guards against repeat
                         # emissions within the same silence run.
-                        if not _was_endpointing and _silence_run_frames >= self._endpointing_debounce_frames:
+                        # Phase 9.1: time-throttle as defence-in-depth — cap emission
+                        # rate at 1 per _ENDPOINTING_EMIT_MIN_INTERVAL_SEC.
+                        if (not _was_endpointing
+                                and _silence_run_frames >= self._endpointing_debounce_frames
+                                and (time.perf_counter() - _last_endpointing_emit_ts) >= _ENDPOINTING_EMIT_MIN_INTERVAL_SEC):
                             _was_endpointing = True
+                            _last_endpointing_emit_ts = time.perf_counter()
                             event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms, "utterance_id": self._utterance_id})
                         self.vad_state = "endpointing" if _was_endpointing else "speech"
                     else:
                         self.vad_state = "silence"
                         _silence_run_frames = 0
+                        _voiced_run_frames = 0
                 speech_frames.append(chunk)
 
                 if speech_frames and (
@@ -1053,6 +1091,8 @@ class VoiceLoopController:
                     silence_ms = 0
                     _was_endpointing = False
                     _silence_run_frames = 0  # Phase 9: reset debounce counter on submission
+                    _voiced_run_frames = 0   # Phase 9.1: reset voiced-side counter too
+                    _last_endpointing_emit_ts = 0.0  # Phase 9.1: clear throttle for next utterance
                     if enough_speech:
                         # mute_start tracks total mute duration for diagnostics.
                         mute_start = time.perf_counter()
