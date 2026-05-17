@@ -373,7 +373,10 @@ class VoiceLoopController:
         self._silence_rms_threshold = int(asr_cfg.get("silence_rms_threshold", 0))
         self.max_segment_ms          = int(audio_config.get("max_command_segment_ms", 15000))
         self._reply_window_sec       = float(asr_cfg.get("reply_window_sec", 4.0))
-        self._reply_absolute_deadline_sec: float = float(asr_cfg.get("reply_absolute_deadline_sec", 12.0))
+        # Phase 8 (REQ-REPLY-MATCHES-LISTENING): single silence timer for reply mode.
+        # Replaces the legacy reply_absolute_deadline_sec. Runaway-dictation is
+        # guarded by the shared max_segment_ms — same as listening.
+        self._reply_silence_timeout_sec: float = float(asr_cfg.get("reply_silence_timeout_sec", 4.0))
         # 'standby' returns to listening for next wake word; 'stop' fully stops
         # the voice loop and requires explicit restart.
         self._reply_window_expired_action: str = str(asr_cfg.get("reply_window_expired_action", "standby"))
@@ -895,7 +898,13 @@ class VoiceLoopController:
                     self.vad_state = "standby"
                     continue
 
-                # ── REPLY: check window timeout ──────────────────────────────────
+                # ── REPLY: single silence timer → standby ────────────────────────
+                # Phase 8 (REQ-REPLY-MATCHES-LISTENING): reply mode is identical
+                # to listening, plus one timer: if no qualifying speech accumulates
+                # within reply_silence_timeout_sec after _REPLY_GUARD_SEC elapses,
+                # return to standby. Runaway dictation (once user starts talking)
+                # is bounded by the shared max_segment_ms in the submission block
+                # below — same as listening, no reply-specific hard cutoff.
                 if self._voice_state == "reply":
                     elapsed = time.perf_counter() - self._reply_start
                     # Guard window after listening→reply: skip VAD for _REPLY_GUARD_SEC so the
@@ -904,24 +913,18 @@ class VoiceLoopController:
                     if elapsed < self._REPLY_GUARD_SEC:
                         self.vad_state = "reply_guard"
                         continue
-                    absolute_deadline = self._reply_window_sec + self._reply_absolute_deadline_sec
-                    no_speech_expired = elapsed >= self._reply_window_sec and speech_ms < self.min_speech_ms
-                    hard_cutoff = elapsed >= absolute_deadline
-                    if no_speech_expired or hard_cutoff:
-                        # Action policy: 'standby' (default) keeps mic running,
-                        # OWW listens for next wake word. 'stop' fully halts the
-                        # loop — operator/UI must call /api/voice/start to resume.
+                    if speech_ms == 0 and elapsed >= self._reply_silence_timeout_sec:
+                        # Action policy: 'standby' returns mic to OWW; 'stop' halts the loop.
                         action = self._reply_window_expired_action
-                        reason = "absolute_deadline" if hard_cutoff else "no_speech"
                         event_log.append("reply_window_expired", {
                             "action": action,
                             "elapsed_sec": round(elapsed, 1),
-                            "reason": reason,
+                            "reason": "reply_silence_timeout",
                         })
                         if action == "stop":
                             asyncio.create_task(self.stop(), name="reply_window_stop")
                             return
-                        self._set_voice_state("standby", "reply_expired")
+                        self._set_voice_state("standby", "reply_silence_timeout")
                         self._standby_entry_time = time.perf_counter()
                         speech_frames.clear()
                         speech_ms = 0
@@ -945,16 +948,15 @@ class VoiceLoopController:
                         continue
 
                 # ── LISTENING + REPLY: accumulation + endpointing ────────────────
-                # LISTENING: ALL frames are accumulated unconditionally — voiced
-                # controls only speech_ms/silence_ms counters and vad_state display.
-                # This ensures no leading syllables are clipped if they start below
-                # the RMS threshold.
-                # WebRTC VAD drives speech_ms/silence_ms counters in LISTENING and REPLY.
+                # Phase 8 (REQ-REPLY-MATCHES-LISTENING): listening and reply share
+                # one accumulation/endpointing block. VAD drives speech_ms/silence_ms
+                # counters; speech_frames.append below captures every chunk
+                # unconditionally, so leading syllables below the RMS threshold
+                # are not clipped. The shared submission block handles both states'
+                # endpointing and max_segment_ms cutoff.
                 effective_voiced = voiced
 
-                if self._voice_state == "listening":
-                    # VAD drives speech_ms/silence_ms counters only — accumulation
-                    # happens unconditionally at the outer speech_frames.append below.
+                if self._voice_state in ("listening", "reply"):
                     if effective_voiced:
                         if not speech_frames:
                             event_log.append("asr_partial", {"state": "speech_started", "level": _rms, "utterance_id": self._utterance_id})
@@ -970,21 +972,6 @@ class VoiceLoopController:
                         self.vad_state = "endpointing"
                     else:
                         self.vad_state = "silence"
-                elif effective_voiced:
-                    if not speech_frames:
-                        event_log.append("asr_partial", {"state": "speech_started", "level": _rms, "utterance_id": self._utterance_id})
-                    speech_ms += self.frame_ms
-                    silence_ms = 0
-                    self.vad_state = "speech"
-                    _was_endpointing = False
-                elif speech_frames:
-                    silence_ms += self.frame_ms
-                    if not _was_endpointing:
-                        _was_endpointing = True
-                        event_log.append("endpointing_started", {"duration_ms": self._command_endpointing_ms, "utterance_id": self._utterance_id})
-                    self.vad_state = "endpointing"
-                else:
-                    self.vad_state = "silence"
                 speech_frames.append(chunk)
 
                 if speech_frames and (
