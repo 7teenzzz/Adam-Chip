@@ -2893,19 +2893,22 @@ async def _stream_llm_and_speak(
     # Эмитим tts_finished только если ранее реально начинали говорить.
     # Иначе UI может застрять в "Говорю" из-за событий-призраков.
     if speaking_started[0]:
-        event_log.append("tts_finished", {"ok": ok, "degraded": not ok}, turn_id=turn_id)
+        event_log.append("tts_finished", {"ok": ok, "degraded": not ok, "duration_ms": tts_ms}, turn_id=turn_id)
     return reply, llm_ms, ttfv_ms, tts_ms, tts_result
 
 
 async def _speak(text: str, *, turn_id: str | None = None) -> dict[str, Any]:
     runtime_state["speaking"] = True
     event_log.append("tts_started", {"text": text}, turn_id=turn_id)
+    _t_speak_start = time.perf_counter()
     try:
         result = await tts.speak(text)
-        event_log.append("tts_finished", {"ok": bool(result.get("ok")), "degraded": bool(result.get("degraded"))}, turn_id=turn_id)
+        _speak_ms = round((time.perf_counter() - _t_speak_start) * 1000, 1)
+        event_log.append("tts_finished", {"ok": bool(result.get("ok")), "degraded": bool(result.get("degraded")), "duration_ms": _speak_ms}, turn_id=turn_id)
         return result
     except Exception as exc:
-        event_log.append("tts_finished", {"ok": False, "error": str(exc)}, turn_id=turn_id)
+        _speak_ms = round((time.perf_counter() - _t_speak_start) * 1000, 1)
+        event_log.append("tts_finished", {"ok": False, "error": str(exc), "duration_ms": _speak_ms}, turn_id=turn_id)
         raise
     finally:
         runtime_state["speaking"] = False
