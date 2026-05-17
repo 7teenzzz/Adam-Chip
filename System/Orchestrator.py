@@ -819,8 +819,26 @@ class VoiceLoopController:
         _reader = [read_fn]  # mutable ref — updated when arecord restarts during transcription
         _empty_streak = 0
         _was_endpointing = False
+        # Phase 8 (REQ-DIAGNOSTIC-LOGS-VOICE-STATE): periodic heartbeat event so
+        # a 6-minute hang shows up as a 5-second gap in events.jsonl rather than
+        # silent disappearance. Combined with the existing voice_state_change
+        # event (emitted in _set_voice_state), this gives operators a clear
+        # signal of WHERE the loop froze without needing SIGUSR1 dump (deferred).
+        _heartbeat_period_sec = 5.0
+        _last_heartbeat_ts = 0.0
+        _loop_iter_count = 0
         try:
             while self.running:
+                _loop_iter_count += 1
+                _now = time.perf_counter()
+                if _now - _last_heartbeat_ts >= _heartbeat_period_sec:
+                    event_log.append("voice_loop_heartbeat", {
+                        "state": self._voice_state,
+                        "iter": _loop_iter_count,
+                        "uptime_sec": round(_now, 2),
+                        "vad_state": self.vad_state,
+                    })
+                    _last_heartbeat_ts = _now
                 if self.mic_reader is not None:
                     chunk = await self.mic_reader.get_chunk(timeout=1.0)
                     if chunk is None:
