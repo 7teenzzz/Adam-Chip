@@ -455,51 +455,17 @@ class VoiceLoopController:
         # user to start speaking after the wake word fires. Reference logic = 6s.
         # Fallback default mirrors Config.json so missing-config startup behaves the same.
         self._wake_silence_timeout_sec: float = float(ww_cfg.get("wake_silence_timeout_sec", 6.0))
-        self.esp_mic_fail_threshold: int = int(audio_config.get("esp_mic_fail_threshold", 3))
-        self.esp_mic_retry_interval_sec: float = float(audio_config.get("esp_mic_retry_interval_sec", 30.0))
-        self._esp_mic_fallback: bool = False
-        self._esp_mic_fail_count: int = 0
-        self._esp_mic_last_retry: float = 0.0
-        # Boot-wait + background retry for ESP mic.
-        # Reference logic: every 5s probe ESP /api/status; wait up to 90s before
-        # starting voice_loop. If ESP still silent → fallback to local + spawn
-        # background retry task (20 × 15s = 5 min) which switches back to ESP
-        # on first successful probe. After 20 attempts, stay on local.
-        self.esp_boot_wait_max_sec: int = int(audio_config.get("esp_boot_wait_max_sec", 90))
-        self.esp_boot_wait_poll_sec: int = int(audio_config.get("esp_boot_wait_poll_sec", 5))
-        self.esp_bg_retry_attempts: int = int(audio_config.get("esp_bg_retry_attempts", 20))
-        self.esp_bg_retry_interval_sec: int = int(audio_config.get("esp_bg_retry_interval_sec", 15))
-        self._esp_retry_task: asyncio.Task[None] | None = None
-        self._esp_boot_wait_state: str = "n/a"  # "n/a" | "waiting" | "ready" | "timeout"
-        self._raw_is_stereo: bool = False
-        self._raw_level_l: float = 0.0
-        self._raw_level_r: float = 0.0
         self._utterance_id: str | None = None  # set on wake_word_detected, cleared on standby
-        # Fine-grained mic-stream state for the UI badge / status dot. Replaces
-        # the inferred "esp32 vs local_fallback" guess that hid the connecting
-        # window. Values:
-        #   "n/a"          — mic_source != esp32 (local mic is canonical)
-        #   "connecting"   — _run_esp32 entered, no WAV header yet
-        #   "active"       — WAV header parsed, _vad_loop reading data
-        #   "failed"       — last attempt threw; next iteration will retry
-        #   "fallback"     — _esp_mic_fallback True; local mic is feeding audio
-        self._mic_stream_state: str = "n/a"
         # Phase 7: MicReader is wired in at module scope post-construction
-        # (Orchestrator.py top-level). When None, the legacy local-mic /
-        # _run_esp32 paths are still reachable for mic_source != "esp32".
+        # (Orchestrator.py top-level). For mic_source != "esp32" (maintenance
+        # mode without ESP), _run_local still feeds audio via arecord.
         self.mic_reader: Any | None = None
 
     def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
         """Apply audio config changes live. Returns list of fields that require loop restart."""
-        restart_triggers = {"input_device", "sample_rate", "channels", "frame_ms", "mic_source"}
         needs_restart: list[str] = []
         new_mic_source = str(audio_cfg.get("mic_source", self.mic_source))
         if new_mic_source != self.mic_source:
-            self._esp_mic_fallback = False
-            # Reset stream-state — n/a is the canonical value when the user
-            # switches back to a local mic (no streaming in play).
-            self._mic_stream_state = "n/a" if new_mic_source != "esp32" else "connecting"
-            self._esp_mic_fail_count = 0
             needs_restart.append("mic_source")
         self.mic_source = new_mic_source
         self.esp32_mic_profile = str(audio_cfg.get("esp32_mic_profile", self.esp32_mic_profile))
@@ -535,24 +501,16 @@ class VoiceLoopController:
         """True while the audio device is held — either running or in the process of stopping."""
         return self.running or (self._task is not None and not self._task.done())
 
-    def _active_audio_source_label(self) -> str:
-        """Canonical short label of the mic feeding `audio_level` events.
-
-        Phase 7: when MicReader is wired (mic_source=="esp32"), it owns the
-        canonical label via `mic_reader.active_source`. For mic_source !=
-        "esp32" (legacy local-mic path), keep the historical labels.
-        """
-        if self.mic_reader is not None:
-            return self.mic_reader.active_source
-        if self.mic_source == "esp32":
-            # No mic_reader injected (tests, partial bootstrap) — treat as
-            # connecting until the consumer side proves otherwise.
-            if self._esp_mic_fallback:
-                return "local_fallback"
-            return "local_fallback"
-        return "local"
-
     def status(self) -> dict[str, Any]:
+        # MicReader is the single source of truth for stream_state / active_source
+        # when mic_source=="esp32". For local mic (maintenance mode), both fields
+        # default to a stable "n/a" / "local".
+        mic_stream_state = "n/a"
+        mic_active_source = "local"
+        if self.mic_reader is not None:
+            mr_status = self.mic_reader.status()
+            mic_stream_state = mr_status.get("stream_state", "n/a")
+            mic_active_source = mr_status.get("active_source", "connecting")
         return {
             "running": self.running,
             "mic_source": self.mic_source,
@@ -570,25 +528,8 @@ class VoiceLoopController:
             "wake_words": self.wake_words,
             "last_wake_skip": self.last_wake_skip,
             "voice_state": self._voice_state,
-            "esp_mic_fallback": self._esp_mic_fallback,
-            "mic_active_source": "local_fallback" if (self.mic_source == "esp32" and self._esp_mic_fallback) else self.mic_source,
-            # Fine-grained mic-stream state for UI badge / status dot.
-            # Distinguishes "esp32 connecting" from "esp32 active" so the
-            # UI never shows a false-positive INMP441 ✓ during the open
-            # window before the WAV header arrives. Phase 7: prefer
-            # MicReader's canonical stream_state when wired.
-            "mic_stream_state": (
-                self.mic_reader.status().get("stream_state", "n/a")
-                if self.mic_reader is not None
-                else self._mic_stream_state
-            ),
-            # Boot-wait + background retry telemetry for the UI button.
-            # esp_boot_wait_state: n/a → waiting → ready | timeout
-            # esp_bg_retry_active: true while 20×15s retry task is alive
-            "esp_boot_wait_state": self._esp_boot_wait_state,
-            "esp_bg_retry_active": bool(self._esp_retry_task and not self._esp_retry_task.done()),
-            # Force-button enabled = user is on local fallback AND mic_source is esp32
-            "force_esp_retry_available": self.mic_source == "esp32" and self._esp_mic_fallback,
+            "mic_active_source": mic_active_source,
+            "mic_stream_state": mic_stream_state,
         }
 
     def _set_voice_state(self, state: str, reason: str = "") -> None:
@@ -640,13 +581,6 @@ class VoiceLoopController:
 
     async def stop(self) -> dict[str, Any]:
         self.running = False
-        # Cancel background ESP retry task too so it doesn't survive into the next start()
-        if self._esp_retry_task and not self._esp_retry_task.done():
-            self._esp_retry_task.cancel()
-            try:
-                await self._esp_retry_task
-            except asyncio.CancelledError:
-                pass
         # Phase 9 (REQ-HEARTBEAT-INDEPENDENT): cancel the heartbeat ticker too.
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
@@ -704,111 +638,6 @@ class VoiceLoopController:
         # MicReader.get_chunk() instead of calling read_fn.
         await self._vad_loop(read_fn=None, frame_bytes=frame_bytes)
 
-    async def _wait_for_esp_ready(self, max_seconds: int = 90, poll_interval: int = 5) -> bool:
-        """Probe ESP /api/status every poll_interval seconds for up to max_seconds.
-        Returns True as soon as ESP responds, False if timeout.
-        Used at boot — Adam должен по умолчанию использовать ESP-микрофоны,
-        давая ESP время подняться перед fallback на local."""
-        if self._mcu is None:
-            return False
-        attempts = max(1, max_seconds // max(1, poll_interval))
-        self._esp_boot_wait_state = "waiting"
-        self._mic_stream_state = "connecting"
-        event_log.append("voice_loop_esp_boot_wait_start", {
-            "max_seconds": max_seconds, "poll_interval_sec": poll_interval, "attempts": attempts,
-        })
-        for i in range(attempts):
-            if not self.running:
-                return False
-            try:
-                result = await self._mcu.request("GET", "/api/status")
-                if result.ok:
-                    elapsed = (i + 1) * poll_interval
-                    self._esp_boot_wait_state = "ready"
-                    event_log.append("voice_loop_esp_boot_wait_ok", {
-                        "attempts": i + 1, "elapsed_sec": elapsed,
-                    })
-                    return True
-            except Exception as exc:
-                event_log.append("voice_loop_esp_boot_wait_probe_error", {
-                    "attempt": i + 1, "error": str(exc)[:120],
-                })
-            if i < attempts - 1:
-                await asyncio.sleep(poll_interval)
-        return False
-
-    def _start_background_esp_retry(self) -> None:
-        """Spawn background task: 20 × 15s polling ESP. On first success → restart voice_loop with ESP."""
-        if self._esp_retry_task and not self._esp_retry_task.done():
-            return
-        self._esp_retry_task = asyncio.create_task(
-            self._background_esp_retry(), name="adam_esp_bg_retry"
-        )
-
-    async def _background_esp_retry(self) -> None:
-        """20 attempts × 15s polling. On success → switch back to ESP via restart()."""
-        max_attempts = self.esp_bg_retry_attempts
-        interval = self.esp_bg_retry_interval_sec
-        for attempt in range(1, max_attempts + 1):
-            await asyncio.sleep(interval)
-            if not self.running:
-                return
-            if not self._esp_mic_fallback:
-                # Someone (force-button) already restored ESP — stop the bg loop
-                return
-            if self._mcu is None:
-                continue
-            try:
-                result = await self._mcu.request("GET", "/api/status")
-                if result.ok:
-                    event_log.append("voice_loop_esp_bg_retry_success", {
-                        "attempt": attempt, "max": max_attempts,
-                    })
-                    self._esp_mic_fallback = False
-                    self._mic_stream_state = "connecting"
-                    if self.running:
-                        asyncio.ensure_future(self.restart())
-                    return
-            except Exception as exc:
-                event_log.append("voice_loop_esp_bg_retry_fail", {
-                    "attempt": attempt, "max": max_attempts, "error": str(exc)[:120],
-                })
-                continue
-            event_log.append("voice_loop_esp_bg_retry_fail", {
-                "attempt": attempt, "max": max_attempts,
-            })
-        event_log.append("voice_loop_esp_bg_retry_exhausted", {"attempts": max_attempts})
-
-    async def force_esp_retry(self) -> dict[str, Any]:
-        """Single-shot retry triggered from UI button.
-        Active only when in local fallback. Probes ESP once; if alive — switches voice_loop to ESP."""
-        if self.mic_source != "esp32":
-            return {"ok": False, "error": "mic_source is not esp32"}
-        if not self._esp_mic_fallback:
-            return {"ok": False, "error": "not in fallback — ESP already active or never tried"}
-        if self._mcu is None:
-            return {"ok": False, "error": "mcu client not configured"}
-        try:
-            result = await self._mcu.request("GET", "/api/status")
-        except Exception as exc:
-            event_log.append("voice_loop_force_esp_retry_error", {"error": str(exc)[:120]})
-            return {"ok": False, "error": f"ESP probe raised: {exc}"}
-        if not result.ok:
-            event_log.append("voice_loop_force_esp_retry_fail", {
-                "status": result.status, "error": result.error,
-            })
-            return {"ok": False, "error": f"ESP not responding: {result.error or result.status}"}
-        # ESP отвечает → restore + restart voice_loop с ESP
-        event_log.append("voice_loop_force_esp_retry_success", {})
-        self._esp_mic_fallback = False
-        self._mic_stream_state = "connecting"
-        # Cancel running background retry to avoid double-restart race
-        if self._esp_retry_task and not self._esp_retry_task.done():
-            self._esp_retry_task.cancel()
-        if self.running:
-            asyncio.ensure_future(self.restart())
-        return {"ok": True, "message": "ESP responded — switching voice_loop"}
-
     async def _run_local(self, frame_bytes: int) -> None:
         _delays = [1.0, 2.0, 4.0]
         for attempt, delay in enumerate([0.0] + _delays):
@@ -837,14 +666,13 @@ class VoiceLoopController:
         self.running = False
         event_log.append("voice_loop_stopped", self.status())
 
-    # Phase 7: _run_esp32, _esp32_drain_during_mute, and the
-    # VoiceLoopController._make_stereo_reader method were DELETED. The ESP32
-    # stream-open / drain / reconnect logic now lives in MicReader
-    # (System/adam/mic_reader.py). _make_stereo_reader is now a module-level
-    # free function and is injected into MicReader via set_stereo_reader_factory.
-    # The legacy _run_local / _wait_for_esp_ready / _background_esp_retry /
-    # force_esp_retry methods stay reachable when mic_source != "esp32" (D-16,
-    # W-5).
+    # Phase 7: ESP32 stream-open / drain / reconnect logic lives in MicReader
+    # (System/adam/mic_reader.py). _make_stereo_reader is a module-level free
+    # function injected into MicReader via set_stereo_reader_factory.
+    # Phase 11: legacy ESP-fallback cascade (_wait_for_esp_ready, _background_esp_retry,
+    # force_esp_retry, _esp_mic_fallback) was removed — MicReader's internal
+    # retry/probe/backoff is the single source of recovery logic.
+    # _run_local remains for maintenance mode (mic_source != "esp32").
 
     async def _heartbeat_loop(self) -> None:
         """Phase 9 (REQ-HEARTBEAT-INDEPENDENT): wall-clock heartbeat ticker.
@@ -1546,27 +1374,12 @@ class EspAudioHealthMonitor:
             await asyncio.sleep(self.poll_interval_s)
 
     async def _check(self) -> None:
-        if voice_loop._esp_mic_fallback:
-            elapsed = time.perf_counter() - voice_loop._esp_mic_last_retry
-            if elapsed < voice_loop.esp_mic_retry_interval_sec:
-                return
-
+        # Phase 11: legacy local-fallback throttle/recovery removed. MicReader
+        # owns ESP retry/probe directly. Health monitor's job is now only
+        # profile-based auto-switch for bad-channel detection on stereo mics.
         result = await mcu.request("GET", "/api/audio")
         if not result.ok:
             event_log.append("esp32_health_poll_failed", {"status": result.status, "error": result.error})
-            return
-
-        if voice_loop._esp_mic_fallback:
-            voice_loop._esp_mic_fallback = False
-            voice_loop._esp_mic_fail_count = 0
-            voice_loop._esp_mic_last_retry = 0.0
-            # After health check passes, the next _run_esp32 attempt re-enters
-            # the "connecting" state — pre-set it here so the UI immediately
-            # reflects the recovery handshake instead of the stale "fallback".
-            voice_loop._mic_stream_state = "connecting"
-            event_log.append("esp32_mic_restored", {})
-            if voice_loop.running:
-                asyncio.ensure_future(voice_loop.restart())
             return
 
         cap = result.data.get("capture", {})

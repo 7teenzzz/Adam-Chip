@@ -206,16 +206,6 @@
               "description": "ESP32 microphone hardware profile name. Used by audio normalisation and format parsing.",
               "default": "inmp441_philips32_stereo"
             },
-            "esp_mic_fail_threshold": {
-              "type": "integer",
-              "description": "Consecutive ESP32 mic fetch failures before falling back to local microphone. Lower = faster fallback when ESP32 stream-server hangs (3 means ~90 s of timeout retries before switching to local ALSA).",
-              "default": 3
-            },
-            "esp_mic_retry_interval_sec": {
-              "type": "number",
-              "description": "Seconds between ESP32 microphone reconnection attempts after failure.",
-              "default": 10.0
-            },
             "esp_health": {
               "type": "object",
               "description": "ESP32 microphone health monitor thresholds. Detects silent/clipping mic automatically.",
@@ -478,7 +468,7 @@
             },
             "disable_local_fallback": {
               "type": "boolean",
-              "description": "When true, MicReader (System/adam/mic_reader.py) never falls back to local ALSA mic regardless of how many consecutive ESP32 stream-open failures occur. Retries continue forever with `esp_retry_backoff_sec`. When false (legacy behavior), the older `_esp_mic_fallback` path activates after `media.audio.esp_mic_fail_threshold` consecutive failures. Default true is the exhibition contract: ESP32 INMP441 is the only sanctioned mic; local arecord is for maintenance-mode debugging only.",
+              "description": "When true (default and the only supported value in V-S08.1+), MicReader retries the ESP32 stream forever with `esp_retry_backoff_sec`. The legacy local-fallback cascade was removed in Phase 11 — ESP32 INMP441 is the only sanctioned mic. Maintenance-mode debugging on hosts without ESP uses mic_source=\"local\" instead.",
               "default": true
             },
             "esp_open_timeout_sec": {
