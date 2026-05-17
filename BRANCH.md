@@ -1,36 +1,28 @@
-# Branch: V-S07.2-fix_TTS+UI
+# Branch: V-S08.1-code_rev_ref_opt
 
-**Diverged from:** main @ 86fe6b7
-**Goal:** Финальная стабилизация голосового pipeline (TTS/ESP-mic) + UI-доработки + миграция Tuning.json → Config.json
+**Diverged from:** main @ 86fe6b7 (via V-S07.3-ESP32_mic_fix @ edfe738)
+**Goal:** Code review + рефакторинг + оптимизация запуска Адама и голосового пайплайна. Целостность, модульность, удаление дублирования и неиспользуемого кода. Соответствие эталонной логике (см. discuss-сессию в issue/тикете).
 **Status:** experimenting
 **Merge target:** main
 **Merge conditions:**
-- ASR/TTS/ESP-mic pipeline стабилен на длинных сессиях (нет zombie sessions, нет утечек)
-- WebUI: статус речевого модуля корректно отображается; tuning-панель работает поверх Config.json
-- `Agent Adam Chip/Tuning.json` удалён, все runtime-параметры персоны в `System/Config.json` (секция `tuning`)
-- Orchestrator стартует без Tuning.json (smoke test)
+- Адам стабильно отвечает на все запросы пользователя на длинных сессиях (нет zombie, нет утечек)
+- Голосовой пайплайн чёткий: STANDBY → LISTENING → ANSWER → REPLY с эталонными таймингами (6с / 5с / 15с / 10с)
+- VoiceLoopController освобождён от legacy ESP-fallback-каскада; ESP — единственный путь через MicReader, `_run_local` оставлен только для maintenance
+- UI-статусы «Инициализация / Ожидаю обращения / Слушаю / Распознаю / Думаю / Говорю» отображаются корректно
+- Эквалайзер показывает реальный сигнал только после входа в STANDBY, во время инициализации — placeholder
 
 **Modified areas:**
-- System/Config.json — новая секция `tuning` (зеркало старого Tuning.json), `services.tts.filler_probability`; **+ `services.asr.silence_after_speech_ms` и `services.asr.silence_rms_threshold`**
-- System/Config.schema.json — описания новых полей (включая два новых endpointing-параметра + deprecation note для `command_endpointing_ms`)
-- System/adam/config.py — DEFAULT_CONFIG с `tuning`
-- System/adam/tuning.py — TuningStore backing-store swap (Settings вместо Tuning.json)
-- System/Orchestrator.py — filler_probability gate в _filler_task; **+ чтение silence_after_speech_ms/silence_rms_threshold в VoiceLoopController.__init__; + RMS-gate в _vad_loop поверх WebRTC VAD**
-- System/WebUI/static/js/panels/chat.js — переименование «Слух» → «Статус речевого модуля»; **+ переименование HEARING_LABELS: `⌛ Инициализация`, `💤 Ожидаю обращения`; + удалён дубликат функций `startCountdown`/`stopCountdown`**
-- System/WebUI/static/js/panels/tuning.js — добавлена группа «Филлер» (TTS)
-- **System/WebUI/static/js/panels/settings.js — новая SCHEMA-группа «Завершение запроса от пользователя» (silence_after_speech_ms + silence_rms_threshold); удалено поле `command_endpointing_ms` из ASR-блока**
-- **System/WebUI/static/js/widgets/wakeMeter.js — placeholder «⌛ Инициализация…» в эквалайзере, пока voice_loop ещё не отдаёт реальные `audio_level` события (flag `state.pipelineReady`)**
-- Agent Adam Chip/Tuning.json — DELETED после миграции
-- docs — упоминания Tuning.json убраны (CLAUDE.md root, README.md, AGENT-PROTOCOL.md, Agent Adam Chip/CLAUDE.md, System/adam/CLAUDE.md)
+- System/Orchestrator.py — VoiceLoopController (удалить legacy ESP-fallback), вынести `_REPLY_GUARD_SEC`/`_STANDBY_GUARD_SEC` в Config, упростить `_vad_loop`
+- System/Config.json — `wake_silence_timeout_sec=6`, `reply_silence_timeout_sec=5`, новый `reply_max_segment_ms=10000`, `filler_enabled=false` по умолчанию, два guard-параметра
+- System/Config.schema.json — описания нового/изменённых полей
+- System/adam/mic_reader.py — потенциально удалить дублирование с VoiceLoopController после рефакторинга
+- System/WebUI/static/js/panels/chat.js — проверить mapping voice_state + ANSWER-events → UI-статусы
+- System/WebUI/static/js/widgets/wakeMeter.js — проверить gating эквалайзера на pipelineReady
 
-**Global changes:**
-- Удаление `Agent Adam Chip/Tuning.json` — все runtime-параметры персоны теперь в Config.json. API `/api/tuning` сохраняется, но backing store — секция `tuning` в Config.json. Существующие WebUI-консюмеры не ломаются.
-- TTS filler теперь играет вероятностно (`services.tts.filler_probability`, default 0.30) вместо детерминированного всегда-играет.
-- **Регулируемая «тишина» завершения запроса.** Два новых параметра в `services.asr`: `silence_after_speech_ms` (1500 по умолчанию, длительность тишины) и `silence_rms_threshold` (0 по умолчанию, RMS-порог фильтра шума поверх WebRTC VAD). Старый `command_endpointing_ms` оставлен как deprecated fallback — если новый параметр отсутствует, используется он.
+**Global changes:** да — изменяются runtime-тайминги голосового пайплайна, default filler выключен, удалены legacy fallback-поля из status API. UI-консюмерам не ломаем, но переходные SSE-поля (`esp_bg_retry_active`, `force_esp_retry_available`, `esp_mic_fallback`) пропадают.
 
 **Notes for agents:**
-- Backing-store swap: `tuning.py` сохраняет pydantic-модели и API `TuningStore`, но читает/пишет в `Settings.section("tuning")`. Импорты в `episodic.py`, `echoes_gate.py`, `Engineering/consolidator.py` не меняются.
-- Filler probability: random.random() < P проверка в `_filler_task` перед playback'ом. P=0.0 == filler disabled de facto.
-- Endpointing: один и тот же `silence_after_speech_ms` применяется и в LISTENING, и в REPLY (по требованию пользователя). RMS-gate безопасен по умолчанию: при `silence_rms_threshold = 0` поведение идентично прежнему.
-- WakeMeter placeholder активируется флагом `state.pipelineReady`, который flip-ается в true первым `audio_level` событием с `state ∈ {standby, listening, reply}` или событием `voice_loop_started`. Сбрасывается на `voice_loop_stopped`.
-- При смёрже в main удалить этот файл (`git rm BRANCH.md`).
+- Read `.planning/phases/08-voice-pipeline-refactor/REVIEW.md` for the full code-review findings before touching anything.
+- Read `.planning/phases/08-voice-pipeline-refactor/PLAN.md` for the atomic-commit task breakdown.
+- Эталонная логика (источник истины) — в discuss-сессии этого ветка (см. messages в pr/тикете).
+- При мёрже в main удалить этот файл (`git rm BRANCH.md`).
