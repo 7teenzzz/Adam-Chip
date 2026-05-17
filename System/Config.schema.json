@@ -421,13 +421,15 @@
             },
             "reply_window_sec": {
               "type": "number",
-              "description": "Soft reply window in seconds. After agent's TTS finishes, voice loop waits this long for the user to start speaking. If no speech (>= min_speech_ms) is detected → return to standby.",
+              "description": "Soft reply window in seconds (used by dialog-level no-reply heuristic in _set_voice_state('standby','no_reply')). Distinct from reply_silence_timeout_sec which is the in-loop VAD silence timer.",
               "default": 3.75
             },
-            "reply_absolute_deadline_sec": {
+            "reply_silence_timeout_sec": {
               "type": "number",
-              "description": "Additional seconds beyond reply_window_sec that the user is allowed to keep speaking before a hard cutoff forces return to standby. Effective hard deadline from reply_start = reply_window_sec + reply_absolute_deadline_sec (e.g. 3.75 + 7.5 = 11.25 s). Prevents unbounded reply state if VAD never reaches endpointing.",
-              "default": 7.5
+              "minimum": 1.0,
+              "maximum": 10.0,
+              "description": "Phase 8 (REQ-REPLY-MATCHES-LISTENING): single silence timer for reply mode. After voice_state transitions to 'reply' and the post-TTS guard (_REPLY_GUARD_SEC=0.6) elapses, if no qualifying speech has accumulated (speech_ms == 0) for this many seconds, voice loop returns to standby. Replaces the legacy two-timer pair (reply_window_sec + reply_absolute_deadline_sec — the latter is removed). Runaway-dictation protection in reply is provided by the shared media.audio.max_segment_ms (same path as listening), not by a separate hard cutoff.",
+              "default": 4.0
             },
             "sample_rate": {
               "type": "integer",

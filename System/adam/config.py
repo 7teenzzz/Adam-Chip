@@ -105,7 +105,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "language": "ru",
             "command_endpointing_ms": 1500,
             "reply_window_sec": 3.75,
-            "reply_absolute_deadline_sec": 7.5,
+            "reply_silence_timeout_sec": 4.0,
             "sample_rate": 16000,
             "timeout_sec": 30,
             "wake_words": "адам",
