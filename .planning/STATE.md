@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-last_updated: "2026-05-17T00:06:09.313Z"
+status: executing
+last_updated: "2026-05-17T08:56:02.439Z"
 progress:
   total_phases: 9
   completed_phases: 0
-  total_plans: 8
+  total_plans: 12
   completed_plans: 4
-  percent: 50
+  percent: 33
 ---
 
 # Adam-Chip — Project State
 
 **Last Updated:** 2026-05-17
-**Status:** Phase 7 ✓ COMPLETE — ESP32 mic stream stable (+108 ms boot, 0 errors per session). Phase 8 открыт для устранения reply-echo-hang (заморозка voice_loop после reply_window_expired absolute_deadline из-за акустического эха TTS через ESP32 mic).
+**Status:** Ready to execute
 
 ## Active Phase
 
