@@ -975,18 +975,6 @@ class VoiceLoopController:
                                 speech_frames.clear()
                                 speech_ms = 0
                                 silence_ms = 0
-                                # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION):
-                                # Drain MicReader queue + open 200 ms TCP-discard
-                                # window so the first chunks that reach speech_frames
-                                # are LIVE audio, not stale frames buffered in the
-                                # ESP32 stream during the previous standby/transcribe
-                                # window. Mirrors V-S07.1's _drain_esp32_backlog.
-                                if self.mic_reader is not None:
-                                    _dropped = self.mic_reader.flush_queue(200.0)
-                                    event_log.append("mic_queue_flushed", {
-                                        "frames": _dropped, "ms": _dropped * self.frame_ms,
-                                        "trigger": "wake_word", "discard_window_ms": 200,
-                                    })
                     self.vad_state = "standby"
                     continue
 
@@ -1022,16 +1010,6 @@ class VoiceLoopController:
                         speech_ms = 0
                         silence_ms = 0
                         self._ww_buf.clear()
-                        # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION): flush
-                        # any TCP/queue buildup that accumulated during the
-                        # reply window. Prevents the next standby→listening
-                        # transition from inheriting stale audio.
-                        if self.mic_reader is not None:
-                            _dropped = self.mic_reader.flush_queue(200.0)
-                            event_log.append("mic_queue_flushed", {
-                                "frames": _dropped, "ms": _dropped * self.frame_ms,
-                                "trigger": "reply_silence_timeout", "discard_window_ms": 200,
-                            })
                         continue
 
                 # ── LISTENING: 3s silence timeout after wake word ────────────────
@@ -1150,22 +1128,6 @@ class VoiceLoopController:
                         speech_ms = 0
                         silence_ms = 0
                         self._ww_buf.clear()
-                        # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION):
-                        # V-S07.1 equivalent of _drain_esp32_backlog.
-                        # During the transcribe + LLM + TTS window MicReader
-                        # was muted (drained socket but did not queue). If
-                        # MicReader's drain_loop was starved at any point
-                        # during that window, kernel TCP buffer accumulated
-                        # stale frames. Flush them now, before reply starts
-                        # accumulating speech_frames, so WhisperX never sees
-                        # TTS self-echo or pre-mute room ambient as the
-                        # user's next utterance.
-                        if self.mic_reader is not None:
-                            _dropped = self.mic_reader.flush_queue(200.0)
-                            event_log.append("mic_queue_flushed", {
-                                "frames": _dropped, "ms": _dropped * self.frame_ms,
-                                "trigger": "post_transcribe", "discard_window_ms": 200,
-                            })
                         if spoke:
                             self._set_voice_state("reply", "agent_spoke")
                             self._reply_start = time.perf_counter()

@@ -300,34 +300,6 @@ Plans:
 
 ---
 
-## Phase 10: Flush stale audio on state transitions
-
-**Branch:** TBD (suggest `V-S07.5-flush-on-transition`)
-
-**Goal:** Восстановить поведение V-S07.1 `_drain_esp32_backlog` в архитектуре V-S07.3 (MicReader + queue). После долгих mute-окон (transcribe + LLM + TTS), wake-event'ов и reply EXPIR — сбрасывать стале-аудио из MicReader queue + удерживать MicReader в discard-режиме N мс чтобы kernel TCP буфер ESP32 тоже выкачался. Без этого WhisperX часто видит TTS self-echo или комнатный шум вместо живой речи пользователя → пустой результат → симптом "Адам не отвечает на обычной громкости".
-
-**Requires:** Phase 9 завершена (heartbeat + audio_level watchdog уже помогают видеть TCP стопы).
-
-**Root cause:**
-- V-S07.1: после mute window явно вызывал `_drain_esp32_backlog(read_fn, frame_bytes, mute_start)` — читал и отбрасывал `mute_duration_ms / frame_ms` байт из raw HTTP-сокета.
-- V-S07.3 (Phase 7 refactor): эту секцию **удалил** в расчёте что MicReader's drain_loop постоянно читает socket даже в muted-режиме. На практике MicReader стопится на 200-500 мс при CPU нагрузке / W5500 SPI конкуренции с MJPEG → kernel TCP буфер накапливает 1-3 сек аудио → при возобновлении flood. Этот flood проходит через очередь и заполняет speech_frames stale-данными в первые 100 мс после wake.
-
-**Deliverables:**
-
-- `MicReader.flush_queue(discard_window_ms=200.0)` — публичный метод: дренирует queue + ставит `_discard_until_ts` чтобы drain_loop discard'ил ВСЁ что приходит в окне 200 мс (drain socket, не queue).
-- Drain_loop respects `_discard_until_ts` — мирорит mute-gate семантику.
-- VoiceLoopController вызывает `flush_queue(200.0)` в трёх точках:
-  - После `_transcribe_and_dispatch` возврата (V-S07.1 эквивалент)
-  - На wake_word_detected
-  - На reply_silence_timeout
-- Событие `mic_queue_flushed {frames, ms, trigger, discard_window_ms}` для диагностики в events.jsonl.
-
-**Mode:** debug fix — устраняет регрессию Phase 7 refactor.
-
-**Requirement IDs:** REQ-FLUSH-ON-STATE-TRANSITION
-
----
-
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.

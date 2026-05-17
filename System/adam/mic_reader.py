@@ -144,13 +144,6 @@ class MicReader:
         self._last_level_emit_t: float = 0.0
         # Cached last mono RMS for the watchdog task (filled by _emit_audio_level).
         self._last_mono_rms: float = 0.0
-        # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION): wall-clock deadline. While
-        # perf_counter() < this value, drain_loop reads from the socket as
-        # usual (so kernel TCP buffer keeps draining) BUT skips _put_or_drop,
-        # discarding the chunk. Mirrors V-S07.1's _drain_esp32_backlog intent:
-        # after a long mute window or wake transition, flush stale TCP buffer
-        # so the consumer sees only live audio. Set via flush_queue().
-        self._discard_until_ts: float = 0.0
 
     # ── External wiring ────────────────────────────────────────────────
 
@@ -267,32 +260,6 @@ class MicReader:
             return await asyncio.wait_for(self._queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
-
-    def flush_queue(self, discard_window_ms: float = 200.0) -> int:
-        """Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION): drain stale audio.
-
-        Drops every chunk currently in the queue AND sets a wall-clock
-        deadline so drain_loop discards any chunk read from the ESP32
-        socket for the next ``discard_window_ms`` ms. This is the
-        V-S07.3 equivalent of V-S07.1's ``_drain_esp32_backlog``: the
-        queue flush handles MicReader's own backlog, while the discard
-        window forces drain_loop to flush kernel TCP buffer (the real
-        accumulator when MicReader's task is starved or ESP32 stalls on
-        W5500 SPI contention).
-
-        Returns: number of frames dropped from the queue (does not
-        count frames discarded during the post-flush window).
-        """
-        dropped = 0
-        while True:
-            try:
-                self._queue.get_nowait()
-                dropped += 1
-            except asyncio.QueueEmpty:
-                break
-        if discard_window_ms > 0:
-            self._discard_until_ts = time.perf_counter() + (discard_window_ms / 1000.0)
-        return dropped
 
     # ── Introspection ──────────────────────────────────────────────────
 
@@ -585,14 +552,6 @@ class MicReader:
             # W5500 SPI send buffer (~64 KB) overflows in ~1 s and the
             # ESP firmware closes the connection.
             if self._voice_loop is not None and getattr(self._voice_loop, "muted_by_tts", False):
-                continue
-
-            # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION): post-flush discard
-            # window. After flush_queue(window_ms) is called, drain_loop
-            # keeps reading socket bytes (kernel TCP buffer keeps draining)
-            # but skips the queue put so the consumer never sees stale audio.
-            # Same drain-but-don't-queue semantics as the mute gate above.
-            if self._discard_until_ts > 0.0 and time.perf_counter() < self._discard_until_ts:
                 continue
 
             self._put_or_drop(chunk)
