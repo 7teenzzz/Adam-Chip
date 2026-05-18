@@ -2,26 +2,26 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
+status: ready_to_plan
 last_updated: "2026-05-18T08:14:02.295Z"
 progress:
   total_phases: 32
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 30
   completed_plans: 16
-  percent: 53
+  percent: 9
 ---
 
 # Adam-Chip — Project State
 
 **Last Updated:** 2026-05-18
-**Status:** Executing Phase 11 (Voice Pipeline Refactor)
+**Status:** Ready to plan
 
 ## Active Phase
 
 **Phase 11: Voice Pipeline Refactor — соответствие эталонной логике** — plan ready, executing
 Branch: `V-S08.1-code_rev_ref_opt` (мёрж в `main` в процессе)
-Plan: [phases/11-voice-pipeline-refactor/11-PLAN.md](phases/11-voice-pipeline-refactor/11-PLAN.md)
+Plan: Not started
 Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-refactor/REVIEW.md)
 
 → [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
