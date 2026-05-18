@@ -1999,14 +1999,19 @@ def _result_or_raise(result: Any) -> dict[str, Any]:
 
 
 async def _status_payload() -> dict[str, Any]:
-    power = power_gate.check()
-    media = media_health.check()
+    # power_gate.check / media_health.check / docker_health invoke synchronous
+    # subprocess.run + urllib.urlopen with multi-second timeouts. Run them via
+    # asyncio.to_thread so the event loop stays free — otherwise every UI poll
+    # of /api/agent/status froze MicReader's drain_loop for 2-3s, accumulating
+    # ESP-mic backlog that leaked TTS-tail audio into ASR after mic_unmuted.
+    power = await asyncio.to_thread(power_gate.check)
+    media = await asyncio.to_thread(media_health.check)
     asr_health = await asr.health()
     vlm_health = await vlm.health()
     llm_health = await llm.health()
     tts_health = await tts.health()
     mcu_health = await mcu.health()
-    docker = docker_health()
+    docker = await asyncio.to_thread(docker_health)
     mcu_public = _compact_mcu(mcu_health)
     gate = _exhibition_gate(power, media, asr_health, vlm_health, llm_health, tts_health, mcu_public, docker)
     return {
