@@ -28,11 +28,14 @@ from __future__ import annotations
 
 import asyncio
 import audioop
+import math
 import queue as _queue_module
 import threading
 import time
 from typing import Any, Callable, Optional
 from urllib.request import build_opener, ProxyHandler
+
+import numpy as np
 
 # Mandatory per CLAUDE.md: bypass env http_proxy / HTTP_PROXY (v2ray).
 # Without this, urlopen() to ESP32:81 leaks sockets through the SOCKS proxy
@@ -45,14 +48,53 @@ _QUEUE_MAX_DEFAULT = 50
 # Rate-limit for mic_reader_overflow events; one emission per N seconds.
 _OVERFLOW_EVENT_INTERVAL_SEC = 5.0
 
-# audio_level emission cadence: every N drained frames. Mirrors the
-# `level_tick >= 5` pattern in the legacy VoiceLoopController._vad_loop
-# (5 frames * 20 ms = ~100 ms cadence).
+# DEPRECATED Phase 21A: cadence now per-instance via spectrum_cadence_hz;
+# retained for backwards-compat readers. Live cadence reads from
+# `MicReader._audio_level_emit_every_n` (derived in __init__ / apply_config
+# from `media.audio.spectrum_cadence_hz` and `media.audio.frame_ms`).
 _AUDIO_LEVEL_EMIT_EVERY_N_FRAMES = 5
 
 # W-2 fix: NO time-based stability threshold is defined. Counter management
 # uses the fixed backoff sequence only. Adaptive backoff is a deferred
 # idea (see 07-CONTEXT.md "Deferred Ideas").
+
+
+def _build_log_band_table(
+    n_fft: int,
+    sample_rate: int,
+    n_bands: int,
+    min_hz: float,
+    max_hz: float,
+) -> list[tuple[int, int]]:
+    """Phase 21A: log-spaced FFT-bin binning table for the chat EQ widget.
+
+    Returns a list of (lo_bin, hi_bin) inclusive index ranges into the
+    rfft output (length n_fft // 2 + 1). Each tuple covers one of the
+    `n_bands` log-frequency bands between `min_hz` and `max_hz`. Band
+    edges are computed as exp(linspace(log(min_hz), log(max_hz), n_bands+1))
+    so each band spans equal-octave fractions.
+
+    DC bin 0 is skipped (lo >= 1) to suppress the INMP441 DC-offset
+    artefact (RESEARCH §1, Pitfall 1). Degenerate bands where the
+    integer floor/ceil collapse the range have hi == lo, so the band
+    still reads at least one bin's magnitude.
+    """
+    n_bins = n_fft // 2 + 1
+    bin_hz = sample_rate / n_fft
+    log_min = math.log(min_hz)
+    log_max = math.log(max_hz)
+    edges_hz = [
+        math.exp(log_min + i * (log_max - log_min) / n_bands)
+        for i in range(n_bands + 1)
+    ]
+    table: list[tuple[int, int]] = []
+    for i in range(n_bands):
+        lo = max(1, int(math.floor(edges_hz[i] / bin_hz)))
+        hi = min(n_bins - 1, int(math.ceil(edges_hz[i + 1] / bin_hz)))
+        if hi < lo:
+            hi = lo
+        table.append((lo, hi))
+    return table
 
 
 class MicReader:
@@ -95,6 +137,45 @@ class MicReader:
         self._frame_ms = int(audio_cfg.get("frame_ms", 20))
         self._profile = str(audio_cfg.get("esp32_mic_profile", "inmp441_philips32_stereo"))
         self._normalize_factor = int(audio_cfg.get("normalize_factor", 8000))
+
+        # Phase 21A spectrum config — all 8 keys live under media.audio.* in
+        # Config.json. Values consumed by _compute_bands at every drained
+        # frame and by the chat-panel equaliser widget on the frontend.
+        # color_yellow_at / color_red_at are NOT used inside Python; we
+        # store them so they round-trip through /api/config without loss.
+        self._spec_n_bands = int(audio_cfg.get("spectrum_bands", 24))
+        self._spec_min_hz = float(audio_cfg.get("spectrum_min_hz", 80.0))
+        self._spec_max_hz = float(audio_cfg.get("spectrum_max_hz", 8000.0))
+        self._spec_floor_db = float(audio_cfg.get("spectrum_floor_db", -60.0))
+        self._spec_ceiling_db = float(audio_cfg.get("spectrum_ceiling_db", 0.0))
+        self._spec_cadence_hz = float(audio_cfg.get("spectrum_cadence_hz", 25.0))
+        self._spec_color_yellow_at = float(audio_cfg.get("spectrum_color_yellow_at", 0.6))
+        self._spec_color_red_at = float(audio_cfg.get("spectrum_color_red_at", 0.85))
+
+        # Derived spectrum runtime tables. n_fft = mono samples per frame:
+        # sample_rate * frame_ms / 1000 → 320 at prod defaults (16000 × 20/1000).
+        # bin_hz = sample_rate / n_fft = 50 Hz at prod defaults.
+        # mag_ref = 0.5 * INT16_MAX * sum(Hann) — full-scale rfft peak
+        # reference (RESEARCH §3, Pitfall 3).
+        self._spec_n_fft = max(64, int(self._sample_rate * self._frame_ms / 1000))
+        self._spec_hann = np.hanning(self._spec_n_fft).astype(np.float32)
+        self._spec_mag_ref = 0.5 * 32768.0 * float(self._spec_hann.sum())
+        self._spec_band_table = _build_log_band_table(
+            self._spec_n_fft,
+            self._sample_rate,
+            self._spec_n_bands,
+            self._spec_min_hz,
+            self._spec_max_hz,
+        )
+
+        # Per-instance audio_level cadence: emit every Nth drained frame.
+        # Derived from spectrum_cadence_hz and frame_ms. At sample_rate=16000,
+        # frame_ms=20, spectrum_cadence_hz=25 → every 2nd frame (25 Hz).
+        # Replaces the legacy module-level _AUDIO_LEVEL_EMIT_EVERY_N_FRAMES.
+        frame_hz = 1000.0 / max(1, self._frame_ms)
+        self._audio_level_emit_every_n = max(
+            1, int(round(frame_hz / max(1e-6, self._spec_cadence_hz)))
+        )
 
         # frame_bytes formula matches the legacy _run_esp32 / _vad_loop math.
         # sample_rate * 2 bytes/sample * frame_ms / 1000. Channels is folded
@@ -428,6 +509,66 @@ class MicReader:
         self._normalize_factor = int(audio_cfg.get("normalize_factor", self._normalize_factor))
         self._frame_bytes = max(2, int(self._sample_rate * 2 * self._frame_ms / 1000))
 
+        # Phase 21A: hot-reload spectrum_* keys (D-16). spectrum_* deltas
+        # are LIVE — they MUST NOT force restart_needed=True. Floor/ceiling
+        # and the colour thresholds are simple scalar updates; bands/min/max
+        # plus a structural sample_rate/frame_ms change rebuild the band
+        # table; cadence_hz or frame_ms changes recompute the emit gate.
+        old_bands = self._spec_n_bands
+        old_min = self._spec_min_hz
+        old_max = self._spec_max_hz
+        old_cad = self._spec_cadence_hz
+
+        self._spec_n_bands = int(audio_cfg.get("spectrum_bands", self._spec_n_bands))
+        self._spec_min_hz = float(audio_cfg.get("spectrum_min_hz", self._spec_min_hz))
+        self._spec_max_hz = float(audio_cfg.get("spectrum_max_hz", self._spec_max_hz))
+        self._spec_floor_db = float(audio_cfg.get("spectrum_floor_db", self._spec_floor_db))
+        self._spec_ceiling_db = float(audio_cfg.get("spectrum_ceiling_db", self._spec_ceiling_db))
+        self._spec_cadence_hz = float(audio_cfg.get("spectrum_cadence_hz", self._spec_cadence_hz))
+        self._spec_color_yellow_at = float(
+            audio_cfg.get("spectrum_color_yellow_at", self._spec_color_yellow_at)
+        )
+        self._spec_color_red_at = float(
+            audio_cfg.get("spectrum_color_red_at", self._spec_color_red_at)
+        )
+
+        table_dirty = (
+            self._spec_n_bands != old_bands
+            or self._spec_min_hz != old_min
+            or self._spec_max_hz != old_max
+            or restart_needed  # sample_rate / frame_ms / profile already flagged a rebuild
+        )
+        cadence_dirty = (
+            self._spec_cadence_hz != old_cad or restart_needed
+        )
+
+        if table_dirty:
+            self._spec_n_fft = max(64, int(self._sample_rate * self._frame_ms / 1000))
+            self._spec_hann = np.hanning(self._spec_n_fft).astype(np.float32)
+            self._spec_mag_ref = 0.5 * 32768.0 * float(self._spec_hann.sum())
+            self._spec_band_table = _build_log_band_table(
+                self._spec_n_fft,
+                self._sample_rate,
+                self._spec_n_bands,
+                self._spec_min_hz,
+                self._spec_max_hz,
+            )
+            self._emit(
+                "spectrum_band_table_rebuilt",
+                {
+                    "n_bands": self._spec_n_bands,
+                    "n_fft": self._spec_n_fft,
+                    "min_hz": self._spec_min_hz,
+                    "max_hz": self._spec_max_hz,
+                },
+            )
+
+        if cadence_dirty:
+            frame_hz = 1000.0 / max(1, self._frame_ms)
+            self._audio_level_emit_every_n = max(
+                1, int(round(frame_hz / max(1e-6, self._spec_cadence_hz)))
+            )
+
         # ASR-side (live re-read, no restart).
         self._disable_local_fallback = bool(asr_cfg.get("disable_local_fallback", self._disable_local_fallback))
         self._open_timeout_sec = int(asr_cfg.get("esp_open_timeout_sec", self._open_timeout_sec))
@@ -524,7 +665,73 @@ class MicReader:
             if utt_id:
                 payload["utterance_id"] = utt_id
 
+        # Phase 21A: attach 24-band log-frequency FFT spectrum (UI-EQ-01/02).
+        # Emits as payload["bands"] = list[float], length spec_n_bands,
+        # each value in [0.0, 1.0] (dBFS-normalised). When the chunk is too
+        # short or FFT fails, _compute_bands returns None and the key is
+        # omitted — frontend keeps its last snapshot.
+        bands = self._compute_bands(mono_chunk)
+        if bands is not None:
+            payload["bands"] = bands
+
         self._emit("audio_level", payload)
+
+    def _compute_bands(self, mono_chunk: bytes) -> list[float] | None:
+        """Phase 21A: 24-band log-frequency FFT spectrum (UI-EQ-01).
+
+        Real-time per-frame FFT over the same mono PCM buffer that already
+        feeds RMS / OWW / ASR. Returns a list of `_spec_n_bands` floats in
+        [0.0, 1.0] dBFS-normalised, rounded to 3 decimals. Returns None
+        when the chunk is missing or shorter than n_fft samples (frontend
+        keeps the last snapshot in that case — RESEARCH §12 / Pitfall 4).
+
+        Math (RESEARCH §1 + §3):
+          windowed     = int16_samples * Hann(n_fft).float32
+          spectrum     = |rfft(windowed)|
+          ref(band)    = 0.5 * 32768 * sum(Hann) * bin_count
+          db(band)     = 20 * log10(sum(spectrum[lo:hi+1]) / ref)
+          norm(band)   = clamp(db, floor_db, ceiling_db)
+                         mapped linearly into [0, 1]
+
+        Exceptions are swallowed (emitting a `spectrum_error` event) so
+        any FFT failure cannot stall the audio_level emit path that the
+        UI VU-meter relies on. Mirrors Pitfall A8 from RESEARCH.
+        """
+        try:
+            if not mono_chunk or len(mono_chunk) < self._spec_n_fft * 2:
+                return None
+            samples = np.frombuffer(
+                mono_chunk[: self._spec_n_fft * 2], dtype=np.int16
+            ).astype(np.float32)
+            windowed = samples * self._spec_hann
+            spectrum = np.abs(np.fft.rfft(windowed))
+            out: list[float] = []
+            floor_db = self._spec_floor_db
+            ceiling_db = self._spec_ceiling_db
+            span_db = ceiling_db - floor_db
+            if span_db <= 0:
+                # Degenerate config — would divide by zero / give NaN.
+                span_db = 1.0
+            for (lo, hi) in self._spec_band_table:
+                band_mag = float(spectrum[lo : hi + 1].sum())
+                bin_count = hi - lo + 1
+                ref = self._spec_mag_ref * max(1, bin_count)
+                if band_mag < 1e-9 or ref <= 0:
+                    norm = 0.0
+                else:
+                    db = 20.0 * math.log10(band_mag / ref)
+                    if db < floor_db:
+                        db_clamped = floor_db
+                    elif db > ceiling_db:
+                        db_clamped = ceiling_db
+                    else:
+                        db_clamped = db
+                    norm = (db_clamped - floor_db) / span_db
+                out.append(round(norm, 3))
+            return out
+        except Exception as exc:  # noqa: BLE001 — must never break emit
+            self._emit("spectrum_error", {"err": str(exc)[:200]})
+            return None
 
     async def _level_emit_loop(self) -> None:
         """Phase 9 (REQ-AUDIO-LEVEL-CONTINUOUS): wall-clock fallback emitter.
@@ -552,6 +759,9 @@ class MicReader:
                 # Backfill — synthesise from cached RMS.
                 rms = self._last_mono_rms
                 norm = round(min(1.0, (rms / self._normalize_factor) ** 0.5), 3)
+                # Phase 21A: synthetic events OMIT 'bands' by design
+                # (RESEARCH §12). No fresh PCM → no honest spectrum.
+                # Frontend keeps last snapshot.
                 payload: dict[str, Any] = {
                     "level": norm,
                     "state": self._voice_state_for_event(),
@@ -694,7 +904,7 @@ class MicReader:
                 self._drained_bytes_total += len(chunk)
 
                 self._level_tick += 1
-                if self._level_tick >= _AUDIO_LEVEL_EMIT_EVERY_N_FRAMES:
+                if self._level_tick >= self._audio_level_emit_every_n:
                     self._emit_audio_level(chunk)
                     self._level_tick = 0
 
