@@ -454,7 +454,7 @@ export function mount(target) {
         ]),
         el("div", { style: "display:flex; align-items:center; gap:8px" }, [
           el("span", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.4" },
-            "Оранжевый — порог wake-word, циан — текущий OWW-score. Настройка порога — в разделе Настройки → OWW."),
+            "Эквалайзер: реальный спектр микрофона (FFT, 24 полосы 80–8000 Гц). Зелёный — норма, жёлтый — громко, красный — пик. Оранжевый — порог wake-word, циан — текущий OWW-score. Настройка порога — в разделе Настройки → OWW."),
           el("span", { class: "spacer" }),
         ]),
         el("div", { style: "display:flex; align-items:center; gap:6px; margin-top:4px" }, [
