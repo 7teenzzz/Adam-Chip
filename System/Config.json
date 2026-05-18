@@ -54,7 +54,15 @@
       "webrtc_vad_aggressiveness": 1,
       "max_command_segment_ms": 15000,
       "reply_max_segment_ms": 10000,
-      "normalize_factor": 8000
+      "normalize_factor": 8000,
+      "spectrum_bands": 24,
+      "spectrum_min_hz": 80.0,
+      "spectrum_max_hz": 8000.0,
+      "spectrum_floor_db": -60.0,
+      "spectrum_ceiling_db": 0.0,
+      "spectrum_cadence_hz": 25.0,
+      "spectrum_color_yellow_at": 0.6,
+      "spectrum_color_red_at": 0.85
     },
     "scene_worker_enabled": true,
     "scene_interval_sec": 4,
