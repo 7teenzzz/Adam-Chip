@@ -962,13 +962,19 @@ Plans:
 
 ### Phase 29: Audio Out на ESP32 динамики — PCM5102A → PAM8403 → 2×8Ω parallel
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Перевести голос Адама с HDMI Jetson на корпусные динамики через PAM8403 + PCM5102A I2S DAC + параллельную пару 8Ω-динамиков (4Ω BTL нагрузка) на канал. Откалибровать software volume cap, защитить динамики от runaway gain, документировать failover на jetson_hdmi.
+**Requirements**: AUDIO-OUT-01, AUDIO-OUT-02, AUDIO-OUT-03, AUDIO-OUT-04, AUDIO-OUT-05, AUDIO-OUT-06, AUDIO-OUT-07, AUDIO-OUT-08, AUDIO-OUT-09, AUDIO-OUT-10, AUDIO-OUT-11, AUDIO-OUT-12, AUDIO-OUT-13, AUDIO-OUT-14
 **Depends on:** Phase 28
-**Plans:** 0 plans
+**Plans:** 7 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 29 to break down)
+- [ ] 29-01-PLAN.md — Wave 0 / Pre-flight safety: software volume cap 2.0→1.0 (schema + pydantic + Config.json starter 0.5)
+- [ ] 29-02-PLAN.md — Wave 1 / Hardware bring-up: делитель 1:6, BTL safety check, decoupling, power-on spike test
+- [ ] 29-03-PLAN.md — Wave 2 / Manual loopback: smoke WAV артефакты, positive + negative `:81/speaker` POST tests
+- [ ] 29-04-PLAN.md — Wave 3 / Target flip + live ramp: augment tts_finished с target field, output_target → esp32_speaker, volume ramp 0.5 → 1.0
+- [ ] 29-05-PLAN.md — Wave 4 / Self-echo + thermal: 30-мин run, events.jsonl violation analysis, touch test (parallel with Plan 06)
+- [ ] 29-06-PLAN.md — Wave 5 / Documentation: RUNBOOK секция Audio Output Path с failover + диагностикой (parallel with Plan 05)
+- [ ] 29-07-PLAN.md — Wave 6 / Verify + Commit: 29-VERIFICATION.md по 10 criteria + /commit-push phase-29 audio-out
 
 ---
 
