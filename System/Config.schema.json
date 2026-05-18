@@ -944,7 +944,7 @@
           "properties": {
             "speaker": { "type": "string", "default": "eugene", "description": "Active Silero speaker id (must be in services.tts.available_speakers)." },
             "speed_multiplier": { "type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.1, "description": "Playback speed (1.0 = original Silero output rate)." },
-            "volume": { "type": "number", "minimum": 0, "maximum": 2.0, "default": 0.5, "description": "Output volume gain applied before the WAV reaches ALSA / ESP32." }
+            "volume": { "type": "number", "minimum": 0, "maximum": 1.0, "default": 0.5, "description": "Output volume gain applied before the WAV reaches ALSA / ESP32. Hard-capped at 1.0 because the ESP32 audio chain (PCM5102A line-out 2.1 Vrms → resistive divider 1:6 → PAM8403 class-D × 16 gain → 2 parallel 8Ω speakers per channel = 4Ω load) drives 1W-rated drivers; volume > 1.0 risks thermal failure on long vowels. Hardware-level mitigation (divider) is paired with this software cap as defense-in-depth. See .planning/phases/29-audio-out-esp32-pcm5102a-pam8403-2-8-parallel/29-CONTEXT.md." }
           }
         },
         "prompt": {

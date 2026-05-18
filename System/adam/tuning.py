@@ -145,7 +145,7 @@ class LLMTuning(BaseModel):
 class VoiceTuning(BaseModel):
     speaker: str = "eugene"
     speed_multiplier: float = Field(1.0, ge=0.5, le=2.0)
-    volume: float = Field(1.0, ge=0, le=2.0)
+    volume: float = Field(0.5, ge=0, le=1.0)
 
 
 class PromptTuning(BaseModel):
