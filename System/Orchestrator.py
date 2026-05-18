@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import audioop
+import hashlib
 import json
 import os
 import random
@@ -48,6 +49,7 @@ from adam.media import MediaHealth
 from adam.memory import EpisodicMemory, MemoryStore
 from adam.memory_metrics import MemoryMetrics
 from adam.metrics import MetricsLog
+from adam.metrics_sessions import SessionsLog
 from adam.power import PowerGate
 from adam.prompt import PromptBuilder, LeadingNoiseFilter, sanitize_reply
 from adam.config import PROJECT_ROOT
@@ -63,6 +65,7 @@ from adam.webrtc_vad import WebRtcVadWrapper
 settings = Settings.load()
 event_log = EventLog(settings.data_dir)
 metrics_log = MetricsLog(settings.data_dir)
+sessions_log = SessionsLog(settings.data_dir)
 memory = MemoryStore(settings.data_dir)
 episodic_memory = EpisodicMemory(settings.data_dir)
 memory_metrics = MemoryMetrics(Path(settings.data_dir) / "memory" / "metrics.jsonl")
@@ -303,6 +306,20 @@ async def _commit_session_locked(reason: str) -> None:
                 "reason": reason,
             },
         )
+    sessions_log.append({
+        "session_id": episode.session_id,
+        "ts_start": episode.ts_start.isoformat(),
+        "ts_end": episode.ts_end.isoformat(),
+        "duration_s": episode.duration_s,
+        "turn_count": acc.turn_count,
+        "visitor_name": episode.visitor.introduced_name,
+        "salience": round(episode.salience, 4),
+        "themes": list(episode.themes),
+        "echoes_used_count": len(episode.echoes_used),
+        "episode_committed": write,
+        "episode_id": episode.id if write else None,
+        "commit_reason": reason,
+    })
     session_state["accumulator"] = None
 
 
@@ -1179,6 +1196,7 @@ class SceneWorker:
         self.last_error = ""
         self._task: asyncio.Task[None] | None = None
         self._consecutive_errors = 0
+        self._last_engagement: str = "unknown"
 
     def status(self) -> dict[str, Any]:
         return {"running": self.running, "enabled": self.enabled, "last_error": self.last_error}
@@ -1241,6 +1259,16 @@ class SceneWorker:
                 else:
                     updated = scene_cache.update(summary, meta)
                     event_log.append("scene_updated", updated)
+                # M13: track engagement-level changes for metrics dashboard
+                _eng_match = re.search(r"Engagement:\s*(\w+)", summary, re.IGNORECASE)
+                new_engagement = _eng_match.group(1).lower() if _eng_match else "unknown"
+                if new_engagement != "unknown" and new_engagement != self._last_engagement:
+                    event_log.append("scene_engagement_changed", {
+                        "from": self._last_engagement,
+                        "to": new_engagement,
+                        "scene_preview": summary[:160],
+                    })
+                    self._last_engagement = new_engagement
                 self.last_error = ""
                 self._consecutive_errors = 0
             except asyncio.CancelledError:
@@ -2409,11 +2437,15 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
 
     # recent episodic
     recent_lines: list[str] = []
+    memory_retrieved_count: int = 0
+    memory_retrieved_ids: list[str] = []
     if visitor_name and tuning.memory.recent_injection.enabled:
         recent_eps = episodic_memory.query_by_name(
             visitor_name, limit=tuning.memory.recent_injection.limit
         )
         recent_lines = _format_recent_episodic(recent_eps)
+        memory_retrieved_count = len(recent_eps)
+        memory_retrieved_ids = [ep.id for ep in recent_eps]
 
     # echoes / chinese gate (приоритет — echoes, потом chinese)
     # mood = _resolve_mood(scene_cache.text, sensors)  # disabled: VLM outputs English, Russian keywords never match
@@ -2582,6 +2614,8 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
 
     llm_cfg = settings.section("services").get("llm", {})
     tts_cfg = settings.section("services").get("tts", {})
+    _tuning_raw = json.dumps(tuning.dict() if hasattr(tuning, "dict") else {}, sort_keys=True, default=str)
+    tuning_hash = hashlib.md5(_tuning_raw.encode()).hexdigest()[:8]
     metrics_log.append({
         "turn_id": turn_id,
         "source": source,
@@ -2599,8 +2633,21 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         "llm_model": str(llm_cfg.get("model") or ""),
         "llm_provider": str(llm_cfg.get("provider") or ""),
         "tts_speaker": str(tts_cfg.get("speaker") or ""),
-        "llm_error": llm_error,
+        "llm_error": bool(llm_error),
         "action": action.kind,
+        # --- metrics v2 fields (diploma research) ---
+        "action_kind": action.kind,
+        "action_reason": action.reason,
+        "session_id": acc.session_id,
+        "session_turn": acc.turn_count,
+        "tuning_hash": tuning_hash,
+        "echo_injected": bool(echo_meta),
+        "echo_pool": echo_meta.get("pool") if echo_meta else None,
+        "echo_score": round(float(echo_meta["score"]), 4) if echo_meta and echo_meta.get("score") is not None else None,
+        "visitor_name": visitor_name,
+        "memory_retrieved_count": memory_retrieved_count,
+        "memory_retrieved_ids": memory_retrieved_ids,
+        "semantic_used": bool(trace_record.get("semantic_used")),
     })
 
     trace_record.update(
@@ -3350,6 +3397,7 @@ def _rebuild_clients(section_path: str) -> list[str]:
     return restarted
 
 
+from adam.metrics_dashboard import MetricsDashboard as _MetricsDashboard
 _runtime_deps = RuntimeDeps(
     settings=settings,
     event_log=event_log,
@@ -3366,6 +3414,8 @@ _runtime_deps = RuntimeDeps(
     run_dialogue_turn=_run_dialogue_turn,
     episodic_memory=episodic_memory,
     get_voice_loop=lambda: voice_loop,
+    sessions_log=sessions_log,
+    metrics_dashboard=_MetricsDashboard(settings.data_dir),
 )
 app.include_router(build_router(_runtime_deps))
 

@@ -134,24 +134,212 @@ function buildDetailContent(item, fullData) {
   ]);
 }
 
+// ── Analytics helpers ─────────────────────────────────────────────────
+
+function statusColor(status) {
+  if (status === "ok") return "var(--good, #4caf50)";
+  if (status === "warn") return "var(--warning, #ff9800)";
+  if (status === "no_data" || status === "no_test_data") return "var(--muted)";
+  if (status === "insufficient_data" || status === "degraded") return "var(--warning, #ff9800)";
+  return "var(--muted)";
+}
+
+function automationBadge(level) {
+  const map = {
+    full: { label: "авто", color: "var(--good, #4caf50)" },
+    proxy: { label: "прокси", color: "var(--accent)" },
+    heuristic: { label: "эвристика", color: "var(--accent)" },
+    partial: { label: "частично", color: "var(--warning, #ff9800)" },
+    semi: { label: "тест", color: "var(--warning, #ff9800)" },
+  };
+  const cfg = map[level] || { label: level || "?", color: "var(--muted)" };
+  return el("span", {
+    style: `font-size:10px; padding:1px 5px; border-radius:2px; border:1px solid ${cfg.color}; color:${cfg.color}; letter-spacing:0.05em`,
+  }, cfg.label);
+}
+
+function pct(val) {
+  if (val == null) return "—";
+  return `${(val * 100).toFixed(1)}%`;
+}
+
+function fmtVal(m) {
+  if (m == null || m.value == null) return "—";
+  if (m.value_pct != null) return `${m.value_pct}%`;
+  if (typeof m.value === "number") return String(m.value);
+  return String(m.value);
+}
+
+function metricCard(id, label, m) {
+  if (!m) return el("div", { class: "card" }, el("div", { class: "card-body muted" }, label + ": нет данных"));
+  const color = statusColor(m.status);
+  const val = fmtVal(m);
+  return el("div", { class: "card", style: "min-width:0" }, [
+    el("div", { class: "card-header", style: "gap:6px" }, [
+      el("span", { class: "mono", style: "font-size:11px; color:var(--muted)" }, id),
+      el("span", { class: "card-title", style: "font-size:12px; flex:1" }, label),
+      m.automation ? automationBadge(m.automation) : null,
+    ]),
+    el("div", { class: "card-body", style: "display:flex; flex-direction:column; gap:6px" }, [
+      el("div", { style: `font-size:24px; font-family:var(--font-mono); color:${color}; line-height:1` }, val),
+      m.note ? el("div", { style: "font-size:11px; color:var(--muted); line-height:1.4" }, m.note) : null,
+      m.action_kinds ? el("div", { style: "font-size:11px; font-family:var(--font-mono); color:var(--muted)" },
+        Object.entries(m.action_kinds).map(([k, v]) => `${k}:${v}`).join("  ")) : null,
+      m.avg != null && id === "M9" ? el("div", { style: "font-size:11px; color:var(--muted); font-family:var(--font-mono)" },
+        `avg:${m.avg} med:${m.median} max:${m.max}`) : null,
+    ]),
+  ]);
+}
+
+function latencyBlock(m10) {
+  if (!m10 || m10.status === "no_data") return el("div", { class: "card-body muted" }, "нет данных о латентности");
+  const rows = [
+    ["ASR", m10.asr_ms],
+    ["LLM", m10.llm_ms],
+    ["TTS", m10.tts_ms],
+    ["∑ Total", m10.total_ms],
+  ];
+  return el("div", { style: "display:grid; grid-template-columns:repeat(4,1fr); gap:8px" },
+    rows.map(([label, s]) => el("div", { class: "card", style: "min-width:0" }, [
+      el("div", { class: "card-header" }, [
+        el("span", { class: "card-title" }, label),
+        automationBadge("full"),
+      ]),
+      s ? el("div", { class: "card-body", style: "display:grid; grid-template-columns:repeat(4,1fr); gap:4px; font-family:var(--font-mono); font-size:12px" }, [
+        kv("min", s.min), kv("avg", s.avg), kv("p95", s.p95), kv("max", s.max),
+      ]) : el("div", { class: "card-body muted" }, "—"),
+    ]))
+  );
+}
+
+function blockSection(title, cards) {
+  return el("section", { class: "col", style: "gap:8px" }, [
+    el("div", { class: "caps", style: "color:var(--muted); font-size:11px; padding:4px 0; border-bottom:1px solid var(--line)" }, title),
+    el("div", { style: "display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:8px" }, cards),
+  ]);
+}
+
+function sessionsTable(sessions) {
+  if (!sessions || !sessions.length) return el("div", { class: "card-body muted" }, "нет закрытых сессий");
+  const rows = sessions.slice().reverse().slice(0, 20);
+  return el("div", { style: "overflow-x:auto" }, [
+    el("table", { style: "width:100%; border-collapse:collapse; font-size:12px" }, [
+      el("thead", null, el("tr", { style: "background:var(--bg-2); color:var(--muted); font-size:10px; text-transform:uppercase" }, [
+        ["Время", "left"], ["Turn'ы", "right"], ["Сек", "right"], ["Имя", "left"],
+        ["Значимость", "right"], ["Темы", "left"], ["Эпизод", "center"],
+      ].map(([h, a]) => el("th", { style: `padding:6px 8px; text-align:${a}` }, h)))),
+      el("tbody", null, rows.map(s => el("tr", { style: "border-bottom:1px solid var(--bg-3)" }, [
+        el("td", { style: "padding:5px 8px; font-family:var(--font-mono); color:var(--muted)" }, (s.ts || "").slice(0, 16)),
+        el("td", { style: "padding:5px 8px; text-align:right; font-family:var(--font-mono)" }, String(s.turn_count ?? "—")),
+        el("td", { style: "padding:5px 8px; text-align:right; font-family:var(--font-mono)" }, String(s.duration_s ?? "—")),
+        el("td", { style: "padding:5px 8px" }, s.visitor_name || el("span", { class: "muted" }, "анон")),
+        el("td", { style: "padding:5px 8px; text-align:right; font-family:var(--font-mono); color:var(--accent)" }, s.salience != null ? s.salience.toFixed(3) : "—"),
+        el("td", { style: "padding:5px 8px; color:var(--muted)" }, (s.themes || []).slice(0, 3).join(", ") || "—"),
+        el("td", { style: "padding:5px 8px; text-align:center" }, s.episode_committed
+          ? el("span", { style: "color:var(--good, #4caf50)" }, "✓")
+          : el("span", { class: "muted" }, "—")),
+      ]))),
+    ]),
+  ]);
+}
+
 // ── Mount ─────────────────────────────────────────────────────────────
 
 export function mount(target) {
   // ── Tab state ──
   let activeTab = "metrics";
 
-  const metricsBtn = el("button", { class: "btn", onclick: () => switchTab("metrics") }, "Метрики");
-  const promptsBtn = el("button", { class: "btn btn-ghost", onclick: () => switchTab("prompts") }, "Промты");
+  const metricsBtn  = el("button", { class: "btn",        onclick: () => switchTab("metrics")   }, "Метрики");
+  const analyticsBtn = el("button", { class: "btn btn-ghost", onclick: () => switchTab("analytics") }, "Аналитика");
+  const promptsBtn  = el("button", { class: "btn btn-ghost", onclick: () => switchTab("prompts")  }, "Промты");
 
-  const metricsSection = el("div");
-  const promptsSection = el("div", { style: "display:none" });
+  const metricsSection   = el("div");
+  const analyticsSection = el("div", { style: "display:none" });
+  const promptsSection   = el("div", { style: "display:none" });
 
   function switchTab(tab) {
     activeTab = tab;
-    metricsSection.style.display = tab === "metrics" ? "" : "none";
-    promptsSection.style.display = tab === "prompts" ? "" : "none";
-    metricsBtn.className = tab === "metrics" ? "btn" : "btn btn-ghost";
-    promptsBtn.className = tab === "prompts" ? "btn" : "btn btn-ghost";
+    metricsSection.style.display   = tab === "metrics"   ? "" : "none";
+    analyticsSection.style.display = tab === "analytics" ? "" : "none";
+    promptsSection.style.display   = tab === "prompts"   ? "" : "none";
+    metricsBtn.className   = tab === "metrics"   ? "btn" : "btn btn-ghost";
+    analyticsBtn.className = tab === "analytics" ? "btn" : "btn btn-ghost";
+    promptsBtn.className   = tab === "prompts"   ? "btn" : "btn btn-ghost";
+    if (tab === "analytics" && !_dashboardLoaded) refreshDashboard();
+  }
+
+  // ── Analytics section ──
+  let _dashboardLoaded = false;
+  const dashRoot = el("div", { class: "col", style: "gap:12px" });
+  const dashStatus = el("div", { class: "muted", style: "font-size:12px" }, "");
+  const dashRefreshBtn = el("button", { class: "btn", onclick: () => refreshDashboard() }, "Обновить");
+  const sessionsRoot = el("div");
+
+  analyticsSection.appendChild(el("section", { class: "col", style: "gap:12px" }, [
+    el("div", { class: "row" }, [
+      el("div", { class: "caps" }, "Дипломные метрики · автовычисление"),
+      el("span", { class: "spacer" }),
+      dashStatus,
+      dashRefreshBtn,
+    ]),
+    dashRoot,
+    el("section", { class: "card" }, [
+      el("div", { class: "card-header" }, el("span", { class: "card-title" }, "История сессий")),
+      el("div", { class: "card-body", style: "padding:0" }, [sessionsRoot]),
+    ]),
+  ]));
+
+  async function refreshDashboard() {
+    dashStatus.textContent = "вычисление…";
+    _dashboardLoaded = true;
+    try {
+      const [dash, sess] = await Promise.all([
+        api.get("/api/metrics/dashboard?window=300"),
+        api.get("/api/metrics/sessions?limit=50"),
+      ]);
+
+      dashRoot.innerHTML = "";
+      const b = dash.blocks || {};
+      const rn = b.role_normativity || {};
+      const mt = b.memory_temporal || {};
+      const ia = b.interactivity || {};
+
+      dashRoot.appendChild(blockSection("3.4.2 Удержание роли и нормативность", [
+        metricCard("M1", "Стабильность персонажа", rn.m1_persona_consistency),
+        metricCard("M2", "Инжекция echo-реплик", rn.m2_echo_injection),
+        metricCard("M3", "Отклонения ActionLayer", rn.m3_action_rejection),
+        metricCard("M4", "Дрейф стиля (cosine)", rn.m4_style_drift),
+      ]));
+
+      dashRoot.appendChild(blockSection("3.4.3 Память и темпоральная связность", [
+        metricCard("M5", "Retrieval-активация", mt.m5_retrieval_proxy),
+        metricCard("M6", "Salience — внутр. согласованность", mt.m6_salience_internal),
+        metricCard("M7", "Консолидация — охват", mt.m7_consolidation),
+        metricCard("M8", "Межсессионная память", mt.m8_cross_session_proxy),
+      ]));
+
+      dashRoot.appendChild(blockSection("3.4.4 Интеракционность и инициатива", [
+        metricCard("M9", "Длина диалога (avg turn'ов)", ia.m9_dialog_length),
+        metricCard("M11", "Wake word (OWW scores)", ia.m11_wake_word),
+        metricCard("M12", "Half-duplex нарушения", ia.m12_half_duplex),
+        metricCard("M13", "Смены вовлечённости", ia.m13_engagement),
+      ]));
+
+      // M10 latency — отдельный широкий блок
+      dashRoot.appendChild(el("section", { class: "col", style: "gap:8px" }, [
+        el("div", { class: "caps", style: "color:var(--muted); font-size:11px; padding:4px 0; border-bottom:1px solid var(--line)" },
+          "M10 — Латентность ответа"),
+        latencyBlock(ia.m10_latency),
+      ]));
+
+      sessionsRoot.innerHTML = "";
+      sessionsRoot.appendChild(sessionsTable(sess.sessions || []));
+
+      const ts = (dash.computed_at || "").slice(11, 19);
+      dashStatus.textContent = `обновлено ${ts} · окно: ${dash.window_turns} turn'ов · ${dash.window_sessions} сессий`;
+    } catch (e) {
+      dashStatus.textContent = "ошибка: " + e.message;
+    }
   }
 
   // ── Metrics section ──
@@ -250,9 +438,11 @@ export function mount(target) {
   target.appendChild(el("section", { class: "col", style: "gap:12px" }, [
     el("div", { class: "row", style: "gap:8px; padding-bottom:4px; border-bottom:1px solid var(--line)" }, [
       metricsBtn,
+      analyticsBtn,
       promptsBtn,
     ]),
     metricsSection,
+    analyticsSection,
     promptsSection,
   ]));
 
