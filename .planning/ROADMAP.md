@@ -737,6 +737,41 @@ Plans:
 
 ---
 
+## Phase 21A: Chat EQ Real Spectrum — реальный FFT в виджете эквалайзера
+
+**Branch:** `V-S09.1-Audio_out` (existing)
+
+**Goal:** Заменить «иллюзию спектра» в виджете эквалайзера на странице чата (`wakeMeter.js`) на реальный частотный спектр FFT, посчитанный на сервере поверх того же аудио-потока, который слышат OWW/ASR. Сохранить отображение OWW score (голубая линия) и threshold (оранжевый пунктир) без изменений.
+
+**Requires:**
+
+- Phase 7 (ESP32 Mic Pipeline Refactor — MicReader keep-alive) ✓ — источник синхронизированного аудио-стрима
+- Не требует Phase 15B (Config-First Refactor): новые ключи добавляются сразу в правильный Config-First формат
+
+**Delivers:**
+
+- Серверный FFT на Jetson поверх того же буфера аудио-кадров, которые уже идут в RMS `audio_level`. Источник — `MicReader` или отдельный audio-worker; решение в фазе discuss/plan
+- Новое SSE-событие `audio_spectrum` (или расширение `audio_level` полем `bands[]`) с N log-частотных band-энергий, нормализованных в [0..1]
+- Cadence публикации спектра — отдельный параметр Config.json (целевая частота отрисовки на UI ≈ 20–30 Hz; backend cadence не выше, чтобы не насыщать SSE)
+- Новые ключи в `System/Config.json` + `System/Config.schema.json`: число bands, cadence публикации (Hz), частотный диапазон, шкала (lin/log), нормализация
+- Рефакторинг `System/WebUI/static/js/widgets/wakeMeter.js`:
+  - удалена фиксированная `EQ_SHAPE`-форма и хардкод `audioLevel * 4.0` / `sin(Date.now())`-wobble / decay `0.87`
+  - бары рендерятся напрямую из последнего пришедшего `bands[]` — **без peak-hold, без decay** (решение пользователя: «максимально честно»)
+  - градиент цвета бара по его собственному уровню: зелёный → жёлтый → красный (peak indicator + visual clipping hint)
+  - OWW score (циан) и threshold (оранжевый пунктир) — без изменений в логике
+  - починена потенциальная SSE-утечка: `dispose()` гарантированно отписывает EventSource при перерендере хост-панели
+- Подсказка под виджетом в `chat.js` обновлена: текст объясняет, что зелёные бары — реальный спектр микрофона
+- Обновлён draggable-вариант в `settings.js`: drag-to-tune threshold продолжает работать как раньше
+- Smoke-тест: на чат-панели бары следуют за голосом, при громком пике становятся красными, при тишине плоско; SSE-соединение одно на mount/unmount цикл
+
+**Requirements:** UI-EQ-01 (FFT backend), UI-EQ-02 (новое SSE-событие), UI-EQ-03 (рендер без сглаживания), UI-EQ-04 (градиент цвета по уровню), UI-EQ-05 (fix SSE leak), UI-EQ-06 (Config-First параметры FFT)
+
+**Mode:** standard | **Priority:** P2 | **Effort:** M (3–5 дней) | **Exhibition:** M
+
+**Связь с Phase 21:** Phase 21A — фокусный слайс Phase 21 (UI Rebuild). Закрывает один из её deliverables («Real-time визуализация уровня микрофона»). При запуске Phase 21 этот пункт уже будет закрыт; Phase 21 продолжит с остальными deliverables (перегруппировка UI, silence timeout, volume control).
+
+---
+
 ## Phase 23: Structural Refactor
 
 **Branch:** `refactor` (new — создаётся при старте фазы, требует feature-freeze)
