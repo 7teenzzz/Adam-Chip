@@ -7,6 +7,9 @@ PLAN.md
 !.planning/PLAN.md
 .mcp.json
 
+# Microsoft Office temp/lock files
+~$*
+
 # Temp staff
 .tmp/
 Subsystem/AdamsServer/artifacts/
