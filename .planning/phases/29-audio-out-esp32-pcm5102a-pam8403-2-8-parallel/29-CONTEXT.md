@@ -122,7 +122,7 @@
 - [ ] Wave 4: `output_target=esp32_speaker` + live `/api/agent/turn` → голос разборчивый
 - [ ] Wave 5: `tuning.voice.volume=1.0` — нет клиппинга на длинных гласных
 - [ ] Wave 5: динамики не нагреваются после 30 мин непрерывного диалога
-- [ ] Wave 6: 10 последних `tts_played` в `events.jsonl` все `target=esp32_speaker ok=true`
+- [ ] Wave 6: 10 последних `tts_finished` в `events.jsonl` все `target=esp32_speaker ok=true` (требует Wave 4 task: добавить `target` field в payload `tts_finished` в `Orchestrator.py`)
 - [ ] Wave 6: 0 `asr_result` событий с timestamp в окне `[tts_start, tts_end + post_tts_discard_window_ms]`
 - [ ] Wave 7: `docs/RUNBOOK_JETSON_EXHIBITION.md` обновлён, секция «Аудио-маршрут» с failover инструкцией
 - [ ] `Config.schema.json` `tuning.voice.volume.maximum = 1.0`, описание обновлено
