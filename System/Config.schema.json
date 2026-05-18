@@ -556,6 +556,20 @@
               "items": { "type": "number" },
               "description": "Exponential-backoff sequence (seconds) between MicReader stream-reopen attempts. Index = `min(consecutive_fail_count - 1, len - 1)`; the final element is reused indefinitely once exhausted. Default `[2, 4, 8, 15]` gives recovery under 5 s for transient drops (REQ-RECOVERY-UNDER-5SEC) while capping reconnect storms at one every 15 s. List MUST contain at least one positive number; otherwise MicReader busy-loops on failure.",
               "default": [2, 4, 8, 15]
+            },
+            "esp_stream_restart_after_fails": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "description": "Phase 21A-08 watchdog: after this many consecutive `:81/audio` open failures, MicReader auto-sends `POST :80/api/system/stream/restart` to break ESP firmware's stale-socket deadlock. ESP firmware's `:81` web-server has only 4 stream slots (CLAUDE.md gotcha); when keepalive-deaths leave them in zombie state, normal retry backoff cannot recover — only a `:81` restart frees them. Default 5 means roughly 30-45 sec of regular retries before triggering (depends on `esp_retry_backoff_sec`). The restart fires ONLY when `_probe_esp_status` returns OK (control plane on `:80` is alive) — if ESP is fully dead, restart is wasted. Cooldown is enforced via `esp_stream_restart_cooldown_sec`. Set to 0 to disable the watchdog entirely (legacy behavior).",
+              "default": 5
+            },
+            "esp_stream_restart_cooldown_sec": {
+              "type": "number",
+              "minimum": 30.0,
+              "maximum": 3600.0,
+              "description": "Phase 21A-08 watchdog: minimum interval (seconds) between two consecutive auto-restart triggers. Prevents restart-loop when ESP firmware takes longer than `esp_retry_backoff_sec` window to bring `:81` server back up — without this gate, fails climb to threshold again before previous restart finished settling. Default 120 sec (2 min) is comfortable for the ~8-15 sec ESP web-stack reboot plus a safety margin. Lower values (60 sec) can be used during exhibition for faster recovery at the risk of restart spam; higher values (300 sec) for conservative maintenance-mode operation.",
+              "default": 120.0
             }
           }
         },
