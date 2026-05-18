@@ -509,6 +509,66 @@ class MicReader:
         self._normalize_factor = int(audio_cfg.get("normalize_factor", self._normalize_factor))
         self._frame_bytes = max(2, int(self._sample_rate * 2 * self._frame_ms / 1000))
 
+        # Phase 21A: hot-reload spectrum_* keys (D-16). spectrum_* deltas
+        # are LIVE — they MUST NOT force restart_needed=True. Floor/ceiling
+        # and the colour thresholds are simple scalar updates; bands/min/max
+        # plus a structural sample_rate/frame_ms change rebuild the band
+        # table; cadence_hz or frame_ms changes recompute the emit gate.
+        old_bands = self._spec_n_bands
+        old_min = self._spec_min_hz
+        old_max = self._spec_max_hz
+        old_cad = self._spec_cadence_hz
+
+        self._spec_n_bands = int(audio_cfg.get("spectrum_bands", self._spec_n_bands))
+        self._spec_min_hz = float(audio_cfg.get("spectrum_min_hz", self._spec_min_hz))
+        self._spec_max_hz = float(audio_cfg.get("spectrum_max_hz", self._spec_max_hz))
+        self._spec_floor_db = float(audio_cfg.get("spectrum_floor_db", self._spec_floor_db))
+        self._spec_ceiling_db = float(audio_cfg.get("spectrum_ceiling_db", self._spec_ceiling_db))
+        self._spec_cadence_hz = float(audio_cfg.get("spectrum_cadence_hz", self._spec_cadence_hz))
+        self._spec_color_yellow_at = float(
+            audio_cfg.get("spectrum_color_yellow_at", self._spec_color_yellow_at)
+        )
+        self._spec_color_red_at = float(
+            audio_cfg.get("spectrum_color_red_at", self._spec_color_red_at)
+        )
+
+        table_dirty = (
+            self._spec_n_bands != old_bands
+            or self._spec_min_hz != old_min
+            or self._spec_max_hz != old_max
+            or restart_needed  # sample_rate / frame_ms / profile already flagged a rebuild
+        )
+        cadence_dirty = (
+            self._spec_cadence_hz != old_cad or restart_needed
+        )
+
+        if table_dirty:
+            self._spec_n_fft = max(64, int(self._sample_rate * self._frame_ms / 1000))
+            self._spec_hann = np.hanning(self._spec_n_fft).astype(np.float32)
+            self._spec_mag_ref = 0.5 * 32768.0 * float(self._spec_hann.sum())
+            self._spec_band_table = _build_log_band_table(
+                self._spec_n_fft,
+                self._sample_rate,
+                self._spec_n_bands,
+                self._spec_min_hz,
+                self._spec_max_hz,
+            )
+            self._emit(
+                "spectrum_band_table_rebuilt",
+                {
+                    "n_bands": self._spec_n_bands,
+                    "n_fft": self._spec_n_fft,
+                    "min_hz": self._spec_min_hz,
+                    "max_hz": self._spec_max_hz,
+                },
+            )
+
+        if cadence_dirty:
+            frame_hz = 1000.0 / max(1, self._frame_ms)
+            self._audio_level_emit_every_n = max(
+                1, int(round(frame_hz / max(1e-6, self._spec_cadence_hz)))
+            )
+
         # ASR-side (live re-read, no restart).
         self._disable_local_fallback = bool(asr_cfg.get("disable_local_fallback", self._disable_local_fallback))
         self._open_timeout_sec = int(asr_cfg.get("esp_open_timeout_sec", self._open_timeout_sec))
