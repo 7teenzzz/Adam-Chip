@@ -346,6 +346,7 @@ export function mount(target) {
   }
 
   let jetTimer = null, jetInflight = false;
+  let _ttsIdleTimer = null;
 
   function refreshSnapshot() {
     if (jetInflight) return;
@@ -619,6 +620,8 @@ export function mount(target) {
     } else if (ev.type === "endpointing_started") {
       startCountdown(ev.payload?.duration_ms ?? 3500);
     } else if (ev.type === "asr_reply_window_open") {
+      clearTimeout(_ttsIdleTimer);
+      _ttsIdleTimer = null;
       updateHearing("reply");
       startCountdown((ev.payload?.timeout_sec ?? 4) * 1000);
     } else if (ev.type === "mic_muted" && ev.payload?.reason === "asr_transcribing") {
@@ -630,13 +633,18 @@ export function mount(target) {
       updateHearing("tts");
       stopCountdown();
     } else if (ev.type === "tts_finished") {
-      if (hearingState === "tts") routeToIdle();
+      if (hearingState === "tts") {
+        clearTimeout(_ttsIdleTimer);
+        _ttsIdleTimer = setTimeout(routeToIdle, 600);
+      }
     } else if (
       ev.type === "wake_silence_timeout" ||
       ev.type === "asr_no_reply_standby" ||
       ev.type === "reply_window_expired" ||
       ev.type === "asr_wake_only"
     ) {
+      clearTimeout(_ttsIdleTimer);
+      _ttsIdleTimer = null;
       if (["listening", "reply", "transcribing"].includes(hearingState)) routeToIdle();
       stopCountdown();
     } else if (ev.type === "llm_thinking_finished") {
@@ -647,6 +655,8 @@ export function mount(target) {
 
   input.focus();
   return () => {
+    clearTimeout(_ttsIdleTimer);
+    _ttsIdleTimer = null;
     unsubscribe();
     unsubScene();
     stopJetTimer();

@@ -451,6 +451,7 @@ class VoiceLoopController:
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
         self._STANDBY_GUARD_SEC: float = 0.3    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
         self._REPLY_GUARD_SEC: float = 0.6      # post-TTS guard for reply state — suppress echo of own TTS picked up by ESP32 mic
+        self._NO_REPLY_OWW_GUARD_SEC: float = 2.5  # OWW guard after reply→standby: covers ~2.3s ESP32 FIFO lag carrying reply-window user speech
         self._wake_detected_at: float = 0.0
         # LISTENING-phase silence timer: how long the voice loop waits for the
         # user to start speaking after the wake word fires. Reference logic = 6s.
@@ -1044,8 +1045,18 @@ class VoiceLoopController:
                                 "discard_window_sec": self._post_tts_discard_window_ms / 1000.0,
                             })
                         else:
+                            _was_reply = self._voice_state == "reply"
                             self._set_voice_state("standby", "no_reply")
-                            self._standby_entry_time = time.perf_counter()
+                            if _was_reply:
+                                # Extend OWW guard to cover ESP32 FIFO lag (~2.3s): user speech
+                                # from the reply window arrives at OWW ~2.3s later and triggers
+                                # false wake detections. _NO_REPLY_OWW_GUARD_SEC suppresses OWW
+                                # until the FIFO tail has passed. LISTENING→STANDBY uses the
+                                # normal guard (user typically said little or nothing).
+                                _extra = max(0.0, self._NO_REPLY_OWW_GUARD_SEC - self._STANDBY_GUARD_SEC)
+                                self._standby_entry_time = time.perf_counter() + _extra
+                            else:
+                                self._standby_entry_time = time.perf_counter()
                             event_log.append("asr_no_reply_standby", {
                                 "reason": "no_spoken_response"
                             })
@@ -2535,7 +2546,13 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         )
 
     action = action_layer.infer(reply, {"sensors": sensors, "scene": scene_cache.as_dict()})
-    mcu_result = await _execute_action(action)
+    if action.kind == "no_action":
+        mcu_result: dict[str, Any] = {"ok": True, "status": 204, "data": {"action": "no_action"}, "error": None}
+    else:
+        # Non-blocking: MCU HTTP (set_scene/set_channel) can take 1-3s and must
+        # not delay mic_unmuted / asr_reply_window_open. Fire and forget.
+        asyncio.create_task(_fire_mcu_action(action, turn_id), name=f"mcu_{turn_id or 'anon'}")
+        mcu_result = {"ok": None, "status": None, "data": {"action": "dispatched_async"}, "error": None}
 
     total_ms = round((time.perf_counter() - t_total) * 1000, 1)
     timings = {"asr_ms": asr_ms, "llm_ms": llm_ms, "ttfv_ms": ttfv_ms, "tts_ms": tts_ms, "total_ms": total_ms}
@@ -2938,6 +2955,14 @@ async def _execute_action(action: Any) -> dict[str, Any]:
     if action.kind == "channel" and action.channel is not None and action.value is not None:
         return (await mcu.set_channel(action.channel, action.value)).as_dict()
     return {"ok": True, "status": 204, "data": {"action": "no_action"}, "error": None}
+
+
+async def _fire_mcu_action(action: Any, turn_id: str | None) -> None:
+    """Fire-and-forget wrapper so MCU HTTP latency never blocks mic_unmuted."""
+    try:
+        await _execute_action(action)
+    except Exception as exc:
+        event_log.append("mcu_action_error", {"action": action.kind, "error": str(exc)}, turn_id=turn_id)
 
 
 def _exhibition_gate(
