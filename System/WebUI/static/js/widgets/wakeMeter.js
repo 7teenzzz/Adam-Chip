@@ -128,8 +128,13 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
   }
 
   let rafId = null;
+  // Phase 21A Plan 05 (UI-EQ-05): idempotent dispose. The flag both gates
+  // double-dispose and stops any mid-flight RAF callback from re-scheduling
+  // after the EventSource has already been unsubscribed (race on panel swap).
+  let disposed = false;
 
   function draw() {
+    if (disposed) return;
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     if (rect.width > 0) {
@@ -309,9 +314,15 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
   }, () => {});
 
   function dispose() {
+    if (disposed) return;
+    disposed = true;
     if (rafId) cancelAnimationFrame(rafId);
     rafId = null;
-    if (typeof unsub === "function") unsub();
+    if (typeof unsub === "function") {
+      try {
+        unsub();
+      } catch (_) {}
+    }
   }
 
   return { canvas, dispose, state };
