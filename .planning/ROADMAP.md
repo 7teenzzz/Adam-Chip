@@ -768,13 +768,13 @@ Plans:
 
 **Mode:** standard | **Priority:** P2 | **Effort:** M (3–5 дней) | **Exhibition:** M
 
-**Plans:** 7 plans
+**Plans:** 4/7 plans executed
 
 Plans:
-- [ ] 21A-01-PLAN.md — Wave 0 test stubs: tests/test_mic_reader_spectrum.py + conftest fixtures (UI-EQ-01/02/06)
-- [ ] 21A-02-PLAN.md — Config keys + schema: 8 spectrum_* keys in media.audio (UI-EQ-06)
-- [ ] 21A-03-PLAN.md — MicReader FFT pipeline + 25 Hz cadence + hot-reload (UI-EQ-01/02/06)
-- [ ] 21A-04-PLAN.md — events.jsonl writing-side sampler (UI-EQ-02; mitigates 417 MB growth)
+- [x] 21A-01-PLAN.md — Wave 0 test stubs: tests/test_mic_reader_spectrum.py + conftest fixtures (UI-EQ-01/02/06)
+- [x] 21A-02-PLAN.md — Config keys + schema: 8 spectrum_* keys in media.audio (UI-EQ-06)
+- [x] 21A-03-PLAN.md — MicReader FFT pipeline + 25 Hz cadence + hot-reload (UI-EQ-01/02/06)
+- [x] 21A-04-PLAN.md — events.jsonl writing-side sampler (UI-EQ-02; mitigates 417 MB growth)
 - [ ] 21A-05-PLAN.md — wakeMeter.js refactor: bands[24] render, color gradient, idempotent dispose (UI-EQ-03/04/05)
 - [ ] 21A-06-PLAN.md — chat.js hint + settings.js draggable audit (UI-EQ-03)
 - [ ] 21A-07-PLAN.md — Manual smoke test against live Orchestrator (all UI-EQ-*)
