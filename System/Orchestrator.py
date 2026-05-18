@@ -61,7 +61,10 @@ from adam.webrtc_vad import WebRtcVadWrapper
 
 
 settings = Settings.load()
-event_log = EventLog(settings.data_dir)
+event_log = EventLog(
+    settings.data_dir,
+    audio_cfg=settings.section("media").get("audio", {}),
+)
 metrics_log = MetricsLog(settings.data_dir)
 memory = MemoryStore(settings.data_dir)
 episodic_memory = EpisodicMemory(settings.data_dir)

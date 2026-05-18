@@ -307,6 +307,13 @@
               "maximum": 1.0,
               "description": "Per-bar normalised level at which the colour reaches solid red. Bars above this are clipped/peaking — useful visual cue for input gain calibration.",
               "default": 0.85
+            },
+            "events_jsonl_sample_audio_level": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "description": "Writing-side sampler for high-frequency audio_level events in data/adam/events.jsonl. N means 'write every Nth event to disk' — at default 5 with 25 Hz spectrum cadence and bands[24] payload, on-disk pressure drops from ~36 MB/hour to ~7 MB/hour. SSE subscribers and the in-memory recent-events deque are NOT affected — every audio_level event is still broadcast at full cadence, so the chat-panel EQ widget keeps its 25 Hz responsiveness. Set to 1 to revert to legacy 1:1 logging (full forensic completeness, no disk-side compression). Set to 25 for maximum compression (~1 Hz effective on-disk cadence). Mitigation for RESEARCH §5/§12 (Phase 21A CONTEXT D-04).",
+              "default": 5
             }
           }
         },
