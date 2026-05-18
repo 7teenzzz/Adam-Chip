@@ -191,6 +191,17 @@ class MicReader:
         self._backoff_seq = [float(x) for x in backoff_seq if isinstance(x, (int, float)) and x > 0]
         if not self._backoff_seq:
             self._backoff_seq = [2.0]
+        # Phase 21A-08 watchdog: auto-restart ESP :81 web-server when
+        # `:81/audio` open keeps failing despite `:80` being alive.
+        # ESP firmware's 4-slot limit + zombie keepalive-death sockets
+        # create deadlocks that normal backoff cannot recover from
+        # (see CLAUDE.md gotcha). 0 disables the watchdog entirely.
+        self._esp_stream_restart_after_fails = int(
+            asr_cfg.get("esp_stream_restart_after_fails", 5)
+        )
+        self._esp_stream_restart_cooldown_sec = float(
+            asr_cfg.get("esp_stream_restart_cooldown_sec", 120.0)
+        )
 
         self._mcu = mcu
         self._on_event = on_event
@@ -207,6 +218,9 @@ class MicReader:
         self._raw_level_l: float = 0.0
         self._raw_level_r: float = 0.0
         self._consecutive_fails: int = 0
+        # Phase 21A-08 watchdog: perf_counter() of last auto-restart trigger.
+        # Cooldown gate prevents restart-loop while ESP firmware reboots :81.
+        self._last_auto_restart_t: float = 0.0
         self._dropped_total: int = 0
         self._dropped_since_last_event: int = 0
         self._last_overflow_event_t: float = 0.0
@@ -577,6 +591,13 @@ class MicReader:
         cleaned = [float(x) for x in backoff_seq if isinstance(x, (int, float)) and x > 0]
         if cleaned:
             self._backoff_seq = cleaned
+        # Phase 21A-08 watchdog — hot-reload.
+        self._esp_stream_restart_after_fails = int(
+            asr_cfg.get("esp_stream_restart_after_fails", self._esp_stream_restart_after_fails)
+        )
+        self._esp_stream_restart_cooldown_sec = float(
+            asr_cfg.get("esp_stream_restart_cooldown_sec", self._esp_stream_restart_cooldown_sec)
+        )
 
         return restart_needed
 
@@ -806,6 +827,44 @@ class MicReader:
         idx = min(max(0, fail_idx - 1), len(self._backoff_seq) - 1)
         return float(self._backoff_seq[idx])
 
+    async def _trigger_stream_restart(self) -> bool:
+        """Phase 21A-08 watchdog: POST :80/api/system/stream/restart to ESP32.
+
+        Called from `_run` when `_consecutive_fails` crosses the configured
+        threshold AND probe shows ESP control-plane is alive. The endpoint
+        restarts the firmware's :81 web-server only — releases the 4-slot
+        audio-stream socket pool from zombie keepalive-death sessions
+        (CLAUDE.md gotcha). Returns True on HTTP 2xx.
+        """
+        if self._mcu is None:
+            self._emit(
+                "mic_reader_stream_restart_triggered",
+                {"ok": False, "consecutive_fails": self._consecutive_fails, "error": "no_mcu"},
+            )
+            return False
+        try:
+            result = await self._mcu.stream_restart()
+            ok = bool(getattr(result, "ok", False))
+            payload: dict[str, Any] = {
+                "ok": ok,
+                "consecutive_fails": self._consecutive_fails,
+                "status_code": int(getattr(result, "status", 0) or 0),
+            }
+            if not ok:
+                payload["error"] = str(getattr(result, "error", "") or "")[:200]
+            self._emit("mic_reader_stream_restart_triggered", payload)
+            return ok
+        except Exception as exc:  # noqa: BLE001 — watchdog must never crash the loop
+            self._emit(
+                "mic_reader_stream_restart_triggered",
+                {
+                    "ok": False,
+                    "consecutive_fails": self._consecutive_fails,
+                    "error": str(exc)[:200],
+                },
+            )
+            return False
+
     # ── Internal: socket reader thread ────────────────────────────────
 
     def _socket_reader_thread(
@@ -974,6 +1033,34 @@ class MicReader:
                     except asyncio.CancelledError:
                         raise
                     continue
+
+            # Phase 21A-08 watchdog gate. Probe just succeeded (or was
+            # skipped), so ESP :80 is alive. If :81/audio open keeps
+            # failing past the configured threshold, ESP firmware's :81
+            # web-server is likely deadlocked on zombie audio slots —
+            # restart it via :80/api/system/stream/restart. Cooldown is
+            # enforced via _last_auto_restart_t so we do not loop when
+            # ESP takes >backoff to come back up.
+            if (
+                self._esp_stream_restart_after_fails > 0
+                and self._consecutive_fails >= self._esp_stream_restart_after_fails
+                and (time.perf_counter() - self._last_auto_restart_t)
+                >= self._esp_stream_restart_cooldown_sec
+            ):
+                self._last_auto_restart_t = time.perf_counter()
+                restart_ok = await self._trigger_stream_restart()
+                # Give ESP firmware time to spin :81 back up. ~8 sec is
+                # comfortably above observed reboot time on this hardware.
+                try:
+                    await asyncio.sleep(8.0)
+                except asyncio.CancelledError:
+                    raise
+                if restart_ok:
+                    # Reset fail counter so we don't immediately re-arm
+                    # the watchdog on the very next attempt; the next
+                    # :81/audio open gets a clean retry budget.
+                    self._consecutive_fails = 0
+                continue
 
             url = self._mcu.mic_stream_url() if self._mcu is not None else ""
             profile = self._profile
