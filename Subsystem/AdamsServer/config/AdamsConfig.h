@@ -97,7 +97,7 @@ inline constexpr uint8_t kAudioChannels = 1;
 inline constexpr uint8_t kAudioPreferredSlot = 1;  // 1 = left, 2 = right
 inline constexpr uint8_t kAudioI2sStdFormat = 2;   // 1 = Philips, 2 = MSB
 inline constexpr uint8_t kAudioCaptureShift = 0;
-inline constexpr size_t kAudioRingBufferBytes = 262144;  // 4s stereo @ 16kHz 16-bit
+inline constexpr size_t kAudioRingBufferBytes = 16384;  // 256ms stereo @ 16kHz 16-bit — caps reader lag at ~256ms (drop-oldest on overflow). Was 262144 (4s); equilibrium lag of ~2.3s caused TTS-tail echo into ASR after mic_unmute.
 inline constexpr size_t kAudioReadChunkBytes = 1024;
 inline constexpr size_t kSpeakerRingBufferBytes = 32768;
 inline constexpr size_t kSpeakerReadChunkBytes = 1024;

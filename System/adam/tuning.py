@@ -1,22 +1,23 @@
 """Runtime-настройки персоны Адама.
 
-`Tuning.json` редактируется из WebUI и hot-reloadable.
-Инфраструктура (камеры, MCU, endpoints LLM/ASR/TTS) — отдельно в Settings/Config.json.
+Раньше эти параметры жили в `Agent Adam Chip/Tuning.json` — отдельный файл с
+hot-reload по mtime. В рамках миграции на single-source-of-truth все параметры
+переехали в `System/Config.json` (секция `tuning`). Этот модуль сохраняет
+pydantic-модели и API `TuningStore`, но backing store теперь — `Settings`,
+читающий Config.json. Внешние импорты (`from .tuning import ...`) не меняются.
 """
 from __future__ import annotations
 
-import json
+import copy
 import logging
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from .config import PROJECT_ROOT
+from .config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, Settings
 
 log = logging.getLogger(__name__)
-
-DEFAULT_TUNING_PATH = PROJECT_ROOT / "Agent Adam Chip" / "Tuning.json"
 
 
 # ---------- Pydantic-модели ----------
@@ -157,6 +158,9 @@ class DiagnosticsTuning(BaseModel):
     log_level: Literal["debug", "info", "warning", "error"] = "info"
     metrics_enabled: bool = True
     trace_prompts: bool = False
+    # Phase 11 lag-source diagnostic — emits ~200 mic_lag_diag_chunk events
+    # per post-TTS turn while True. Use scripts/diag_lag_source.py to analyse.
+    trace_post_tts_lag: bool = False
 
 
 class Tuning(BaseModel):
@@ -173,53 +177,72 @@ class Tuning(BaseModel):
     diagnostics: DiagnosticsTuning = Field(default_factory=DiagnosticsTuning)
 
 
-# ---------- Store с hot-reload ----------
+# ---------- Store с hot-reload (теперь поверх Config.json) ----------
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for key, value in override.items():
+        if key in out and isinstance(out[key], dict) and isinstance(value, dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
 class TuningStore:
-    """Singleton-обёртка над Tuning. Перечитывает файл при изменении mtime.
+    """Singleton-обёртка над Tuning, читает секцию `tuning` из Config.json.
 
-    Использование:
-        store = TuningStore(path)
-        cfg = store.current()       # Tuning instance
-        store.apply_patch({...})    # частичное обновление + сохранение
-        store.subscribe(callback)   # уведомления при перезагрузке
+    Использование (без изменений по сравнению с прошлой версией):
+        store = TuningStore()         # path-аргумент проигнорирован
+        cfg = store.current()         # Tuning instance
+        store.apply_patch({...})      # частичное обновление + сохранение
+        store.subscribe(callback)     # уведомления при перезагрузке
+
+    Hot-reload: poll'ит mtime Config.json. Если файл изменился извне
+    (например, ручной редактирующий) — кэш перечитывается на следующем
+    вызове .current().
     """
 
     def __init__(self, path: Path | None = None) -> None:
-        self.path = Path(path) if path else DEFAULT_TUNING_PATH
+        # path-аргумент сохраняется только ради обратной совместимости
+        # с вызовами из Engineering/consolidator.py и тестов. Реально
+        # читаем/пишем в Config.json — единый источник истины.
+        if path is not None:
+            log.debug("TuningStore: ignoring legacy path=%s (using Config.json)", path)
         self._lock = threading.RLock()
         self._mtime: float = 0.0
-        self._cache: Tuning = Tuning()  # дефолт пока не загружен
-        self._listeners: list[callable] = []
+        self._cache: Tuning = Tuning()
+        self._listeners: list = []
         self._load_initial()
 
+    @property
+    def path(self) -> Path:
+        """Возвращает путь к backing-store (Config.json) — для обратной совместимости."""
+        return DEFAULT_CONFIG_PATH
+
     def _load_initial(self) -> None:
-        if not self.path.exists():
-            log.warning("Tuning file not found at %s, using defaults", self.path)
-            return
         try:
             self._reload_locked()
         except Exception as exc:  # pragma: no cover
-            log.error("failed to load tuning: %s", exc, exc_info=True)
+            log.error("failed to initial-load tuning from config: %s", exc, exc_info=True)
 
     def _reload_locked(self) -> Optional["Tuning"]:
-        """Reload from disk if mtime changed. Returns new Tuning if listeners should fire, else None."""
+        """Reload from Config.json if mtime changed. Returns new Tuning if changed."""
         try:
-            stat = self.path.stat()
+            stat = DEFAULT_CONFIG_PATH.stat()
         except FileNotFoundError:
             return None
         if stat.st_mtime == self._mtime and self._cache:
             return None
         try:
-            with self.path.open("r", encoding="utf-8") as handle:
-                raw = json.load(handle)
-        except (OSError, json.JSONDecodeError) as exc:
-            log.error("tuning: cannot parse %s: %s", self.path, exc)
+            settings = Settings.load()
+            raw_tuning = settings.section("tuning")
+        except Exception as exc:
+            log.error("tuning: cannot load Settings: %s", exc)
             return None
-        raw.pop("_meta", None)
         try:
-            new_cache = Tuning.model_validate(raw)
+            new_cache = Tuning.model_validate(raw_tuning)
         except ValidationError as exc:
             log.error("tuning: validation failed, keeping previous cache: %s", exc)
             return None
@@ -229,7 +252,7 @@ class TuningStore:
         return new_cache if prev != new_cache else None
 
     def current(self) -> "Tuning":
-        """Возвращает актуальный Tuning, перечитывая файл если он изменился."""
+        """Возвращает актуальный Tuning, перечитывая Config.json если он изменился."""
         with self._lock:
             changed = self._reload_locked()
             snap = self._cache
@@ -242,30 +265,32 @@ class TuningStore:
         return snap
 
     def apply_patch(self, patch: dict[str, Any]) -> "Tuning":
-        """Применяет частичное обновление, валидирует, сохраняет на диск.
-
-        Patch — dict с произвольной глубиной (deep merge поверх текущего).
-        Возвращает новый Tuning. Бросает ValidationError если patch некорректен.
-        """
+        """Частичное обновление: deep-merge поверх текущего, валидация, save в Config.json."""
         with self._lock:
             self._reload_locked()
             current_dict = self._cache.model_dump()
             merged = _deep_merge(current_dict, patch)
-            new_cache = Tuning.model_validate(merged)  # бросит если что-то не так
-            self._save_locked(new_cache)
+            new_cache = Tuning.model_validate(merged)
+            self._persist_locked(new_cache)
             self._cache = new_cache
-            self._mtime = self.path.stat().st_mtime
+            try:
+                self._mtime = DEFAULT_CONFIG_PATH.stat().st_mtime
+            except FileNotFoundError:
+                pass
             listeners = list(self._listeners)
         self._fire_listeners(new_cache, listeners)
         return new_cache
 
     def replace(self, full: dict[str, Any]) -> "Tuning":
-        """Полная замена настроек (без deep merge). Для UI-формы Restore defaults / Import."""
+        """Полная замена tuning-секции (без deep merge)."""
         with self._lock:
             new_cache = Tuning.model_validate(full)
-            self._save_locked(new_cache)
+            self._persist_locked(new_cache)
             self._cache = new_cache
-            self._mtime = self.path.stat().st_mtime
+            try:
+                self._mtime = DEFAULT_CONFIG_PATH.stat().st_mtime
+            except FileNotFoundError:
+                pass
             listeners = list(self._listeners)
         self._fire_listeners(new_cache, listeners)
         return new_cache
@@ -273,23 +298,15 @@ class TuningStore:
     def restore_defaults(self) -> Tuning:
         return self.replace(Tuning().model_dump())
 
-    def _save_locked(self, tuning: Tuning) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+    def _persist_locked(self, tuning: Tuning) -> None:
+        """Save tuning section into Config.json via Settings."""
+        settings = Settings.load()
         payload = tuning.model_dump()
-        # сохраним _meta из существующего файла если есть
-        meta: dict[str, Any] = {}
-        if self.path.exists():
-            try:
-                with self.path.open("r", encoding="utf-8") as h:
-                    meta = json.load(h).get("_meta", {})
-            except Exception:
-                pass
-        out = {"_meta": meta, **payload} if meta else payload
-        with self.path.open("w", encoding="utf-8") as handle:
-            json.dump(out, handle, indent=2, ensure_ascii=False)
+        # Полная замена секции tuning: сначала очищаем, потом мерджим.
+        settings.raw["tuning"] = copy.deepcopy(payload)
+        settings.save()
 
     def subscribe(self, callback) -> None:
-        """callback(tuning: Tuning) вызывается при изменении настроек."""
         with self._lock:
             self._listeners.append(callback)
 
@@ -299,16 +316,6 @@ class TuningStore:
                 cb(tuning)
             except Exception as exc:  # pragma: no cover
                 log.error("tuning listener failed: %s", exc, exc_info=True)
-
-
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    out = dict(base)
-    for key, value in override.items():
-        if key in out and isinstance(out[key], dict) and isinstance(value, dict):
-            out[key] = _deep_merge(out[key], value)
-        else:
-            out[key] = value
-    return out
 
 
 # ---------- Глобальный экземпляр ----------
@@ -327,3 +334,8 @@ def reset_store() -> None:
     """Только для тестов."""
     global _GLOBAL
     _GLOBAL = None
+
+
+# Legacy alias — раньше код мог ссылаться на DEFAULT_TUNING_PATH; теперь это
+# просто путь к Config.json. Оставлен для обратной совместимости тестов.
+DEFAULT_TUNING_PATH = DEFAULT_CONFIG_PATH

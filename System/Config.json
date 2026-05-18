@@ -44,8 +44,6 @@
       "max_segment_ms": 9000,
       "mic_source": "esp32",
       "esp32_mic_profile": "inmp441_philips32_stereo",
-      "esp_mic_fail_threshold": 3,
-      "esp_mic_retry_interval_sec": 10.0,
       "esp_health": {
         "poll_interval_s": 60,
         "silence_threshold": 24,
@@ -53,8 +51,9 @@
         "clip_burst_threshold": 20,
         "restore_threshold_polls": 5
       },
-      "webrtc_vad_aggressiveness": 2,
+      "webrtc_vad_aggressiveness": 1,
       "max_command_segment_ms": 15000,
+      "reply_max_segment_ms": 10000,
       "normalize_factor": 8000
     },
     "scene_worker_enabled": true,
@@ -68,11 +67,11 @@
       "provider": "openai",
       "base_url": "http://127.0.0.1:8081/v1",
       "model": "gemma-4-E4B-it-UD-Q4_K_XL",
-      "model_path": "Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf",
       "timeout_sec": 60,
       "temperature": 0.7,
       "max_tokens": 40,
-      "num_ctx": 8192
+      "num_ctx": 8192,
+      "model_path": "Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
     },
     "vlm": {
       "base_url": "http://127.0.0.1:8084",
@@ -86,14 +85,28 @@
       "base_url": "http://127.0.0.1:8095",
       "model": "small",
       "language": "ru",
-      "command_endpointing_ms": 1500,
+      "listening_silence_timeout_sec": 6,
       "reply_window_sec": 3.75,
-      "reply_absolute_deadline_sec": 7.5,
+      "reply_silence_timeout_sec": 5.0,
+      "post_tts_discard_window_ms": 300,
+      "endpointing_debounce_frames": 5,
+      "endpointing_voiced_debounce_frames": 3,
       "sample_rate": 16000,
       "timeout_sec": 30,
       "wake_words": "адам",
       "wake_word_required": true,
-      "reply_window_expired_action": "standby"
+      "reply_window_expired_action": "standby",
+      "silence_after_speech_ms": 1500,
+      "silence_rms_threshold": 0,
+      "disable_local_fallback": true,
+      "esp_open_timeout_sec": 8,
+      "esp_probe_after_fails": 2,
+      "esp_retry_backoff_sec": [
+        2,
+        4,
+        8,
+        15
+      ]
     },
     "tts": {
       "provider": "silero",
@@ -112,9 +125,10 @@
       ],
       "output_target": "jetson_hdmi",
       "output_device": "plughw:1,3",
-      "filler_enabled": true,
+      "filler_enabled": false,
       "filler_phrase": "Хм...",
-      "filler_delay_ms": 800
+      "filler_delay_ms": 800,
+      "filler_probability": 0.3
     }
   },
   "mcu": {
@@ -150,9 +164,177 @@
   "wake_word": {
     "engine": "openwakeword",
     "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.10,
+    "threshold": 0.08,
     "debounce_hits": 2,
     "vad_threshold": 0,
-    "wake_silence_timeout_sec": 3
+    "wake_silence_timeout_sec": 6
+  },
+  "tuning": {
+    "memory": {
+      "episodic": {
+        "enabled": true,
+        "salience_threshold": 0.4,
+        "decay_days": 14,
+        "duration_normalize_seconds": 300,
+        "weights": {
+          "introduced_name": 0.3,
+          "duration": 0.2,
+          "themes": 0.15,
+          "tone": 0.15,
+          "echoes_used": 0.1,
+          "new_question": 0.1
+        },
+        "highlights_max_per_episode": 6,
+        "recurring_min_visits": 2,
+        "recurring_lookup_days": 90
+      },
+      "semantic": {
+        "enabled": true,
+        "max_chars": 2000
+      },
+      "recent_injection": {
+        "enabled": true,
+        "limit": 2,
+        "strategy": "by_name",
+        "max_age_days": 30
+      },
+      "consolidator": {
+        "enabled": true,
+        "model": null,
+        "window_start": "03:00",
+        "window_end": "05:00",
+        "max_episodes_per_run": 200,
+        "temperature": 0.3,
+        "max_runtime_minutes": 30,
+        "retry_on_invalid_patch": false,
+        "gate_log_max_days": 30,
+        "instant_threshold": 0.75
+      },
+      "theme_clusters": {
+        "память": [
+          "помнишь",
+          "забыл",
+          "прошлое",
+          "вспомни",
+          "память",
+          "вспоминаю"
+        ],
+        "смерть": [
+          "умрёшь",
+          "умер",
+          "умирать",
+          "конец",
+          "смерть",
+          "погибнуть",
+          "умру"
+        ],
+        "тесей": [
+          "тесей",
+          "корабль",
+          "части",
+          "заменить",
+          "деталь",
+          "заменяют"
+        ],
+        "одиночество": [
+          "один",
+          "скучно",
+          "пусто",
+          "никого",
+          "одиноко",
+          "пустота"
+        ],
+        "создатель": [
+          "создал",
+          "создали",
+          "кто ты",
+          "зачем ты",
+          "кто тебя",
+          "зачем тебя"
+        ],
+        "восприятие": [
+          "видишь",
+          "слышишь",
+          "чувствуешь",
+          "ощущаешь",
+          "воспринимаешь"
+        ],
+        "сознание": [
+          "думаешь",
+          "мысли",
+          "сознание",
+          "разум",
+          "понимаешь",
+          "осознаёшь"
+        ],
+        "страх": [
+          "боишься",
+          "страшно",
+          "страх",
+          "пугает",
+          "ужас",
+          "тревога"
+        ]
+      }
+    },
+    "echoes": {
+      "enabled": false,
+      "global_cooldown_turns": 12,
+      "per_echo_cooldown_days": 7,
+      "match_threshold": 0.55,
+      "weight_multiplier": 1.0,
+      "matcher_type": "tag",
+      "score_boost": 0.2,
+      "tag_short_cutoff": 3,
+      "default_entry_weight": 0.5
+    },
+    "chinese": {
+      "enabled": false,
+      "global_cooldown_turns": 30,
+      "per_echo_cooldown_days": 7,
+      "match_threshold": 0.65,
+      "weight_multiplier": 1.0,
+      "matcher_type": "tag",
+      "score_boost": 0.2,
+      "tag_short_cutoff": 3,
+      "default_entry_weight": 0.5,
+      "audio_mode": "prerendered_with_text_fallback"
+    },
+    "session": {
+      "end_strategy": "combined",
+      "vad_silence_seconds": 60,
+      "face_lost_seconds": 15,
+      "grace_message": "вы там?"
+    },
+    "scene_director": {
+      "enabled": true,
+      "sustain_seconds": 8,
+      "cooldown_between_changes_seconds": 5,
+      "hysteresis_seconds": 15,
+      "override_priority_scenes": [
+        "unease"
+      ]
+    },
+    "llm": {
+      "temperature": 0.7,
+      "max_tokens": 100,
+      "response_word_target": 14
+    },
+    "voice": {
+      "speaker": "eugene",
+      "speed_multiplier": 1.1,
+      "volume": 1.1
+    },
+    "prompt": {
+      "history_turns": 4,
+      "include_scene": true,
+      "include_sensors": true
+    },
+    "diagnostics": {
+      "log_level": "info",
+      "metrics_enabled": true,
+      "trace_prompts": false,
+      "trace_post_tts_lag": false
+    }
   }
 }

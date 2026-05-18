@@ -48,6 +48,11 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
     scorePeakTs: 0,
     dragging: false,
     engineReady: false,
+    // pipelineReady stays false until the voice loop produces a real
+    // standby/listening/reply audio_level frame. While false the meter
+    // renders an "Инициализация" placeholder instead of live bars so the
+    // operator does not see the equaliser reacting to its own warmup TTS.
+    pipelineReady: false,
   };
 
   // Initial load + listen for external updates (e.g. settings page changes
@@ -90,6 +95,19 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
       const w = rect.width;
       const h = rect.height;
       ctx.clearRect(0, 0, w, h);
+
+      // Voice pipeline is still booting (warmup, no voice_loop yet) — show a
+      // calm placeholder instead of live bars driven by idle-monitor audio.
+      if (!state.pipelineReady) {
+        ctx.fillStyle = "rgba(180,180,190,0.55)";
+        ctx.font = "12px ui-sans-serif,system-ui,sans-serif";
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        ctx.fillText("⌛ Инициализация…", w / 2, h / 2);
+        ctx.textAlign = "start";
+        rafId = requestAnimationFrame(draw);
+        return;
+      }
 
       const gap = 2;
       const barW = (w - (BAR_N - 1) * gap) / BAR_N;
@@ -157,15 +175,8 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
         ctx.lineWidth = 1;
         ctx.stroke();
       }
-
-      ctx.fillStyle = "rgba(220,220,220,0.78)";
-      ctx.font = "10px ui-monospace,monospace";
-      ctx.textBaseline = "top";
-      ctx.fillText(
-        `t=${state.threshold.toFixed(2)}  s=${state.scoreDecay.toFixed(2)}  max=${state.scorePeak.toFixed(2)}`,
-        4,
-        3,
-      );
+      // Phase 9 (REQ-UI-CHAT-CLEANUP): textual overlay (t/s/max) removed —
+      // the visual bars + threshold line already convey the same information.
     }
     rafId = requestAnimationFrame(draw);
   }
@@ -204,6 +215,31 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
     if (ev.type === "audio_level") {
       const lvl = ev.payload && ev.payload.level;
       state.audioLevel = typeof lvl === "number" ? lvl : 0;
+      // First frame from the real voice loop (state is standby/listening/reply)
+      // means warmup has finished — flip out of the placeholder.
+      const vs = ev.payload && ev.payload.state;
+      if (vs === "standby" || vs === "listening" || vs === "reply") {
+        state.pipelineReady = true;
+      } else if (vs === "boot_warmup") {
+        // Explicit boot phase — keep the meter in placeholder mode even if
+        // MicReader is already streaming audio_level frames.
+        state.pipelineReady = false;
+      }
+    } else if (ev.type === "voice_loop_started") {
+      // Phase 7: voice_loop_started no longer implies pipelineReady — voice_loop
+      // starts in boot_warmup. The meter waits for voice_state_change(to=standby)
+      // or the first audio_level with state ∈ {standby, listening, reply}.
+    } else if (ev.type === "voice_state_change") {
+      const to = ev.payload && ev.payload.to;
+      if (to === "standby" || to === "listening" || to === "reply") {
+        state.pipelineReady = true;
+      } else if (to === "boot_warmup") {
+        state.pipelineReady = false;
+      }
+    } else if (ev.type === "voice_loop_stopped") {
+      state.pipelineReady = false;
+      state.audioLevel = 0;
+      for (let i = 0; i < BAR_N; i++) peaks[i] = 0;
     } else if (ev.type === "oww_score") {
       const p = ev.payload || {};
       if (typeof p.score === "number") state.score = p.score;

@@ -88,7 +88,6 @@ data/
   sounds/success.mp3       Jetson init-cue
 Subsystem/AdamsServer/     Прошивка ESP32-S3 (PlatformIO)
 Agent Adam Chip/About/     Персона: Identity.md, Lore.md, Abilities.md
-Agent Adam Chip/Tuning.json  Hot-reload параметры персоны
 docs/RUNBOOK_JETSON_EXHIBITION.md  Production runbook
 deploy/systemd/            Systemd units для выставочного запуска
 scripts/                   Диагностика, деплой, управление

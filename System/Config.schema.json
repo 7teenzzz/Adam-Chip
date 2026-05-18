@@ -201,16 +201,6 @@
               "description": "ESP32 microphone hardware profile name. Used by audio normalisation and format parsing.",
               "default": "inmp441_philips32_stereo"
             },
-            "esp_mic_fail_threshold": {
-              "type": "integer",
-              "description": "Consecutive ESP32 mic fetch failures before falling back to local microphone. Lower = faster fallback when ESP32 stream-server hangs (3 means ~90 s of timeout retries before switching to local ALSA).",
-              "default": 3
-            },
-            "esp_mic_retry_interval_sec": {
-              "type": "number",
-              "description": "Seconds between ESP32 microphone reconnection attempts after failure.",
-              "default": 10.0
-            },
             "esp_health": {
               "type": "object",
               "description": "ESP32 microphone health monitor thresholds. Detects silent/clipping mic automatically.",
@@ -250,8 +240,13 @@
             },
             "max_command_segment_ms": {
               "type": "integer",
-              "description": "Hard cap on command recording length in milliseconds. Prevents runaway recording from stuck VAD.",
+              "description": "Hard cap on LISTENING-phase command recording length in milliseconds. Prevents runaway recording from stuck VAD. REPLY phase uses reply_max_segment_ms instead.",
               "default": 15000
+            },
+            "reply_max_segment_ms": {
+              "type": "integer",
+              "description": "Hard cap on REPLY-phase command recording length in milliseconds. Reference logic specifies a shorter REPLY window than LISTENING (10s vs 15s) — REPLY is a follow-up turn without wake word, so the user's response is expected to be more concise.",
+              "default": 10000
             },
             "normalize_factor": {
               "type": "integer",
@@ -395,20 +390,59 @@
               "description": "BCP-47 language code for ASR. Must match the language the agent listens in.",
               "default": "ru"
             },
-            "command_endpointing_ms": {
+            "listening_silence_timeout_sec": {
               "type": "integer",
-              "description": "Milliseconds of silence after speech before the voice loop submits the audio to ASR.",
-              "default": 1500
+              "minimum": 1,
+              "maximum": 30,
+              "description": "Seconds of silence in LISTENING phase (after wake word fires, before any speech is detected) before voice_loop returns to STANDBY. Reference logic = 6s. Protects against spurious wake-word detections — if OWW fires on noise but no one speaks, Adam returns to STANDBY instead of hanging in LISTENING forever. Replaces wake_word.wake_silence_timeout_sec (deprecated alias). Once speech is detected, silence_after_speech_ms takes over for end-of-utterance detection.",
+              "default": 6
+            },
+            "silence_after_speech_ms": {
+              "type": "integer",
+              "description": "How many consecutive milliseconds of silence after detected speech are required to mark the user's request as finished and forward it to ASR. Applies in both LISTENING (after wake word) and REPLY (after Adam's response) modes. Lower = faster Adam reaction but cuts off slow speakers; higher = more patient but introduces delay.",
+              "default": 1500,
+              "minimum": 200,
+              "maximum": 5000
+            },
+            "silence_rms_threshold": {
+              "type": "integer",
+              "description": "RMS audio-level threshold below which a frame is treated as silence regardless of what WebRTC VAD says. Acts as a secondary filter against constant background hum/HVAC noise that VAD may classify as voiced. 0 disables this filter (WebRTC VAD decides alone). Typical 200–500 for normal indoor rooms; raise for noisy exhibition halls. Compare with media.audio.normalize_factor (8000) — threshold should stay well below that.",
+              "default": 0,
+              "minimum": 0,
+              "maximum": 2000
             },
             "reply_window_sec": {
               "type": "number",
-              "description": "Soft reply window in seconds. After agent's TTS finishes, voice loop waits this long for the user to start speaking. If no speech (>= min_speech_ms) is detected → return to standby.",
+              "description": "Soft reply window in seconds (used by dialog-level no-reply heuristic in _set_voice_state('standby','no_reply')). Distinct from reply_silence_timeout_sec which is the in-loop VAD silence timer.",
               "default": 3.75
             },
-            "reply_absolute_deadline_sec": {
+            "post_tts_discard_window_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "description": "Milliseconds after TTS playback finishes during which MicReader continues to drain the ESP32 socket but does NOT queue chunks to the consumer. This flushes the ESP32's internal stream buffer of self-echo audio (Adam's own voice picked up by INMP441 across the room) before the REPLY window starts accepting user speech. Reference observation: ESP32 stream lag is ~2300ms — chunks read at t=T contain audio captured at t=T-2.3s. Without this window, ~2 seconds of TTS-tail audio enters the queue right after mic_unmuted and gets transcribed as user speech in REPLY. Default 2500ms covers the worst observed lag with a small safety margin. Set to 0 to disable (only safe in setups with negligible mic→speaker acoustic coupling).",
+              "default": 2500
+            },
+            "reply_silence_timeout_sec": {
               "type": "number",
-              "description": "Additional seconds beyond reply_window_sec that the user is allowed to keep speaking before a hard cutoff forces return to standby. Effective hard deadline from reply_start = reply_window_sec + reply_absolute_deadline_sec (e.g. 3.75 + 7.5 = 11.25 s). Prevents unbounded reply state if VAD never reaches endpointing.",
-              "default": 7.5
+              "minimum": 1.0,
+              "maximum": 10.0,
+              "description": "Single silence timer for REPLY mode. After voice_state transitions to 'reply' and the post-TTS guard (_REPLY_GUARD_SEC=0.6) elapses, if no qualifying speech has accumulated (speech_ms == 0) for this many seconds, voice loop returns to STANDBY. Runaway-dictation protection in REPLY is provided by media.audio.reply_max_segment_ms (10s by reference logic), not by a separate hard cutoff.",
+              "default": 5.0
+            },
+            "endpointing_debounce_frames": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "Phase 9 (REQ-VAD-DEBOUNCE): minimum number of CONSECUTIVE silence-classified VAD frames (at frame_ms granularity, default 20 ms) required after speech before emitting the `endpointing_started` event. WebRTC VAD flickers voiced↔silenced at 20 ms granularity on tail syllables, quiet consonants, and far-field audio; without debounce a single user utterance can emit 20-40 `endpointing_started` events. Default 5 frames ≈ 100 ms — enough to filter sub-100 ms transients without delaying real end-of-speech detection.",
+              "default": 5
+            },
+            "endpointing_voiced_debounce_frames": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "description": "Phase 9.1 (REQ-VAD-DEBOUNCE follow-up): symmetric voiced-side debounce. After endpointing_started latches, this many CONSECUTIVE voiced frames (default 3 ≈ 60 ms) are required to release the latch and allow the next silence run to emit again. Without this counter, a single voiced flicker frame (breath/click) immediately re-opens emission, producing 20-40 emissions per utterance even with silence-side debounce active (observed in Phase 9 Test 3: max 32 emissions per utterance). Does NOT affect ASR submission timing — silence_ms still resets on any voiced frame, so end-of-speech detection latency is unchanged. Diagnostic/logging concern only.",
+              "default": 3
             },
             "sample_rate": {
               "type": "integer",
@@ -435,6 +469,31 @@
               "enum": ["standby", "stop"],
               "description": "Action when the reply window expires (soft or hard cutoff with no qualifying speech). 'standby' (default) — return voice loop to STANDBY, keep mic running, ready for next wake word. 'stop' — fully stop the voice loop (mic off, no OWW); requires explicit /api/voice/start to resume. Use 'stop' for exhibition power-saving when long idle periods are expected.",
               "default": "standby"
+            },
+            "disable_local_fallback": {
+              "type": "boolean",
+              "description": "When true (default and the only supported value in V-S08.1+), MicReader retries the ESP32 stream forever with `esp_retry_backoff_sec`. The legacy local-fallback cascade was removed in Phase 11 — ESP32 INMP441 is the only sanctioned mic. Maintenance-mode debugging on hosts without ESP uses mic_source=\"local\" instead.",
+              "default": true
+            },
+            "esp_open_timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "description": "Per-attempt timeout in seconds for opening the ESP32 :81 WAV stream (`_NO_PROXY_OPENER.open(url, None, timeout)`). Replaces the legacy hardcoded 30 s. Lower value (8) trades a slightly higher false-failure rate during ESP boot for faster recovery cycles — the retry loop in MicReader (`esp_retry_backoff_sec`) is the canonical recovery mechanism.",
+              "default": 8
+            },
+            "esp_probe_after_fails": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20,
+              "description": "After this many consecutive `:81` stream-open failures, MicReader probes `:80 /api/status` (cheap, ~150 ms) before attempting another `:81` open. If the probe fails, MicReader skips the `:81` attempt and sleeps the next `esp_retry_backoff_sec` slot. Saves roughly `esp_open_timeout_sec * remaining_attempts` seconds when ESP is fully down. 0 disables probing (always retry :81).",
+              "default": 2
+            },
+            "esp_retry_backoff_sec": {
+              "type": "array",
+              "items": { "type": "number" },
+              "description": "Exponential-backoff sequence (seconds) between MicReader stream-reopen attempts. Index = `min(consecutive_fail_count - 1, len - 1)`; the final element is reused indefinitely once exhausted. Default `[2, 4, 8, 15]` gives recovery under 5 s for transient drops (REQ-RECOVERY-UNDER-5SEC) while capping reconnect storms at one every 15 s. List MUST contain at least one positive number; otherwise MicReader busy-loops on failure.",
+              "default": [2, 4, 8, 15]
             }
           }
         },
@@ -504,6 +563,13 @@
               "type": "integer",
               "description": "Milliseconds after LLM request before filler phrase is spoken. Prevents filler on fast responses.",
               "default": 800
+            },
+            "filler_probability": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Probability (0.0..1.0) that the filler phrase is actually spoken once filler_delay_ms has elapsed. 0.0 = effectively disabled, 1.0 = always play (legacy behavior). The dice are rolled per turn independently; no cooldown. Lowering this from 1.0 makes Adam feel less talky / less repetitive.",
+              "default": 0.30
             }
           }
         }
@@ -656,8 +722,173 @@
         },
         "wake_silence_timeout_sec": {
           "type": "integer",
-          "description": "Seconds of silence after wake word activation before the voice loop resets to listening state without completing a turn.",
-          "default": 3
+          "description": "DEPRECATED — moved to services.asr.listening_silence_timeout_sec in Phase 11. The timer is semantically part of the ASR pipeline (it counts silence within LISTENING phase), not the wake-word engine. Reader prefers the new key; this one is kept as a fallback for backwards compatibility with old Config.json files.",
+          "default": 6
+        }
+      }
+    },
+    "tuning": {
+      "type": "object",
+      "description": "Runtime persona/behavior parameters — hot-reloadable, editable from WebUI tuning panel via /api/tuning. Previously lived in Agent Adam Chip/Tuning.json; merged here so Config.json is the single source of truth. Validated by pydantic models in System/adam/tuning.py.",
+      "properties": {
+        "memory": {
+          "type": "object",
+          "description": "Episodic + semantic + recent-injection memory parameters and the dawn consolidator job schedule. Editing these affects what Adam remembers across sessions and which past interactions get injected into future prompts.",
+          "properties": {
+            "episodic": {
+              "type": "object",
+              "description": "Episodic memory: per-session salience scoring and decay. Each completed session is scored 0..1; anything above salience_threshold becomes a durable episode.",
+              "properties": {
+                "enabled": { "type": "boolean", "default": true, "description": "Master switch for episodic memory writes." },
+                "salience_threshold": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.4, "description": "Minimum salience score to persist a session as an episode. Lower = more episodes saved (noisier memory)." },
+                "decay_days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 14, "description": "Days after which episode weight starts decaying toward zero in retrieval." },
+                "duration_normalize_seconds": { "type": "integer", "minimum": 30, "default": 300, "description": "Reference session duration (sec) used to normalise the duration weight in salience scoring." },
+                "weights": {
+                  "type": "object",
+                  "description": "Salience scoring weights — MUST sum to 1.0 ± 0.01 (validated by pydantic).",
+                  "properties": {
+                    "introduced_name": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3, "description": "Weight for episodes where the user introduced their name." },
+                    "duration": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.2, "description": "Weight for session length (normalised by duration_normalize_seconds)." },
+                    "themes": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15, "description": "Weight for the number of distinct themes (from memory.theme_clusters) touched in the session." },
+                    "tone": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15, "description": "Weight for emotional/tonal intensity of the session." },
+                    "echoes_used": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1, "description": "Weight for how many echo entries Adam used in his replies." },
+                    "new_question": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1, "description": "Weight for whether the user asked a previously-unseen question." }
+                  }
+                },
+                "highlights_max_per_episode": { "type": "integer", "minimum": 1, "maximum": 50, "default": 6, "description": "Max number of conversation highlights captured per episode." },
+                "recurring_min_visits": { "type": "integer", "minimum": 2, "maximum": 20, "default": 2, "description": "Minimum number of past visits before a user is considered 'recurring' (different greeting / memory injection)." },
+                "recurring_lookup_days": { "type": "integer", "minimum": 7, "maximum": 365, "default": 90, "description": "Window (days) within which past visits count toward recurring status." }
+              }
+            },
+            "semantic": {
+              "type": "object",
+              "description": "Semantic memory: free-form notes accumulated by the consolidator.",
+              "properties": {
+                "enabled": { "type": "boolean", "default": true, "description": "Whether semantic notes are injected into prompts." },
+                "max_chars": { "type": "integer", "minimum": 200, "maximum": 20000, "default": 2000, "description": "Hard cap on semantic-memory bytes injected per prompt." }
+              }
+            },
+            "recent_injection": {
+              "type": "object",
+              "description": "How to surface recent episodes back into Adam's working context.",
+              "properties": {
+                "enabled": { "type": "boolean", "default": true, "description": "Whether to inject recent episodes at all." },
+                "limit": { "type": "integer", "minimum": 0, "maximum": 10, "default": 2, "description": "Max recent episodes injected per turn." },
+                "strategy": { "type": "string", "enum": ["by_name", "by_theme", "by_name_or_theme"], "default": "by_name", "description": "Retrieval strategy: match by user's name, by detected theme, or either." },
+                "max_age_days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 30, "description": "Don't inject episodes older than this." }
+              }
+            },
+            "consolidator": {
+              "type": "object",
+              "description": "Daily consolidator cron (Engineering/consolidator.py) — compresses raw episodes into semantic notes overnight.",
+              "properties": {
+                "enabled": { "type": "boolean", "default": true, "description": "Master switch for the consolidator job." },
+                "model": { "type": ["string", "null"], "default": null, "description": "LLM model override for consolidation; null = use the default from services.llm." },
+                "window_start": { "type": "string", "default": "03:00", "description": "Earliest local time the job is allowed to run (HH:MM)." },
+                "window_end": { "type": "string", "default": "05:00", "description": "Latest local time the job is allowed to run (HH:MM)." },
+                "max_episodes_per_run": { "type": "integer", "minimum": 1, "default": 200, "description": "Cap on episodes processed in one consolidation pass." },
+                "temperature": { "type": "number", "minimum": 0, "maximum": 2, "default": 0.3, "description": "LLM temperature for the consolidation prompts." },
+                "max_runtime_minutes": { "type": "integer", "minimum": 1, "maximum": 240, "default": 30, "description": "Hard timeout for one consolidation run." },
+                "retry_on_invalid_patch": { "type": "boolean", "default": false, "description": "If the LLM returns malformed semantic patch JSON, retry once with stricter prompt." },
+                "gate_log_max_days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 30, "description": "How long to keep the consolidator gate log around (decision audit trail)." },
+                "instant_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.75, "description": "Episodes with salience above this run through instant consolidation instead of waiting for the nightly job." }
+              }
+            },
+            "theme_clusters": {
+              "type": "object",
+              "description": "Theme name → list of trigger keywords. Used by episodic scoring (themes weight) and recent_injection (by_theme strategy). Add new themes to expand what Adam recognises across sessions.",
+              "additionalProperties": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "echoes": {
+          "type": "object",
+          "description": "Pool of pre-written 'echo' utterances Adam can drop into replies (e.g. fragments of memories). Tag-matched against the current conversation.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false, "description": "Master switch for echoes injection." },
+            "global_cooldown_turns": { "type": "integer", "minimum": 0, "default": 12, "description": "Min turns between ANY two echoes firing." },
+            "per_echo_cooldown_days": { "type": "integer", "minimum": 0, "default": 7, "description": "Min days before the SAME echo can fire again." },
+            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55, "description": "Min tag-match score for an echo to be eligible." },
+            "weight_multiplier": { "type": "number", "minimum": 0, "maximum": 5, "default": 1.0, "description": "Global multiplier on echo selection weights." },
+            "matcher_type": { "type": "string", "enum": ["tag", "tfidf"], "default": "tag", "description": "Matching algorithm: tag-set overlap or TF-IDF cosine." },
+            "score_boost": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.2, "description": "Bonus added to score when an echo's tags exactly match." },
+            "tag_short_cutoff": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3, "description": "Tag sets shorter than this get a different scoring formula (over-weight short matches less)." },
+            "default_entry_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Default weight for echo entries that don't declare their own." }
+          }
+        },
+        "chinese": {
+          "type": "object",
+          "description": "Chinese-language interjections — same machinery as echoes but for the bilingual flavour layer. Rarer, longer cooldown.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false, "description": "Master switch for Chinese-language interjections." },
+            "global_cooldown_turns": { "type": "integer", "minimum": 0, "default": 30, "description": "Min turns between any two Chinese interjections." },
+            "per_echo_cooldown_days": { "type": "integer", "minimum": 0, "default": 7, "description": "Min days before the same Chinese phrase repeats." },
+            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.65, "description": "Higher than echoes — Chinese should only fire on clear topical matches." },
+            "weight_multiplier": { "type": "number", "minimum": 0, "maximum": 5, "default": 1.0 },
+            "matcher_type": { "type": "string", "enum": ["tag", "tfidf"], "default": "tag" },
+            "score_boost": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.2 },
+            "tag_short_cutoff": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 },
+            "default_entry_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+            "audio_mode": { "type": "string", "enum": ["prerendered_only", "prerendered_with_text_fallback", "text_only"], "default": "prerendered_with_text_fallback", "description": "How Chinese phrases get played: pre-rendered audio file, audio with TTS fallback, or text-only (Silero TTS pronounces transliteration)." }
+          }
+        },
+        "session": {
+          "type": "object",
+          "description": "Session-end detection logic — when does Adam consider the visitor 'gone'.",
+          "properties": {
+            "end_strategy": { "type": "string", "enum": ["vad_silence", "face_lost", "combined", "idle_with_grace", "event_signal"], "default": "combined", "description": "Which signal ends a session: silence on VAD, no face for N seconds, both (combined), idle with a 'are you there?' grace message, or an explicit external event." },
+            "vad_silence_seconds": { "type": "integer", "minimum": 5, "default": 60, "description": "Seconds of mic silence before considering session over." },
+            "face_lost_seconds": { "type": "integer", "minimum": 2, "default": 15, "description": "Seconds without a detected face before considering session over." },
+            "grace_message": { "type": "string", "default": "вы там?", "description": "Phrase Adam says during idle_with_grace before fully ending the session." }
+          }
+        },
+        "scene_director": {
+          "type": "object",
+          "description": "Motor-scene director — orchestrates ESP32 motor scenes (idle / alternating / etc.) based on conversation state.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true, "description": "Master switch for the scene director." },
+            "sustain_seconds": { "type": "integer", "minimum": 1, "default": 8, "description": "Minimum seconds a scene runs before director can switch it." },
+            "cooldown_between_changes_seconds": { "type": "integer", "minimum": 0, "default": 5, "description": "Min seconds between consecutive scene switches." },
+            "hysteresis_seconds": { "type": "integer", "minimum": 0, "default": 15, "description": "Hysteresis window — director won't flip back to a recently-left scene within this many seconds." },
+            "override_priority_scenes": { "type": "array", "items": { "type": "string" }, "default": ["unease"], "description": "Scene names that bypass sustain/cooldown when triggered." }
+          }
+        },
+        "llm": {
+          "type": "object",
+          "description": "Runtime LLM tuning. NOTE: services.llm.temperature/max_tokens carry the *infrastructure default*; these tuning values override per-turn behavior.",
+          "properties": {
+            "temperature": { "type": "number", "minimum": 0, "maximum": 2, "default": 0.7, "description": "Sampling temperature for replies. Higher = more varied, lower = more deterministic." },
+            "max_tokens": { "type": "integer", "minimum": 10, "maximum": 2000, "default": 100, "description": "Hard cap on tokens per reply. Lower keeps TTS latency tight." },
+            "response_word_target": { "type": "integer", "minimum": 5, "maximum": 200, "default": 14, "description": "Soft target words per reply — used in the prompt to nudge Adam toward concise replies." }
+          }
+        },
+        "voice": {
+          "type": "object",
+          "description": "Runtime voice tuning. NOTE: services.tts.speaker carries the infrastructure default; this overrides for the active session.",
+          "properties": {
+            "speaker": { "type": "string", "default": "eugene", "description": "Active Silero speaker id (must be in services.tts.available_speakers)." },
+            "speed_multiplier": { "type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.1, "description": "Playback speed (1.0 = original Silero output rate)." },
+            "volume": { "type": "number", "minimum": 0, "maximum": 2.0, "default": 0.5, "description": "Output volume gain applied before the WAV reaches ALSA / ESP32." }
+          }
+        },
+        "prompt": {
+          "type": "object",
+          "description": "Prompt-builder runtime knobs. NOTE: agent.history_turns is a separate ceiling; tuning.prompt.history_turns is the *effective* value used per turn.",
+          "properties": {
+            "history_turns": { "type": "integer", "minimum": 0, "maximum": 50, "default": 4, "description": "Dialogue turns included in the LLM prompt." },
+            "include_scene": { "type": "boolean", "default": true, "description": "Whether VLM scene descriptions get injected into the prompt." },
+            "include_sensors": { "type": "boolean", "default": true, "description": "Whether ESP32 sensor readings (light, motion) get injected into the prompt." }
+          }
+        },
+        "diagnostics": {
+          "type": "object",
+          "description": "Runtime diagnostics — toggles for verbose output without restarting services.",
+          "properties": {
+            "log_level": { "type": "string", "enum": ["debug", "info", "warning", "error"], "default": "info", "description": "Effective log level for adam.* loggers." },
+            "metrics_enabled": { "type": "boolean", "default": true, "description": "Whether per-turn timing metrics are recorded." },
+            "trace_prompts": { "type": "boolean", "default": false, "description": "When true, captures full system+user prompts into the ring buffer (visible under /metrics in WebUI). Heavy — only enable for debugging." },
+            "trace_post_tts_lag": { "type": "boolean", "default": false, "description": "When true, MicReader emits a mic_lag_diag_chunk event for every drained chunk during 4 s after each post-TTS mic_unmute. Use with scripts/diag_lag_source.py to plot the RMS envelope and identify whether the ~2.3 s tail-of-Adam echo originates in ALSA HDMI buffer drain, room acoustic reverb, or the ESP32 firmware's internal audio FIFO. Heavy — ~200 events per turn." }
+          }
         }
       }
     }

@@ -3,66 +3,115 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-17T00:00:00.000Z"
+last_updated: "2026-05-18T00:00:00.000Z"
 progress:
-  total_phases: 11
-  completed_phases: 0
-  total_plans: 10
-  completed_plans: 1
-  percent: 0
+  total_phases: 31
+  completed_phases: 15
+  total_plans: 24
+  completed_plans: 17
+  percent: 48
 ---
 
 # Adam-Chip — Project State
 
-**Last Updated:** 2026-05-16
-**Status:** Executing Phase 07
+**Last Updated:** 2026-05-18
+**Status:** Executing Phase 11 (Voice Pipeline Refactor)
 
 ## Active Phase
 
-**Phase 10: Roadmap Global Update** — plan ready, executing
-Context: [phases/10-roadmap-global-update/10-CONTEXT.md](phases/10-roadmap-global-update/10-CONTEXT.md)
-Branch: `diploma-chapter3`
-Next step: execute 10-01-PLAN.md
+**Phase 11: Voice Pipeline Refactor — соответствие эталонной логике** — plan ready, executing
+Branch: `V-S08.1-code_rev_ref_opt` (мёрж в `main` в процессе)
+Plan: [phases/11-voice-pipeline-refactor/11-PLAN.md](phases/11-voice-pipeline-refactor/11-PLAN.md)
+Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-refactor/REVIEW.md)
 
-**Recently completed:** Phase 9 (Next-Phases Planning); Phase 8 (Theory-Code Verification); Phase 7 (Diploma Analysis)
+→ [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
 
-### Phase 9 ✓ COMPLETE (2026-05-17) — Next-Phases Planning
+**Recently completed (хронологически):**
+
+- Phase 15 (Roadmap Global Update) — финализирован этим merge'ем; 12 будущих фаз добавлены, нумерация унифицирована, voice-фазы вставлены как 7-11
+- Phase 14 (Next-Phases Planning) ✓ 2026-05-17
+- Phase 13 (Theory-Code Verification) ✓ 2026-05-17
+- Phase 12 (Comprehensive Diploma Analysis) ✓ 2026-05-16
+- Phase 10 (Flush stale audio on safe transitions) ✓
+- Phase 9 (VAD debounce + UI smoothness) ✓
+- Phase 8 (Reply-Echo-Hang debug) ✓
+- Phase 7 (ESP32 Mic Pipeline Refactor — MicReader keep-alive) ✓ 2026-05-17
+
+## Completed Phases
+
+### Phase 15: Roadmap Global Update ✓ COMPLETE (2026-05-18)
 
 Что сделано:
 
-- Wave 1: CANDIDATES.md — реестр 13 кандидатов из 3 источников (Ф8 + Backlog + активные ветки)
-- Wave 2: 09-PRIORITIZATION.md — матрица 4 критериев (Impact/Effort/Strategic/Exhibition) + P0/P1/P2/P3 + dependency graph
-- Wave 3: 09-PHASE-DRAFTS.md — полные drafts P0 (Phase 10A/10B/11) + compact drafts P1-P3 + 32 REQUIREMENTS-IDs
-- Wave 4: 09-SUMMARY.md — финальные рекомендации для Phase 10 (инструкции по обновлению ROADMAP + REQUIREMENTS + Milestones M1-M4)
-- Результат: 12 фаз спроектированы (10A, 10B, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21) с dependency graph и sequential/parallel clusters
+- ROADMAP.md перенумерован: voice-фазы V-S08.1 встали как Phase 7-11, прежние diploma+planning фазы сдвинуты на +5 (Phase 7→12, …, Phase 23→28)
+- MILESTONES-структура и map активных веток сохранены
+- BRANCH.md удалён при мёрже в main (по конвенции docs/BRANCH-template.md)
 
-### Phase 8 ✓ COMPLETE (2026-05-17) — Theory-Code Verification
+### Phase 14: Next-Phases Planning ✓ COMPLETE (2026-05-17)
+
+Что сделано:
+
+- Wave 1: CANDIDATES.md — реестр 13 кандидатов из 3 источников (Ф13 + Backlog + активные ветки)
+- Wave 2: 14-PRIORITIZATION.md — матрица 4 критериев (Impact/Effort/Strategic/Exhibition) + P0/P1/P2/P3 + dependency graph
+- Wave 3: 14-PHASE-DRAFTS.md — полные drafts P0 (15A/15B/16) + compact drafts P1-P3 + 32 REQUIREMENTS-IDs
+- Wave 4: 14-SUMMARY.md — финальные рекомендации для Phase 15 (инструкции по обновлению ROADMAP + REQUIREMENTS + Milestones M1-M4)
+- Результат: 12 фаз спроектированы с dependency graph и sequential/parallel clusters
+
+### Phase 13: Theory-Code Verification ✓ COMPLETE (2026-05-17)
 
 Что сделано:
 
 - Wave 1: 4 параллельных category verifications (MATRIX-philosophical/aiim/technical/artistic.md) — 459 строк
 - Wave 2: cross-graph synthesis (THEORY-CODE-MATRIX + CONTRADICTIONS + EMERGENT-FEATURES + CROSS-GRAPH-FINDINGS) — 510 строк
-- Wave 3: 08-SUMMARY.md в Hybrid формате — 250 строк
+- Wave 3: 13-SUMMARY.md в Hybrid формате — 250 строк
 - Результат: 48 терминов проверены через 3 графа (code, persona, esp32)
   - 26 FULL (54%) + 16 PARTIAL (33%) + 4 MISSING (8%) + 13 EMERGENT + 0 CONTRADICTED
-- Главное доказательство: триангуляция AIIM → Mood → Device → ESP32 (3 графа, 4 узла) подтверждает воплощённость
-- Path distribution для PARTIAL+MISSING: 4A (правка диплома) + 6B (правка кода) + 7C (документировать) + 1 accepted
-- 0 CRITICAL CONTRADICTED — диплом готов к мёржу после Phase 10A правок
+- 0 CRITICAL CONTRADICTED — диплом готов к мёржу после Phase 15A правок
 
-Параллельно — Фазы 6A/6B (Memory): завершены в ветке `Memory-upgrade`, готовы к мёржу в main.
-→ [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
-
-### Phase 7 ✓ COMPLETE (2026-05-16) — Comprehensive Diploma Analysis
+### Phase 12: Comprehensive Diploma Analysis ✓ COMPLETE (2026-05-16)
 
 Что сделано:
 
 - Wave 1: 4 per-chapter audits (STRUCTURE-ch00..ch03.md) — 702 строки
 - Wave 2: 5 cross-chapter synthesis artifacts (STRUCTURE.md, TERMINOLOGY-MATRIX.md (48 терминов), DUPLICATIONS.md, GAPS.md (44 находки), XREF-AUDIT.md) — 764 строки
-- Wave 3: 07-SUMMARY.md в Hybrid формате — приоритизированная матрица 83 находок (17 CRITICAL + 34 HIGH + 32 MEDIUM)
+- Wave 3: 12-SUMMARY.md в Hybrid формате — приоритизированная матрица 83 находок (17 CRITICAL + 34 HIGH + 32 MEDIUM)
 - Главные находки: AIIM-вакуум (7 терминов), метрики 3.4 как honesty-проблема, битые ссылки на код (Commander.py/Communication.py), дрейф «агент↔персонаж», технофлора без теории
-- Готовность для Phase 8 (Theory-Code Verification) и Phase 9 (Next-Phases Planning)
 
-## Completed Phases
+### Phase 10: Flush stale audio on safe transitions ✓ COMPLETE
+
+Что сделано:
+
+- `MicReader.flush_queue(discard_window_ms=200.0)` — публичный метод
+- `_discard_until_ts` поле + gate в `_drain_loop` (mirror of mute-gate)
+- 2 вызова в Orchestrator: post-transcribe + reply_silence_timeout. БЕЗ wake
+- Событие `mic_queue_flushed {frames, ms, trigger, discard_window_ms}` для диагностики
+
+### Phase 9: VAD debounce + UI smoothness ✓ COMPLETE
+
+Что сделано:
+
+- Debounce на `endpointing_started`: 5 подряд silence-кадров перед эмиссией (Config-параметр `endpointing_debounce_frames`)
+- Симметричный voiced-debounce `endpointing_voiced_debounce_frames=3` — устраняет re-trigger от единичного voiced-flicker
+- WebUI chat panel cleanup: убраны текстовые подписи эквалайзера, кнопка калибровки, VU/equalizer высоты выровнены
+
+### Phase 8: Reply-Echo-Hang debug ✓ COMPLETE
+
+Что сделано:
+
+- Введён `post_tts_discard_window_ms=2500` — MicReader дренирует ESP32 socket после TTS, но не кладёт в очередь ~2.3 сек self-echo audio
+- `reply_silence_timeout_sec` + `reply_max_segment_ms=10000` вынесены в Config
+- Половина voice-loop-error stage=esp32_mic после reply window — устранена
+
+### Phase 7: ESP32 Mic Pipeline Refactor — MicReader keep-alive ✓ COMPLETE (2026-05-17)
+
+Что сделано:
+
+- `System/adam/mic_reader.py` (новый модуль) — MicReader task с keep-alive ESP32 :81 stream + reconnect backoff
+- Orchestrator упрощён: `_run_esp32` стал consumer'ом Queue; удалены `_audio_level_monitor`, `_esp32_drain_during_mute`, per-turn drainer
+- Boot sequence: MicReader стартует в lifespan до warmup TTS → состояние `voice_state="boot_warmup"`
+- 4 новых Config-ключа: `disable_local_fallback`, `esp_open_timeout_sec`, `esp_probe_after_fails`, `esp_retry_backoff_sec`
+- UI: «⌛ Инициализация» во время boot_warmup, эквалайзер activates после standby
+- Verified on user session 2026-05-17 00:01-00:10: 0 `voice_loop_error stage=esp32_mic`, 1695 audio_level events
 
 ### Phase 6B: Memory Search, Logging & Quality ✓ COMPLETE (2026-05-15)
 
@@ -83,76 +132,47 @@ Next step: execute 10-01-PLAN.md
 - note_turn() с автотематизацией по кластерам из Tuning.json
 - quick_patch_diary() — немедленная консолидация при salience ≥ 0.75
 - is_recurring() — обнаружение повторных посетителей
-- Все хардкоды вынесены в Tuning.json (score_boost, tag_short_cutoff, default_entry_weight)
 
 → Commit Wave 6A: `f6b2c5a`
 
-### Phase 5: Agent Protocol — поведение агента-разработчика ✓ COMPLETE (2026-05-15)
-
-Что сделано:
+### Phase 5: Agent Protocol ✓ COMPLETE (2026-05-15)
 
 - `docs/AGENT-PROTOCOL.md` создан: 4 секции (Режимы работы, Триггеры уточнения, Гэпы контекста, Протокол планирования)
-- `CLAUDE.md`: `@docs/AGENT-PROTOCOL.md` добавлен как @-reference (автозагрузка в каждую сессию)
+- `CLAUDE.md`: `@docs/AGENT-PROTOCOL.md` добавлен как @-reference
 
-→ Подробности: [phases/05-agent-protocol/](phases/05-agent-protocol/)
+### Phase 4: Context Automation ✓ COMPLETE (2026-05-15)
 
-### Phase 4: Context Automation — per-directory CLAUDE.md и git hooks ✓ COMPLETE (2026-05-15)
+- `Subsystem/AdamsServer/CLAUDE.md`, `System/adam/CLAUDE.md`, `Agent Adam Chip/CLAUDE.md`
+- `.githooks/post-checkout` + `.githooks/pre-commit`
 
-Что сделано:
+### Phase 3: Branch Coordination ✓ COMPLETE (2026-05-15)
 
-- `Subsystem/AdamsServer/CLAUDE.md`: ESP32 context (PlatformIO, PrivateConfig, IP 192.168.0.171, порты 80/81)
-- `System/adam/CLAUDE.md`: карта 23 модулей (22 adam/*.py + Orchestrator.py) + 4 правила доступа
-- `Agent Adam Chip/CLAUDE.md`: порядок персоны System→Identity→Lore→Abilities, запреты на разметку
-- `.githooks/post-checkout`: scaffold BRANCH.md при checkout не-main ветки (POSIX sh, exit 0)
-- `.githooks/pre-commit`: warning при отсутствии BRANCH.md, никогда не блокирует (exit 0)
-- `CLAUDE.md` Quick start: команда активации хуков (`git config core.hooksPath .githooks`)
+- `docs/BRANCH-template.md`, `.planning/ACTIVE.md`, CLAUDE.md update
 
-→ Подробности: [phases/04-context-automation/](phases/04-context-automation/)
+### Phase 2: Progressive Disclosure ✓ COMPLETE (2026-05-15)
 
-### Phase 3: Branch Coordination — контекст для мульти-агентной работы ✓ COMPLETE (2026-05-15)
+- Reading Order в CLAUDE.md, секция «Текущее состояние» в README.md, 01-SUMMARY.md, cross-link matrix
 
-Что сделано:
+### Phase 1: Doc Refactor ✓ COMPLETE (2026-05-15)
 
-- `docs/BRANCH-template.md` создан (шаблон + конвенция, без поля Owner)
-- `.planning/ACTIVE.md` создан (таблица веток верифицирована через `git branch -a`)
-- CLAUDE.md обновлён: инструкция читать BRANCH.md при работе на не-main ветке
-- STATE.md получил ссылку на ACTIVE.md
-
-→ Подробности: [phases/03-branch-coordination/](phases/03-branch-coordination/)
-
-### Phase 2: Progressive Disclosure — навигация для нового агента ✓ COMPLETE (2026-05-15)
-
-Что сделано:
-
-- Reading Order добавлен в CLAUDE.md (Level 0–4 таблица с markdown-ссылками)
-- README.md получил секцию "Текущее состояние" со ссылкой на STATE.md
-- 01-SUMMARY.md создан для Phase 1 (Config-First, Lean Docs, навигация)
-- Cross-link matrix 6/6 выполнена (ни один Level 0–4 файл не является тупиком)
-- ROADMAP.md получил ссылку на REQUIREMENTS.md в шапке
-
-→ Подробности: [phases/02-progressive-disclosure/](phases/02-progressive-disclosure/)
-
-### Phase 1: Doc Refactor — Концепция C + A ✓ COMPLETE (2026-05-15)
-
-Что сделано:
-
-- Исправлены критические несоответствия: ASR model small, wake word threshold 0.20, debounce 2
-- CONTEXT.md заменён минимальным указателем (lean docs)
-- README.md упрощён: убраны числовые параметры из Inference Stack таблицы
-- CLAUDE.md очищен от числовых параметров
-- `System/Config.schema.json` создан — JSON Schema Draft-07 с 125 `description` + 108 `default` полями
+- Исправлены ASR model small, wake word threshold 0.20, debounce 2
+- Config.schema.json создан (125 description + 108 default)
 - `System/adam/config.py` DEFAULT_CONFIG синхронизирован с Config.json
-- RUNBOOK очищен от Ollama-defaults и неверного audio device
-
-→ Подробности: [phases/01-doc-refactor-c-a/](phases/01-doc-refactor-c-a/)
 
 ## History
 
+- 2026-05-18: Merge ветки `V-S08.1-code_rev_ref_opt` → `main`. ROADMAP перенумерован: voice-фазы получили номера 7-11, diploma+planning фазы сдвинуты на +5 (Phase 7→12, …, Phase 23→28). Phase 11 (Voice Pipeline Refactor) — active.
+- 2026-05-17: Phase 14 (Next-Phases Planning) завершена. 12 фаз спроектированы.
+- 2026-05-17: Phase 13 (Theory-Code Verification) завершена. 48 терминов через 3 графа.
+- 2026-05-17: Phase 7 (ESP32 Mic Pipeline Refactor) завершена. MicReader keep-alive. Commit `0c358a8`.
+- 2026-05-16: Phase 12 (Comprehensive Diploma Analysis) завершена.
+- 2026-05-16: Phase 7 Plan 02 завершён. MicReader class. Commit `d67d6d4`.
+- 2026-05-16: Phase 7 Plan 01 завершён. Config keys + schema docs. Commit `f5529b5`.
 - 2026-05-15: Phase 6B завершена. memory_search.py, memory_metrics.py, /api/memory/status, 34 теста.
 - 2026-05-15: Phase 6A завершена. llama.cpp в consolidator, rule-based fallback, TF-IDF, auto-themes, trim_gate_logs. Commit Wave 6A: f6b2c5a.
-- 2026-05-15: Phase 5 завершена. AGENT-PROTOCOL.md, @-reference в CLAUDE.md. Все 5 фаз завершены.
+- 2026-05-15: Phase 5 завершена. AGENT-PROTOCOL.md, @-reference в CLAUDE.md.
 - 2026-05-15: Phase 4 завершена. 3 per-directory CLAUDE.md, 2 git hooks, Quick start update.
 - 2026-05-15: Phase 3 завершена. BRANCH-template.md, ACTIVE.md, BRANCH.md note в CLAUDE.md.
 - 2026-05-15: Phase 2 завершена. Reading Order, Текущее состояние, 01-SUMMARY.md, cross-links.
 - 2026-05-15: Phase 1 завершена. 3 атомарных коммита. Введена Config-First архитектура документации.
-- 2026-05-15: Аудит документации выполнен. Найдены критические несоответствия: ASR model (medium vs small), wake word threshold (0.35 vs 0.20), debounce_hits (3 vs 2), RUNBOOK с Ollama-defaults.
+- 2026-05-15: Аудит документации выполнен.

@@ -187,10 +187,11 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             deps.event_log, duration_sec=duration_sec, margin=margin
         )
         vl = deps.get_voice_loop() if deps.get_voice_loop else None
+        mr = getattr(vl, "mic_reader", None)
         audio_cfg = deps.settings.section("media").get("audio", {})
         mic_source = getattr(vl, "mic_source", "local") if vl else "local"
         mic_profile = getattr(vl, "esp32_mic_profile", "") if vl else ""
-        mic_active = getattr(vl, "mic_active_source", mic_source) if vl else mic_source
+        mic_active = getattr(mr, "active_source", mic_source) if mr else mic_source
         input_device = audio_cfg.get("input_device", "")
         profile_key = (
             f"esp32:{mic_profile}" if mic_source == "esp32" else f"local:{input_device}"
@@ -210,8 +211,8 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             "input_device": input_device,
             "profile_key": profile_key,
             "audio_level_stats": {
-                "level_l": getattr(vl, "_raw_level_l", None) if vl else None,
-                "level_r": getattr(vl, "_raw_level_r", None) if vl else None,
+                "level_l": getattr(mr, "raw_level_l", None) if mr else None,
+                "level_r": getattr(mr, "raw_level_r", None) if mr else None,
             },
         }
         try:

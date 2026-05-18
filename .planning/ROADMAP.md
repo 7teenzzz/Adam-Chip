@@ -200,7 +200,179 @@ Plans:
 
 ---
 
-## Phase 7: Comprehensive Diploma Analysis
+## Phase 7: ESP32 Mic Pipeline Refactor — MicReader keep-alive ✓ COMPLETE (2026-05-17)
+
+**Branch:** `V-S07.3-ESP32_mic_fix`
+
+**Goal:** Извлечь работу с ESP32 audio-stream в долгоживущую задачу `MicReader` по аналогу `CameraReader`. Поток открывается до warmup TTS, держится keep-alive весь срок жизни Orchestrator, drainer всегда активен, переоткрытие на exception с экспоненциальным backoff. Voice loop читает chunks из shared queue вместо прямого управления stream. Local fallback отключён по умолчанию.
+
+**Requires:** ESP32 firmware готова к стабильной работе на :81 (после reboot — проверено).
+
+**Delivers:**
+
+- `System/adam/mic_reader.py` (новый модуль) — `MicReader` task: open stream → drain bytes → put в `asyncio.Queue` → reconnect on exception (backoff). Никогда не fallback на local mic, если `disable_local_fallback=true`.
+- `System/Orchestrator.py` — `_run_esp32` упрощён до consumer'а на Queue; lifecycle stream вынесен из voice_loop в MicReader. Удалён `_audio_level_monitor` (его роль перенимает MicReader).
+- Boot sequence: MicReader стартует в lifespan **до** `_orchestrated_startup`, к моменту warmup TTS поток уже active. Drainer работает всё время, в том числе во время warmup.
+- `voice_state="boot_warmup"` (новое значение): voice_loop читает из Queue но не сканирует OWW и не делает endpointing. После warmup → standby.
+- `System/Config.json` + `Config.schema.json` — новые ключи: `services.asr.disable_local_fallback` (default true), `esp_open_timeout_sec` (default 8), `esp_probe_after_fails` (default 2), `esp_retry_backoff_sec` (default [2,4,8,15]).
+- UI ([chat.js](../System/WebUI/static/js/panels/chat.js), [wakeMeter.js](../System/WebUI/static/js/widgets/wakeMeter.js)): корректное отображение «⌛ Инициализация» во время boot_warmup, плашка Mic и эквалайзер остаются placeholder пока voice_state ≠ standby/listening/reply. После warmup → 💤 Ожидаю обращения + активный эквалайзер + 🟢 Mic: ESP32 stereo.
+
+**Mode:** standard
+
+**Requirements:** ESP-mic должен открыться к моменту warmup TTS; никаких `voice_loop_error stage=esp32_mic` в первые 60 сек после старта; recovery после disconnect <5 сек; никаких переходов на local mic пока `disable_local_fallback=true`.
+
+**Requirement IDs:** REQ-ESP-OPEN-BEFORE-WARMUP, REQ-NO-ESP-ERRORS-AT-BOOT, REQ-RECOVERY-UNDER-5SEC, REQ-NO-LOCAL-FALLBACK, REQ-UI-INIT-STATUS, REQ-UI-STANDBY-LIVE
+
+**Plans:** 4 plans
+
+Plans:
+
+- [x] 07-01-PLAN.md — Config + Schema: 4 new asr keys (`disable_local_fallback`, `esp_open_timeout_sec`, `esp_probe_after_fails`, `esp_retry_backoff_sec`) — commit `f5529b5`
+- [x] 07-02-PLAN.md — MicReader module: new `System/adam/mic_reader.py` with class MicReader (producer + audio_level emitter + drain-on-mute) — commit `d67d6d4`
+- [x] 07-03-PLAN.md — Orchestrator integration: wire MicReader; delete `_run_esp32`, `_esp32_drain_during_mute`, `_audio_level_monitor`; introduce `boot_warmup` state; rearrange `_orchestrated_startup` — commit `0c358a8`
+- [x] 07-04-PLAN.md — UI integration: chat.js boot_warmup label/placeholder, wakeMeter.js pipelineReady gating on voice_state_change(to=standby) — commit `7177d58`
+
+**Verified on user test session 2026-05-17 00:01:05 — 00:10:40 MSK:** mic stream active +108 ms after orchestrator_started, **0** `voice_loop_error stage=esp32_mic`, all 1695 audio_level events `source=esp32_stereo`. See `.planning/phases/07-esp32-mic-pipeline-refactor-micreader-keep-alive/07-SUMMARY.md`.
+
+---
+
+## Phase 8: Reply-Echo-Hang debug — устранить заморозку voice_loop после reply window
+
+**Branch:** TBD (suggest `V-S07.4-reply-echo-hang`)
+
+**Goal:** Устранить полную заморозку Orchestrator (event_log замолкает на 6+ минут), наблюдаемую после `reply_window_expired` с `reason=absolute_deadline`. Корневая причина — повторное срабатывание `endpointing_started` (8 раз за 7 сек) в reply mode из-за акустического эха собственной TTS Адама через ESP32 mic, что не даёт VAD'у закрыть endpointing до hard cutoff. Это pre-existing bug, выявленный после стабилизации mic stream в Phase 7.
+
+**Requires:** Phase 7 завершена (стабильный mic stream — необходимое условие чтобы воспроизвести bug; на flaky stream он маскировался).
+
+**Symptoms (test session 2026-05-17 00:08:50–00:09:20):**
+
+- В reply window между 21:03:38 и 21:03:45 (UTC) 8 событий `endpointing_started` с интервалом 5–26 ms — VAD скачет voiced↔silenced на хвосте TTS-эхо.
+- 21:03:52 — `reply_window_expired absolute_deadline elapsed=16.6s` (hard cutoff).
+- 21:04:00 — последний нормальный `esp32_audio_health`.
+- 21:04:15.979 — последний event (`audio_level state=standby source=esp32_stereo`).
+- Далее — **6 минут полной тишины** в `events.jsonl`. Пользователь делал запросы 00:08:50–00:09:20 (UTC 21:08:50+), реакции не было; UI VU/equaliser замёрз.
+
+**Investigation hypotheses:**
+
+- `_REPLY_GUARD_SEC` (0.6 s) недостаточно для затухания акустического эха ESP32 speaker → ESP32 mic (расстояние, реверберация). Hard cutoff попадает не на тишину, а на хвост эха.
+- Endpointing flicker (`_was_endpointing` flag toggling каждые 20 ms) создаёт спам в event_log; lock contention в `event_log.append` (синхронный `with self._lock: handle.write`) может затянуть main loop.
+- Возможна другая бесконечная задача / deadlock между `_vad_loop` consumer и MicReader producer при определённом sequence событий после hard cutoff.
+
+**Tentative deliverables:**
+
+- Воспроизведение hang в контролируемом scenario (e.g. force_TTS playback с loopback mic).
+- Увеличение `_REPLY_GUARD_SEC` до 1.0–1.5 s (или config-параметр).
+- Debounce на `_was_endpointing` flag — не эмитить `endpointing_started` чаще раза в 200 ms.
+- Возможно: half-duplex hard mute на reply mode (не просто `_REPLY_GUARD_SEC`, а полный suppress voiced detection пока `time.perf_counter() - last_tts_finished_at < N`).
+- Async stack snapshot mechanism для будущей диагностики hang (e.g. SIGUSR1 → dump all task stacks).
+
+**Mode:** debug → standard fix
+
+**Requirement IDs:** REQ-NO-HANG-AFTER-REPLY, REQ-NO-SELF-ECHO-VAD, REQ-REPLY-MATCHES-LISTENING, REQ-DIAGNOSTIC-LOGS-VOICE-STATE
+
+---
+
+## Phase 9: VAD debounce + UI smoothness + chat panel cleanup
+
+**Branch:** TBD (suggest `V-S07.4-vad-debounce-ui`)
+
+**Goal:** Устранить VAD-флапп (40 emissions endpointing_started на одну фразу), сделать audio_level и heartbeat независимыми от блокировок `_vad_loop`, обновить UI чат-панели (убрать дублирующиеся надписи и калибровку, переставить mic plate, выровнять высоты эквалайзера и VU-меттера). Дополнительно — отчёт по конфигурации ESP32 mic (sample rate, bit depth).
+
+**Requires:** Phase 8 завершена (рефактор reply mode, heartbeat). Phase 9 расширяет тот же файл `Orchestrator.py` + `mic_reader.py` + `WebUI/static/js/`.
+
+**Tentative deliverables:**
+
+- Debounce на `endpointing_started`: требовать N (default 5 ≈ 100 ms) подряд silence-кадров перед эмиссией. Параметр в Config.
+- Heartbeat вынести из `_vad_loop` в отдельную asyncio-task (живёт независимо от блокировок ASR/TTS).
+- `audio_level` continuous emission: добавить wall-clock task в `MicReader`, эмитит каждые ~100 ms из последних известных уровней — даже если drain_loop стал на reconnect/stall. Существующий event-emit per-frame оставляется в виде primary path; новый task — fallback от sticking.
+- WebUI chat panel (System/WebUI/static/js/panels/chat.js + widgets/wakeMeter.js):
+  - Убрать текстовые подписи (`t=0.08 s=0.00 max=0.00`) из эквалайзера.
+  - Убрать кнопку «Калибровать» из chat — остаётся только на странице настроек.
+  - Перенести `micSourceBadge` на место кнопки Калибровать (над эквалайзером, выровнено по правому краю).
+  - VU-метр (vuCanvas) высота 96 px (под высоту эквалайзера).
+- Verification report: ESP32 sample rate (16 kHz vs рекомендация 44.1/48), bit depth (16 vs 16 — соответствует).
+
+**Note:** WebUI уже использует SSE (`/api/agent/stream`) — отдельный fix не нужен. Polling `/api/agent/status` 4-сек интервалом — для общей health-данных, не для UI VU/equalizer.
+
+**Mode:** debug + UI polish
+
+**Requirement IDs:** REQ-VAD-DEBOUNCE, REQ-AUDIO-LEVEL-CONTINUOUS, REQ-HEARTBEAT-INDEPENDENT, REQ-UI-CHAT-CLEANUP, REQ-ESP32-AUDIO-REPORT
+
+---
+
+## Phase 10: Flush stale audio on safe state transitions (V-S07.1 backport)
+
+**Branch:** TBD (suggest `V-S07.5-flush-on-transition`)
+
+**Goal:** Восстановить принципы V-S07.1 `_drain_esp32_backlog` в архитектуре V-S07.3 (MicReader-стрим), но **только в безопасных точках** где пользователь точно не говорит. Устранить feeding stale TCP-buffered аудио в WhisperX после долгих mute-окон и reply EXPIR.
+
+**Requires:** Phase 9 завершена; реверт Phase 10 v1 (commit 5664121) изучен — v1 ошибочно вызывал flush на wake_word, что съедало первые 200ms запроса пользователя (Test 5: 33% success vs 64% baseline).
+
+**Root cause (от Phase 9 анализа):**
+V-S07.1 после `_transcribe_and_dispatch` явно вызывал `_drain_esp32_backlog(read_fn, frame_bytes, mute_start)` — отбрасывал stale байты из raw socket. V-S07.3 (Phase 7 refactor) этот шаг удалил, предполагая что MicReader's `_drain_loop` всегда успевает читать socket в фоне. На практике `_drain_loop` стопится на 200-500 мс из-за CPU нагрузки и W5500 SPI конкуренции с MJPEG → kernel TCP буфер ESP32 накапливает 1-3 сек аудио → flood приходит в queue и засоряет speech_frames.
+
+**Принципы из V-S07.1, адаптированные для MicReader-стрима:**
+
+1. **Drain после `_transcribe_and_dispatch`** (V-S07.1 эквивалент): после возврата transcribe, перед transition в reply/standby. Безопасно потому что (a) пользователь не говорит когда Адам только что озвучил ответ, (b) `_REPLY_GUARD_SEC=0.6` сразу за этим прикроет любой overlap.
+
+2. **Drain на `reply_silence_timeout`**: пользователь только что не успел ответить, в TCP буфере могут быть стале-фрагменты из reply window. Безопасно потому что (a) пользователь по определению молчал, (b) `_STANDBY_GUARD_SEC=0.3` сразу блокирует OWW на 300 мс.
+
+3. **Защита TCP-буфера ESP32** (не Drain socket напрямую как V-S07.1, а через MicReader): после `flush_queue()` ставится `_discard_until_ts` — drain_loop ПРОДОЛЖАЕТ читать socket (kernel TCP buffer дренируется, W5500 SPI не переполняется), но скип `_put_or_drop` 200 мс. Это адаптация V-S07.1 под MicReader-стрим — собственный socket-read MicReader'а сохраняется, drain происходит на уровне queue.
+
+**Чего НЕ делается:**
+- Flush на `wake_word_detected` — Phase 10 v1 показал что это убивает первые 200 мс речи пользователя (regression 64%→33% success).
+- Прямое чтение socket из `_vad_loop` — это бы сломало MicReader-стрим архитектуру (пользователь запретил).
+
+**Deliverables:**
+- `MicReader.flush_queue(discard_window_ms=200.0)` — публичный метод.
+- `_discard_until_ts` поле + gate в `_drain_loop` (mirror of mute-gate).
+- 2 вызова в Orchestrator: post-transcribe + reply_silence_timeout. БЕЗ wake.
+- Событие `mic_queue_flushed {frames, ms, trigger, discard_window_ms}` для диагностики.
+
+**Mode:** debug fix — устраняет регрессию Phase 7 refactor без регрессии Phase 10 v1.
+
+**Requirement IDs:** REQ-FLUSH-ON-SAFE-TRANSITIONS
+
+---
+
+## Phase 11: Voice Pipeline Refactor — соответствие эталонной логике
+
+**Branch:** `V-S08.1-code_rev_ref_opt`
+
+**Goal:** Довести voice pipeline до соответствия эталонной логике (STANDBY → LISTENING → ANSWER → REPLY с таймингами 6с/5с/15с/10с); устранить дублирование, удалить мёртвый код, повысить стабильность. Источник: [REVIEW.md](phases/11-voice-pipeline-refactor/REVIEW.md).
+
+**Requires:** Phase 7 завершена ✓ (MicReader keep-alive), Phase 10 завершена ✓ (flush-on-safe-transitions).
+
+**Reference logic (источник истины):**
+
+| Стадия | Параметр | Значение |
+| --- | --- | --- |
+| STANDBY | wake word | «адам» (OWW) |
+| LISTENING | silence → STANDBY | 6 сек |
+| LISTENING | end-of-utterance silence | 1.5 сек |
+| LISTENING | max segment | 15 сек |
+| REPLY | guard после TTS | 0.6 сек |
+| REPLY | silence → STANDBY | 5 сек |
+| REPLY | end-of-utterance silence | 1.5 сек |
+| REPLY | max segment | 10 сек |
+| Mic OFF | до STANDBY | UI-only gate (MicReader дренирует socket всё время) |
+| filler | по умолчанию | выключен |
+
+**Plans:** 6 plans
+
+- [ ] 11-01-PLAN.md — Config defaults + schema (эталонные тайминги + filler off)
+- [ ] 11-02-PLAN.md — Удалить legacy ESP-fallback каскад из VoiceLoopController (~-200 LOC)
+- [ ] 11-03-PLAN.md — Удалить `/api/voice/force_esp_retry` endpoint + UI «Подключиться к ESP» (~-150 LOC)
+- [ ] 11-04-PLAN.md — Cleanup статуса + удалить deprecated `_command_endpointing_ms` алиас (~-30 LOC)
+- [ ] 11-05-PLAN.md — Переименовать `wake_word.wake_silence_timeout_sec` → `services.asr.listening_silence_timeout_sec` (с deprecated alias)
+- [ ] 11-06-PLAN.md — Verification: smoke test full pipeline
+
+**Mode:** standard (refactor)
+
+**Requirement IDs:** REQ-VOICE-REFERENCE-TIMINGS, REQ-NO-LEGACY-FALLBACK, REQ-NO-FORCE-ESP-RETRY, REQ-CONFIG-FIRST-VOICE
+
+---
+## Phase 12: Comprehensive Diploma Analysis
 
 **Branch:** `diploma-chapter3` (работа над дипломом ведётся здесь)
 
@@ -222,13 +394,13 @@ Plans:
 
 ---
 
-## Phase 8: Theory-Code Verification
+## Phase 13: Theory-Code Verification
 
 **Branch:** `diploma-chapter3` (анализ остаётся в дипломной ветке)
 
 **Goal:** Для каждого теоретического концепта диплома найти runtime-evidence в коде и классифицировать соответствие. Расширить начатый `diploma/ANALYSIS-THEORY-vs-CODE.md` на все 4 главы.
 
-**Requires:** Phase 7 завершена
+**Requires:** Phase 12 завершена
 
 **Delivers:**
 
@@ -252,7 +424,7 @@ Plans:
 
 ---
 
-## Phase 9: Next-Phases Planning
+## Phase 14: Next-Phases Planning
 
 **Branch:** `diploma-chapter3`
 
@@ -266,10 +438,10 @@ Plans:
 - `09-PRIORITIZATION.md` — матрица impact × effort × strategic value
 - `09-PHASE-DRAFTS.md` — phase drafts для топ-5-8 кандидатов в формате (Goal / Delivers / Requires / Mode)
 - Интеграция с активными ветками:
-  - `Memory-upgrade` → Phase 10C: Memory Wave 2 (Neural search)
-  - `dynamic-aiim` → Phase 10F: AIIM Dynamic (рефлексивный уровень)
-  - `VLM-upgrade` → Phase 10G: Vision Upgrade
-  - `Identity-tuning` → Phase 10H: Identity Calibration
+  - `Memory-upgrade` → Phase 15C: Memory Wave 2 (Neural search)
+  - `dynamic-aiim` → Phase 15F: AIIM Dynamic (рефлексивный уровень)
+  - `VLM-upgrade` → Phase 15G: Vision Upgrade
+  - `Identity-tuning` → Phase 15H: Identity Calibration
 - `09-SUMMARY.md` — итог: 5-8 рекомендуемых фаз для добавления в Roadmap
 
 **Mode:** standard
@@ -284,17 +456,17 @@ Plans:
 - [x] 09-01-PLAN.md — CANDIDATES.md: реестр ~13 кандидатов из Ф8 §4.1 + Backlog + активных веток
 - [x] 09-02-PLAN.md — 09-PRIORITIZATION.md: матрица 4 критериев (Impact/Effort/Strategic/Exhibition) + P0–P3 группы
 - [x] 09-03-PLAN.md — 09-PHASE-DRAFTS.md: полные ROADMAP-style drafts для P0 (10A/10B/11) + компактные для P1–P3
-- [x] 09-04-PLAN.md — 09-SUMMARY.md: финальные рекомендации для Phase 10 (что копировать + открытые вопросы + milestone-предложение)
+- [x] 09-04-PLAN.md — 09-SUMMARY.md: финальные рекомендации для Phase 15 (что копировать + открытые вопросы + milestone-предложение)
 
 ---
 
-## Phase 10: Roadmap Global Update
+## Phase 15: Roadmap Global Update
 
 **Branch:** `diploma-chapter3` (изменения в `.planning/` остаются в дипломной ветке до мёржа)
 
 **Goal:** Обновить ROADMAP.md и REQUIREMENTS.md с глобальной картой будущих фаз; добавить milestone-структуру; привязать активные ветки к фазам.
 
-**Requires:** Phase 9 завершена
+**Requires:** Phase 14 завершена
 
 **Delivers:**
 
@@ -313,15 +485,15 @@ Plans:
 
 ---
 
-## Phase 10A: Diploma Convergence Pass
+## Phase 15A: Diploma Convergence Pass
 
 **Branch:** `diploma-chapter3` (existing — текущая ветка, продолжение)
 
-**Goal:** Применить все оставшиеся текстовые правки диплома из Phase 8 (4 A-path + 7 C-path + 10 оставшихся EMERGENT), финализировать диплом и подготовить ветку `diploma-chapter3` к мёржу в `main`.
+**Goal:** Применить все оставшиеся текстовые правки диплома из Phase 13 (4 A-path + 7 C-path + 10 оставшихся EMERGENT), финализировать диплом и подготовить ветку `diploma-chapter3` к мёржу в `main`.
 
 **Requires:**
-- Phase 8 завершена ✓ (08-SUMMARY.md создан, топ-3 EMERGENT применены)
-- Phase 9 завершена ✓ (09-SUMMARY.md создан)
+- Phase 13 завершена ✓ (08-SUMMARY.md создан, топ-3 EMERGENT применены)
+- Phase 14 завершена ✓ (09-SUMMARY.md создан)
 
 **Delivers:**
 - Правка ch01.1.1.4 — мета-параграф «AIIM как философский мост Брайдотти↔Латур↔код» (EMERGENT #13, F-04)
@@ -339,14 +511,14 @@ Plans:
 
 ---
 
-## Phase 10B: Config-First Refactor
+## Phase 15B: Config-First Refactor
 
 **Branch:** `config-refactor` (new — создаётся при старте фазы)
 
-**Goal:** Вынести все хардкодированные числовые параметры в `Config.json` / `Config.schema.json` и устранить BUG F-07 (рассинхронизацию `history_turns=2` vs `limit=8`), закрыв Pattern 4 из Phase 8.
+**Goal:** Вынести все хардкодированные числовые параметры в `Config.json` / `Config.schema.json` и устранить BUG F-07 (рассинхронизацию `history_turns=2` vs `limit=8`), закрыв Pattern 4 из Phase 13.
 
 **Requires:**
-- Phase 8 завершена ✓ (F-07 BUG, Τ-30/31/36 задокументированы)
+- Phase 13 завершена ✓ (F-07 BUG, Τ-30/31/36 задокументированы)
 - Не блокируется другими фазами (независима)
 
 **Delivers:**
@@ -357,7 +529,7 @@ Plans:
 - Обновлённые `System/Config.json` и `System/Config.schema.json` с descriptions
 - Рефакторинг `prompt.py`, `episodic.py`, `Engineering/consolidator.py` (чтение из конфига)
 - Unit-тесты для каждого нового Config-ключа (с env-override `ADAM_CONFIG_OVERRIDE`)
-- Разблокирует Phase 16 (UI Rebuild) и Phase 18 (Structural Refactor)
+- Разблокирует Phase 21 (UI Rebuild) и Phase 23 (Structural Refactor)
 
 **Requirements:** CFG-01, CFG-02, CFG-03, CFG-04
 
@@ -365,15 +537,15 @@ Plans:
 
 ---
 
-## Phase 11: AIIM Dynamic — Рефлексивный уровень идентичности
+## Phase 16: AIIM Dynamic — Рефлексивный уровень идентичности
 
 **Branch:** `dynamic-aiim` (existing)
 
 **Goal:** После каждой сессии консолидатор анализирует паттерны взаимодействия и автоматически корректирует параметры `Tuning.json` (drive, verbosity, доминирующие аспекты) в пределах заданных magnitude limits, реализуя рефлексивный уровень AIIM.
 
 **Requires:**
-- Phase 13 (Memory Consolidation) — желательно; integration hook требует работающего consolidator (можно вести параллельно)
-- Phase 10A (Diploma Convergence Pass) — согласование diploma-side описания AIIM Dynamic (DIPL-10)
+- Phase 18 (Memory Consolidation) — желательно; integration hook требует работающего consolidator (можно вести параллельно)
+- Phase 15A (Diploma Convergence Pass) — согласование diploma-side описания AIIM Dynamic (DIPL-10)
 
 **Delivers:**
 - Новый модуль `System/adam/aiim_reflection.py` с функцией `adjust_tuning(session_summary, current_tuning) -> dict`
@@ -382,7 +554,7 @@ Plans:
 - Интеграция в consolidator hook: после каждой консолидации вызывается `aiim_reflection.adjust_tuning`
 - API endpoint `GET /api/agent/aiim/last-adjustment` — последнее корректирующее воздействие с delta и timestamp
 - Регрессионный тест: суммарный дрейф параметров за N сессий ≤ magnitude_limit
-- Разблокирует Phase 12 (RDI metric source — рефлексивный уровень даёт данные для метрики)
+- Разблокирует Phase 17 (RDI metric source — рефлексивный уровень даёт данные для метрики)
 
 **Requirements:** AIIM-01, AIIM-02, AIIM-03, AIIM-04
 
@@ -390,7 +562,7 @@ Plans:
 
 ---
 
-## Phase 13: Memory Consolidation
+## Phase 18: Memory Consolidation
 
 **Branch:** `memory-consolidation` (new — отдельно от `Memory-upgrade`, чтобы изолировать риски)
 
@@ -405,7 +577,7 @@ Plans:
 - Daily cron scheduler или Orchestrator event hook для запуска консолидации после сессии
 - Корректный flow флага `Episode.consolidated: bool` — от `episodic.py` до diary
 - Тесты интеграции: консолидация запускается корректно, флаги проставляются
-- Разблокирует Phase 12 (LMRR metric source), Phase 15 (prereq), Phase 19 (context history)
+- Разблокирует Phase 17 (LMRR metric source), Phase 20 (prereq), Phase 24 (context history)
 
 **Requirements:** MEM-01, MEM-02, MEM-03
 
@@ -413,14 +585,14 @@ Plans:
 
 ---
 
-## Phase 21: Identity Calibration Финализация
+## Phase 26: Identity Calibration Финализация
 
 **Branch:** `Identity-tuning` (existing)
 
 **Goal:** Завершить разработку в `Identity-tuning` (Φ-13 path C, Α-24 path A, калибровка 5 mood-состояний) и выполнить merge в `main`.
 
 **Requires:**
-- Phase 10A (Diploma Convergence Pass) — согласование diploma-side правок Α-24 и Φ-13
+- Phase 15A (Diploma Convergence Pass) — согласование diploma-side правок Α-24 и Φ-13
 
 **Delivers:**
 - Финализация кода в ветке `Identity-tuning` (Φ-13 path C параграф + Α-24 mood калибровка)
@@ -435,14 +607,14 @@ Plans:
 
 ---
 
-## Phase 14: Mood LLM-driven
+## Phase 19: Mood LLM-driven
 
 **Branch:** `mood-llm` (new — создаётся при старте фазы)
 
 **Goal:** Доработать `action.py` для парсинга явных mood-маркеров из LLM-ответа вместо текущего keyword matching по `reply_text`.
 
 **Requires:**
-- Независима (улучшает NVR метрику Phase 12)
+- Независима (улучшает NVR метрику Phase 17)
 
 **Delivers:**
 - Доработка `action.py`: парсинг явных mood-маркеров из структуры LLM-ответа (не keyword matching)
@@ -456,14 +628,14 @@ Plans:
 
 ---
 
-## Phase 15: Memory Wave 2 (Neural Search)
+## Phase 20: Memory Wave 2 (Neural Search)
 
 **Branch:** `Memory-upgrade` (existing, Wave 2)
 
 **Goal:** Заменить TF-IDF векторизацию в `FaissEpisodeIndex` на llama.cpp `/embeddings` endpoint для семантического поиска по эпизодической памяти.
 
 **Requires:**
-- Phase 13 (Memory Consolidation) завершена — prereq
+- Phase 18 (Memory Consolidation) завершена — prereq
 - Свободная VRAM ≥ 4 GB при работающем Gemma 4 E4B
 
 **Delivers:**
@@ -478,7 +650,7 @@ Plans:
 
 ---
 
-## Phase 17: Remote Access
+## Phase 22: Remote Access
 
 **Branch:** `remote-access` (new — создаётся при старте фазы)
 
@@ -499,21 +671,21 @@ Plans:
 
 ---
 
-## Phase 20: VLM Upgrade Финализация
+## Phase 25: VLM Upgrade Финализация
 
 **Branch:** `VLM-upgrade` (existing)
 
 **Goal:** Завершить разработку в ветке `VLM-upgrade` и выполнить merge в `main`.
 
 **Requires:**
-- Независима (Phase 8 не выявила блокеров)
+- Независима (Phase 13 не выявила блокеров)
 
 **Delivers:**
 - Финализация кода в ветке `VLM-upgrade`
 - Code review пройден (`/gsd-code-review`)
 - Merge `VLM-upgrade` → `main` выполнен
 - Регрессионный тест: scene_worker_enabled, scene_interval_sec, scene_stale_after_sec корректно читаются из Config.json
-- После мёржа Phase 15 может использовать VLM embeddings
+- После мёржа Phase 20 может использовать VLM embeddings
 
 **Requirements:** VLM-01, VLM-02
 
@@ -521,21 +693,21 @@ Plans:
 
 ---
 
-## Phase 19: Proactive Speech
+## Phase 24: Proactive Speech
 
 **Branch:** `proactive-speech` (new — создаётся при старте фазы)
 
 **Goal:** Добавить idle-scheduler — фоновый процесс, который при наличии посетителей и тишине дольше N секунд вызывает LLM с промптом-затравкой и воспроизводит ответ без wake word.
 
 **Requires:**
-- Phase 13 (Memory Consolidation) завершена — контекст истории сессий
+- Phase 18 (Memory Consolidation) завершена — контекст истории сессий
 
 **Delivers:**
 - idle-scheduler в Orchestrator: при тишине > N секунд и наличии посетителей (VLM engagement) вызывать LLM
 - Промпт-затравка для спонтанных реплик (без wake word) — отдельный системный промпт в Config или Tuning.json
 - Rate limiter (не чаще M минут) + соблюдение half_duplex_mute инварианта (idle не перекрывает активный диалог)
 - Config-параметры: `proactive.idle_threshold_sec`, `proactive.rate_limit_min`, `proactive.enabled`
-- Связана с Phase 12 SIAR метрика (Spontaneous Initiative Activity Ratio)
+- Связана с Phase 17 SIAR метрика (Spontaneous Initiative Activity Ratio)
 
 **Requirements:** PROAC-01, PROAC-02, PROAC-03
 
@@ -543,21 +715,21 @@ Plans:
 
 ---
 
-## Phase 16: UI Rebuild
+## Phase 21: UI Rebuild
 
 **Branch:** `ui-rebuild` (new — создаётся при старте фазы)
 
 **Goal:** Пересобрать операторский веб-интерфейс (`:8080`) с перегруппировкой параметров по доменным блокам (ESP / Agent / Identity), визуализацией уровня микрофона, настройкой silence timeout и управлением громкостью.
 
 **Requires:**
-- Phase 10B (Config-First Refactor) завершена — параметры должны быть в Config.json до UI-привязки
+- Phase 15B (Config-First Refactor) завершена — параметры должны быть в Config.json до UI-привязки
 
 **Delivers:**
 - Перегруппировка операторского UI по доменным блокам: ESP (камера/mic/PCA9685/PCM5102A), Agent (ASR/VLM/LLM/TTS), Adam Identity
 - Real-time визуализация уровня микрофона (mic эквалайзер / VU-meter)
 - Настройка silence timeout (command_endpointing_ms, reply_window_sec) через UI без рестарта
 - Управление громкостью TTS (output device volume) через UI
-- **Open question:** поднять до P2 если дата выставки близко (см. [09-PRIORITIZATION.md R-03](phases/09-next-phases-planning/09-PRIORITIZATION.md))
+- **Open question:** поднять до P2 если дата выставки близко (см. [09-PRIORITIZATION.md R-03](phases/14-next-phases-planning/09-PRIORITIZATION.md))
 
 **Requirements:** UI-01, UI-02, UI-03, UI-04
 
@@ -565,18 +737,18 @@ Plans:
 
 ---
 
-## Phase 18: Structural Refactor
+## Phase 23: Structural Refactor
 
 **Branch:** `refactor` (new — создаётся при старте фазы, требует feature-freeze)
 
-**Goal:** Провести структурный рефакторинг кодовой базы: пересмотр директорий `System/`, `Subsystem/`, `Engineering/`, единый реестр параметров и глубокий Config-аудит поверх Phase 10B.
+**Goal:** Провести структурный рефакторинг кодовой базы: пересмотр директорий `System/`, `Subsystem/`, `Engineering/`, единый реестр параметров и глубокий Config-аудит поверх Phase 15B.
 
 **Requires:**
-- Phase 10B (Config-First Refactor) завершена и смёржена
+- Phase 15B (Config-First Refactor) завершена и смёржена
 - Feature-freeze других веток на время рефакторинга
 
 **Delivers:**
-- Единый реестр всех параметров системы (глубокий аудит поверх Phase 10B — второй слой параметров)
+- Единый реестр всех параметров системы (глубокий аудит поверх Phase 15B — второй слой параметров)
 - Пересмотр директорной структуры `System/`, `Subsystem/`, `Engineering/` — логическая группировка по доменам
 - Все тесты зелёные после рефакторинга
 - systemd units проверены и обновлены под новую структуру (если нужно)
@@ -587,7 +759,7 @@ Plans:
 
 ---
 
-## Phase 12: Metrics & Evaluation Framework
+## Phase 17: Metrics & Evaluation Framework
 
 **Branch:** новая (`metrics-framework`) — создаётся после стабилизации основных веток
 
@@ -595,7 +767,7 @@ Plans:
 
 **Requires:**
 - Стабилизация активных веток: `Memory-upgrade`, `Identity-tuning`, `VLM-upgrade`, `dynamic-aiim` → merged in main
-- Phase 11 (AIIM Dynamic) завершена — без рефлексивного цикла часть метрик (RDI, CRS) не имеет источника данных
+- Phase 16 (AIIM Dynamic) завершена — без рефлексивного цикла часть метрик (RDI, CRS) не имеет источника данных
 
 **Delivers:**
 
@@ -604,7 +776,7 @@ Plans:
 - `data/adam/eval/` — корпус разметки + результаты автоматического расчёта
 - Метрики:
   - **RAS** (Role Adherence Score) — экспертная + автоматическая компонента (lexical analysis ответов)
-  - **RDI** (Role Drift Index) — на основе истории сессий (требует Phase 11)
+  - **RDI** (Role Drift Index) — на основе истории сессий (требует Phase 16)
   - **NVR** (Normative Violation Rate) — правило-based детектор + опциональная LLM-проверка
   - **RI** (Repetition Index) — анализ echoes_used.jsonl + chinese_used.jsonl
   - **CRS** (Coherence-Response Strength) — semantic similarity между запросом и ответом
@@ -618,19 +790,19 @@ Plans:
 
 **Mode:** standard (full GSD cycle)
 
-**Связь с Phase 7 находками:** закрывает T-02 (метрики как honesty-проблема), задачи №3 и №6 из ch00
+**Связь с Phase 12 находками:** закрывает T-02 (метрики как honesty-проблема), задачи №3 и №6 из ch00
 
 ---
 
-## Phase 22: AIIM Core Runtime — структурированные аспекты в коде
+## Phase 27: AIIM Core Runtime — структурированные аспекты в коде
 
 **Branch:** `aiim-core-runtime` (new — создаётся при старте фазы)
 
 **Goal:** Перевести AIIM из чисто текстовой семантики (`Identity.md` в системном промпте) в структурированную runtime-конфигурацию: 12 аспектов сознания с уровнями, состояниями и Δ-приоритетами должны жить как валидируемая структура в `Tuning.json`, читаться при каждом цикле и модулироваться правиловым или модельным контуром. Закрывает гэп между текстом ch3 §3.2.3 диплома и фактической реализацией.
 
 **Requires:**
-- Phase 10A (Diploma Convergence Pass) завершена ✓ — текст ch3 §3.2.3 финализирован
-- Независима от Phase 11 (Phase 11 — рефлексивный уровень, Phase 22 — конфигурационный + динамический уровни)
+- Phase 15A (Diploma Convergence Pass) завершена ✓ — текст ch3 §3.2.3 финализирован
+- Независима от Phase 16 (Phase 16 — рефлексивный уровень, Phase 27 — конфигурационный + динамический уровни)
 
 **Delivers:**
 - Pydantic-модель `AIIMTuning` в `tuning.py`: 12 аспектов (co, se, sp, im, pe, at, be, wi, lo, ho, em, me), каждый — уровень (B/P/S/T/I), состояние (Ac-Or / Ac-Ch / Pa-Or / Pa-Ch), Δ-вес [0..1]
@@ -641,42 +813,42 @@ Plans:
 - Связь `aiim.py` → `action.py`: выбор тега `Mood` опирается на доминирующий аспект в текущем срезе `Tuning.json::aiim`, а не на keyword matching по тексту ответа
 - Hot-reload через `TuningStore` без кеширования (читается каждый цикл) — уже есть в `tuning.py`, нужно добавить аспекты в pydantic-схему
 - Регрессионный тест: после серии эмпатичных обращений `lo` сдвинут на +0.10 ± 0.02, выбор `Mood` смещён к `warm`
-- Разблокирует: Phase 11 (рефлексивный уровень), Phase 14 (mood LLM-driven как режим `mood_source: llm_self_tag`), Phase 12 (RDI метрика на основе Δ-сдвигов)
+- Разблокирует: Phase 16 (рефлексивный уровень), Phase 19 (mood LLM-driven как режим `mood_source: llm_self_tag`), Phase 17 (RDI метрика на основе Δ-сдвигов)
 
 **Requirements:** AIIM-CORE-01 (структура), AIIM-CORE-02 (парсер Identity), AIIM-CORE-03 (Δ-логика правиловая), AIIM-CORE-04 (mood_source), AIIM-CORE-05 (связь с action)
 
 **Mode:** standard (полный GSD-цикл) | **Priority:** P0 | **Effort:** XL (3–4 недели)
 
-**Связь с диплом-расхождениями (gap T3 в `ANALYSIS-THEORY-vs-CODE.md`):** закрывает заявку текста ch3 §3.2.3 на структурированные AIIM-аспекты, Δ-коридор и переключатель `mood_source`. После завершения Phase 22 + Phase 11 текст ch3 §3.2.3 и §3.2.6 становится полностью соответствующим коду.
+**Связь с диплом-расхождениями (gap T3 в `ANALYSIS-THEORY-vs-CODE.md`):** закрывает заявку текста ch3 §3.2.3 на структурированные AIIM-аспекты, Δ-коридор и переключатель `mood_source`. После завершения Phase 27 + Phase 16 текст ch3 §3.2.3 и §3.2.6 становится полностью соответствующим коду.
 
 ---
 
-## Phase 23: Event-driven Proactivity — дельта-реакция на изменения сцены
+## Phase 28: Event-driven Proactivity — дельта-реакция на изменения сцены
 
 **Branch:** `proactive-delta` (new — создаётся при старте фазы)
 
-**Goal:** Реализовать второй слой проактивного контура из диплома §3.3.4 — событийную дельта-реакцию на изменения сцены. В отличие от Phase 19 (idle-scheduler — реакция на длительный простой) и существующего `scene_director` (периодическая фоновая моторика), Phase 23 запускает спонтанные реакции по событийному триггеру и с вероятностной модуляцией.
+**Goal:** Реализовать второй слой проактивного контура из диплома §3.3.4 — событийную дельта-реакцию на изменения сцены. В отличие от Phase 24 (idle-scheduler — реакция на длительный простой) и существующего `scene_director` (периодическая фоновая моторика), Phase 28 запускает спонтанные реакции по событийному триггеру и с вероятностной модуляцией.
 
 **Requires:**
-- Phase 20 (VLM Upgrade) или текущий VILA 1.5-3b с включённым scene worker и кэшем сцен
-- Phase 22 (AIIM Core Runtime) — желательно, для интеграции Δ-сдвигов аспектов на дельта-событие
-- Независима от Phase 19 — слои дополняют друг друга
+- Phase 25 (VLM Upgrade) или текущий VILA 1.5-3b с включённым scene worker и кэшем сцен
+- Phase 27 (AIIM Core Runtime) — желательно, для интеграции Δ-сдвигов аспектов на дельта-событие
+- Независима от Phase 24 — слои дополняют друг друга
 
 **Delivers:**
 - Модуль `System/adam/scene_delta.py` — сравнение текущего описания VLM с предыдущим из `scene_buffer`. Возвращает категоризированное событие: `appeared` / `disappeared` / `count_change` / `engagement_change` (none → watching / watching → approaching / approaching → interacting), либо `no_delta`
 - Парсер двухчастного формата VLM-промпта (Scene + Engagement) для извлечения переходов уровня вовлечённости
 - Вероятностный модулятор `proactive.spontaneous_speech_prob` в `Tuning.json` (база 0.17 на значимое дельта-событие) с механизмом затухания: при повторных однотипных триггерах вероятность снижается коэффициентом `proactive.repeat_decay` (база 0.5)
 - Интеграция в Orchestrator: при детекции дельта-события — вызвать моторный отклик через `scene_director` overlay (выбор сцены по типу события), и с вероятностью `spontaneous_speech_prob` — запустить LLM-цикл с промптом-затравкой типа «прокомментируй появление зрителя в духе персонажа», результат озвучивается без пробуждного слова
-- Если Phase 22 завершена: дельта-событие также модулирует Δ-веса AIIM перед выбором тега `Mood` (например, `appeared` → +Δ для `at`, `im`)
+- Если Phase 27 завершена: дельта-событие также модулирует Δ-веса AIIM перед выбором тега `Mood` (например, `appeared` → +Δ для `at`, `im`)
 - Соблюдение `half_duplex_mute` инварианта: спонтанная реакция не запускается, если идёт активный диалог или TTS
 - Регрессионный тест: при имитированной последовательности сцен «пустая → один зритель → один наблюдает → один приближается» система генерирует 3 дельта-события и в среднем за 100 прогонов производит 17 ± 5 спонтанных реплик
-- Метрика SIAR в Phase 12 получает данные не только от idle-scheduler (Phase 19), но и от дельта-реакций
+- Метрика SIAR в Phase 17 получает данные не только от idle-scheduler (Phase 24), но и от дельта-реакций
 
 **Requirements:** PROAC-DELTA-01 (детектор), PROAC-DELTA-02 (вероятностный модулятор), PROAC-DELTA-03 (интеграция с моторикой), PROAC-DELTA-04 (интеграция с AIIM)
 
 **Mode:** standard | **Priority:** P1 | **Effort:** L (2–3 недели) | **Exhibition:** H
 
-**Связь с диплом-расхождениями:** закрывает заявку текста ch3 §3.3.4 на трёхуровневый проактив — без Phase 23 в коде представлены только слои 1 (`scene_director` фоновая моторика) и 3 (Phase 19 idle-scheduler), а слой 2 (событийная дельта-реакция) остаётся декларацией в дипломе.
+**Связь с диплом-расхождениями:** закрывает заявку текста ch3 §3.3.4 на трёхуровневый проактив — без Phase 28 в коде представлены только слои 1 (`scene_director` фоновая моторика) и 3 (Phase 24 idle-scheduler), а слой 2 (событийная дельта-реакция) остаётся декларацией в дипломе.
 
 ---
 

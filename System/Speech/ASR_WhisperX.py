@@ -152,9 +152,10 @@ def _transcribe_audio(audio: np.ndarray) -> str:
     result = model.transcribe(audio, language=_LANGUAGE, batch_size=1)
     parts = []
     for seg in result.get("segments", []):
-        # avg_logprob: lower = worse quality. -0.5 is a good threshold for Russian.
+        # avg_logprob: lower = worse quality. -0.8 tolerates quiet/distant speech
+        # from the ESP32 INMP441 mic; was -0.5, which silently dropped legit utterances.
         # NOTE: whisperx uses avg_logprob (NOT no_speech_prob which is faster-whisper only)
-        if seg.get("avg_logprob", -1.0) < -0.5:
+        if seg.get("avg_logprob", -1.0) < -0.8:
             continue
         text = seg.get("text", "").strip()
         if text:

@@ -108,8 +108,9 @@ const SCHEMA = [
       { key: "speed_multiplier", label: "Скорость речи", type: "float", min: 0.8, max: 1.6, step: 0.05,
         slider: true,
         hint: "1.0 = нормально · 1.25 = живее (рекомендуется) · 1.5 = быстро" },
-      { key: "volume",           label: "Громкость",     type: "float", min: 0, max: 2, step: 0.05,
-        hint: "1.0 = нормально" },
+      { key: "volume",           label: "Громкость голоса Адама", type: "float", min: 0, max: 2, step: 0.05,
+        slider: true,
+        hint: "0.0 = тишина · 1.0 = норма · 2.0 = максимум (с возможным клипированием). Персональный волюм Адама — применяется поверх системной громкости Jetson" },
     ],
   },
 
@@ -127,6 +128,23 @@ const SCHEMA = [
     ],
   },
 
+  // ── TTS filler («Хм...») ─────────────────────────────────────────────────────
+  {
+    source: "config", section: "services.tts", title: "TTS · Филлер (междометия)",
+    fields: [
+      { key: "filler_enabled", label: "Включить междометия", type: "bool",
+        hint: "если LLM долго думает — Адам произносит короткое «Хм...» вместо тишины" },
+      { key: "filler_phrase", label: "Фраза", type: "text",
+        hint: "что произносить · например «Хм...», «Ух», «Эээ»" },
+      { key: "filler_delay_ms", label: "Задержка LLM (мс)", type: "number",
+        min: 0, max: 5000, step: 50,
+        hint: "если ответ LLM начался быстрее этой задержки — филлер не звучит. 800 = норма" },
+      { key: "filler_probability", label: "Вероятность (0..1)", type: "number",
+        min: 0, max: 1, step: 0.05,
+        hint: "0.30 = в среднем 1 из 3 ходов · 0.0 = выключено de facto · 1.0 = всегда (старое поведение). Не привязано к таймеру — независимый бросок на каждый ход" },
+    ],
+  },
+
   // ── OWW · Wake word ──────────────────────────────────────────────────────────
   {
     source: "config", section: "wake_word", title: "OWW · Wake word",
@@ -140,11 +158,30 @@ const SCHEMA = [
       { key: "vad_threshold", label: "VAD порог (Silero внутри OWW)", type: "number",
         hint: "0–1 · 0 — выключено · выше = строже фильтрует тишину",
         min: 0, max: 1, step: 0.05 },
-      { key: "wake_silence_timeout_sec", label: "Тишина после wake word (с)", type: "number",
-        hint: "5 рекомендуется · после истечения — обратно в standby",
-        min: 0.5, max: 10, step: 0.5 },
     ],
     extras: () => buildWakeWordExtras(),
+  },
+
+  // ── Тайминги голосового пайплайна ────────────────────────────────────────────
+  {
+    source: "config", section: "services.asr", title: "Тайминги голосового пайплайна",
+    fields: [
+      { key: "listening_silence_timeout_sec", label: "LISTENING — тишина → STANDBY (с)", type: "number",
+        hint: "Если после wake word пользователь молчит N секунд — возврат в ожидание. Защита от ложных wake-word. 6 рекомендуется.",
+        min: 1, max: 30, step: 0.5 },
+      { key: "reply_silence_timeout_sec", label: "REPLY — тишина → STANDBY (с)", type: "number",
+        hint: "После ответа Адама микрофон ждёт продолжения N секунд (без wake word). 5 рекомендуется. Отсчёт начинается ПОСЛЕ окна сброса эха (см. ниже).",
+        min: 1, max: 10, step: 0.5 },
+      { key: "post_tts_discard_window_ms", label: "Окно сброса эха TTS (мс)", type: "number",
+        hint: "Сколько миллисекунд после окончания TTS микрофоны игнорируются — чтобы хвост речи Адама не попал в REPLY как речь пользователя. ESP32-стрим имеет лаг ~2.3с. 2500 — наблюдаемый worst case + запас. 0 = выключено (только если эхо физически отсутствует).",
+        min: 0, max: 10000, step: 100 },
+      { key: "silence_after_speech_ms", label: "Конец фразы — длительность тишины (мс)", type: "number",
+        hint: "Сколько миллисекунд подряд должно быть тихо ПОСЛЕ начала речи, чтобы считать запрос завершённым. Действует и в LISTENING, и в REPLY. 1500 — рекомендуемое значение.",
+        min: 200, max: 5000, step: 100 },
+      { key: "silence_rms_threshold", label: "Чувствительность тишины (RMS)", type: "number",
+        hint: "Уровень звука, ниже которого аудио считается тишиной (даже если VAD считает иначе). Повысьте, если фоновый шум зала мешает закончить фразу. 0 — отключить фильтр (только WebRTC VAD). Типично 200–500.",
+        min: 0, max: 2000, step: 50 },
+    ],
   },
 
   // ── ASR · WhisperX ───────────────────────────────────────────────────────────
@@ -154,9 +191,6 @@ const SCHEMA = [
       { key: "model", label: "Модель WhisperX", type: "select",
         choices: ["tiny", "base", "small", "medium", "large-v2", "large-v3"],
         hint: "tiny/base — быстро, точность низкая · small — баланс · medium — рекомендуется · large-v2/v3 — максимум точности, 10+ ГБ VRAM" },
-      { key: "command_endpointing_ms", label: "Endpointing — пауза перед отправкой (мс)", type: "number",
-        hint: "3000 рекомендуется · VAD ждёт такую паузу тишины, затем отправляет фразу в распознавание",
-        min: 200, max: 5000, step: 100 },
       { key: "reply_window_sec", label: "Reply window — soft (с)", type: "number",
         hint: "3.75 · soft-окно после ответа Адама — зритель может говорить без wake word; если речи нет → STANDBY",
         min: 1, max: 30, step: 0.25 },
@@ -233,7 +267,6 @@ const SCHEMA = [
       { key: "max_segment_ms", label: "Макс. длина сегмента (мс)", type: "number",
         hint: "9000 рекомендуется" },
     ],
-    extras: () => buildMicSourceExtras(),
   },
 
   // ── Scene worker ──────────────────────────────────────────────────────────────
@@ -669,144 +702,6 @@ function buildWakeWordExtras() {
     if (meter && typeof meter.dispose === "function") {
       try { meter.dispose(); } catch (_) {}
     }
-  };
-  return wrapper;
-}
-
-// ── Mic-source live status + Force ESP retry button ───────────────────────────
-// Live badge of which mic is actually feeding audio + a button that triggers
-// a single-shot retry to switch from local fallback back to ESP. The button
-// is enabled only when voice_loop is on local fallback (mic_source=esp32 BUT
-// _esp_mic_fallback=true). After click, the orchestrator probes ESP once;
-// on success it cancels the bg-retry task and restarts voice_loop with ESP.
-function buildMicSourceExtras() {
-  const statusBadge = el("span", {
-    class: "badge",
-    style: "font-size:10px; padding:2px 8px; font-family:var(--font-mono)",
-  }, "…");
-
-  const forceBtn = el("button", {
-    class: "btn",
-    style: "font-size:11px; padding:4px 10px",
-    disabled: true,
-    onclick: async () => {
-      forceBtn.disabled = true;
-      forceBtn.textContent = "Подключаюсь к ESP…";
-      try {
-        const { api } = await import("../api.js");
-        const result = await api.post("/api/voice/force_esp_retry", {});
-        if (result && result.ok) {
-          statusBadge.textContent = "ESP отвечает — переключение…";
-          statusBadge.style.background = "rgba(67,209,122,0.15)";
-          forceBtn.textContent = "✓ Переключение";
-          // refresh() will fire on voice_loop_started event shortly
-        } else {
-          const err = (result && result.error) || "неизвестная ошибка";
-          forceBtn.textContent = `Ошибка: ${err}`;
-          forceBtn.disabled = false;
-          setTimeout(() => { forceBtn.textContent = "Подключиться к ESP"; }, 4000);
-        }
-      } catch (e) {
-        forceBtn.textContent = `Ошибка: ${e.message || e}`;
-        forceBtn.disabled = false;
-        setTimeout(() => { forceBtn.textContent = "Подключиться к ESP"; }, 4000);
-      }
-    },
-  }, "Подключиться к ESP");
-
-  const hintEl = el("span", {
-    class: "dim",
-    style: "font-size:10px; color:var(--muted); line-height:1.3",
-  }, "Активно только если сейчас работает local mic, а в Config выбран esp32.");
-
-  let _unsub = null;
-  Promise.all([
-    import("../api.js"),
-  ]).then(([{ api, subscribeEvents }]) => {
-    const renderStatus = (status) => {
-      const vl = status?.voice_loop || {};
-      const active = vl.mic_active_source || vl.mic_source || "local";
-      const stream = vl.mic_stream_state || "n/a";
-      const wait = vl.esp_boot_wait_state || "n/a";
-      const bgRetry = !!vl.esp_bg_retry_active;
-      const canForce = !!vl.force_esp_retry_available;
-
-      // Build human-readable badge text
-      let badgeText = "";
-      let badgeBg = "rgba(150,150,160,0.15)";
-      if (active === "esp32_stereo" || active === "esp32_mono") {
-        badgeText = `Активен: ESP32 (${active === "esp32_stereo" ? "stereo" : "mono"})`;
-        badgeBg = "rgba(67,209,122,0.18)";
-      } else if (active === "local_fallback") {
-        const sub = bgRetry ? " · фон-retry активен" : " · ESP не отвечает";
-        badgeText = `Активен: Local fallback${sub}`;
-        badgeBg = "rgba(240,184,74,0.18)";
-      } else if (active === "local") {
-        badgeText = "Активен: Local (по конфигу)";
-        badgeBg = "rgba(150,150,160,0.15)";
-      } else {
-        badgeText = `Активен: ${active}`;
-      }
-      if (wait === "waiting") badgeText += " · ожидание ESP";
-      if (stream === "connecting" && active !== "local") badgeText += " · подключение";
-
-      statusBadge.textContent = badgeText;
-      statusBadge.style.background = badgeBg;
-
-      // Force button is enabled only when on local fallback
-      forceBtn.disabled = !canForce;
-      if (!canForce) {
-        forceBtn.style.opacity = "0.5";
-        forceBtn.style.cursor = "not-allowed";
-      } else {
-        forceBtn.style.opacity = "1";
-        forceBtn.style.cursor = "pointer";
-        if (forceBtn.textContent.startsWith("Ошибка") || forceBtn.textContent === "✓ Переключение") {
-          forceBtn.textContent = "Подключиться к ESP";
-        }
-      }
-    };
-
-    const refresh = () => api.get("/api/agent/status").then(renderStatus).catch(() => {});
-    refresh();
-
-    _unsub = subscribeEvents((event) => {
-      if (event && [
-        "voice_loop_started",
-        "voice_loop_stopped",
-        "voice_loop_esp_boot_wait_start",
-        "voice_loop_esp_boot_wait_ok",
-        "voice_loop_esp_boot_timeout",
-        "voice_loop_esp_bg_retry_success",
-        "voice_loop_esp_bg_retry_fail",
-        "voice_loop_esp_bg_retry_exhausted",
-        "voice_loop_force_esp_retry_success",
-        "voice_loop_force_esp_retry_fail",
-        "esp32_mic_fallback_start",
-        "esp32_mic_restored",
-        "config_patched",
-      ].includes(event.type)) {
-        refresh();
-      }
-    });
-  });
-
-  const wrapper = el("div", {
-    style: "display:flex; flex-direction:column; gap:6px; margin-top:10px; padding:8px; background:rgba(255,255,255,0.03); border-radius:6px",
-  }, [
-    el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap" }, [
-      el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Статус источника микрофона"),
-      el("span", { class: "spacer" }),
-      statusBadge,
-    ]),
-    el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap" }, [
-      forceBtn,
-      hintEl,
-    ]),
-  ]);
-
-  wrapper._dispose = () => {
-    try { if (_unsub) _unsub(); } catch (_) {}
   };
   return wrapper;
 }

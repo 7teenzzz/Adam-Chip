@@ -33,7 +33,21 @@ class WebRtcVadWrapper:
     def __init__(self, aggressiveness: int = 2) -> None:
         if aggressiveness not in range(4):
             raise ValueError(f"aggressiveness must be 0–3, got {aggressiveness!r}")
+        self._aggressiveness = aggressiveness
         self._vad = _webrtcvad.Vad(aggressiveness)
+
+    @property
+    def aggressiveness(self) -> int:
+        return self._aggressiveness
+
+    @aggressiveness.setter
+    def aggressiveness(self, value: int) -> None:
+        if value not in range(4):
+            raise ValueError(f"aggressiveness must be 0–3, got {value!r}")
+        # Rebuild the underlying Vad — _webrtcvad.Vad takes aggressiveness only
+        # at construction; there is no live setter on the C++ side.
+        self._aggressiveness = value
+        self._vad = _webrtcvad.Vad(value)
 
     def predict(self, audio_bytes: bytes, sample_rate: int = 16000) -> float:
         """Return 1.0 if speech detected, 0.0 if not.
