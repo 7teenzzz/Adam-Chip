@@ -851,6 +851,14 @@ class VoiceLoopController:
                         speech_ms = 0
                         silence_ms = 0
                         self._ww_buf.clear()
+                        # OWW was paused during reply state (~5-90 sec) so its
+                        # internal mel ring buffer holds stale audio from before
+                        # the pause (the user's wake word + initial speech). Flush
+                        # it with silence to prevent a deterministic false wake
+                        # ~400 ms after standby entry (T17 diagnosis: score 0.78
+                        # in 3/3 runs).
+                        if self._wake_engine is not None:
+                            self._wake_engine.reset()
                         # Phase 10 (REQ-FLUSH-ON-STATE-TRANSITION): flush
                         # any TCP / queue buildup that accumulated during the
                         # reply window. Safe here because:
@@ -1046,6 +1054,10 @@ class VoiceLoopController:
                         else:
                             self._set_voice_state("standby", "no_reply")
                             self._standby_entry_time = time.perf_counter()
+                            # Same stale-buffer hazard as reply_silence_timeout
+                            # path: OWW was paused throughout mute/ASR/LLM cycle.
+                            if self._wake_engine is not None:
+                                self._wake_engine.reset()
                             event_log.append("asr_no_reply_standby", {
                                 "reason": "no_spoken_response"
                             })
@@ -1713,6 +1725,11 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
             # standby entry, matching existing post-stop behaviour.
             voice_loop._set_voice_state("standby", "warmup_done")
             voice_loop._standby_entry_time = time.perf_counter()
+            # Same stale-buffer hazard: OWW was skipped during boot_warmup
+            # (warmup TTS may have played for several seconds) so its
+            # internal buffer is no longer the silence we primed at init.
+            if voice_loop._wake_engine is not None:
+                voice_loop._wake_engine.reset()
             break
         await asyncio.sleep(2.0)
 
