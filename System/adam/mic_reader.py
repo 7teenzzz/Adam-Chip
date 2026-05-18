@@ -605,7 +605,73 @@ class MicReader:
             if utt_id:
                 payload["utterance_id"] = utt_id
 
+        # Phase 21A: attach 24-band log-frequency FFT spectrum (UI-EQ-01/02).
+        # Emits as payload["bands"] = list[float], length spec_n_bands,
+        # each value in [0.0, 1.0] (dBFS-normalised). When the chunk is too
+        # short or FFT fails, _compute_bands returns None and the key is
+        # omitted — frontend keeps its last snapshot.
+        bands = self._compute_bands(mono_chunk)
+        if bands is not None:
+            payload["bands"] = bands
+
         self._emit("audio_level", payload)
+
+    def _compute_bands(self, mono_chunk: bytes) -> list[float] | None:
+        """Phase 21A: 24-band log-frequency FFT spectrum (UI-EQ-01).
+
+        Real-time per-frame FFT over the same mono PCM buffer that already
+        feeds RMS / OWW / ASR. Returns a list of `_spec_n_bands` floats in
+        [0.0, 1.0] dBFS-normalised, rounded to 3 decimals. Returns None
+        when the chunk is missing or shorter than n_fft samples (frontend
+        keeps the last snapshot in that case — RESEARCH §12 / Pitfall 4).
+
+        Math (RESEARCH §1 + §3):
+          windowed     = int16_samples * Hann(n_fft).float32
+          spectrum     = |rfft(windowed)|
+          ref(band)    = 0.5 * 32768 * sum(Hann) * bin_count
+          db(band)     = 20 * log10(sum(spectrum[lo:hi+1]) / ref)
+          norm(band)   = clamp(db, floor_db, ceiling_db)
+                         mapped linearly into [0, 1]
+
+        Exceptions are swallowed (emitting a `spectrum_error` event) so
+        any FFT failure cannot stall the audio_level emit path that the
+        UI VU-meter relies on. Mirrors Pitfall A8 from RESEARCH.
+        """
+        try:
+            if not mono_chunk or len(mono_chunk) < self._spec_n_fft * 2:
+                return None
+            samples = np.frombuffer(
+                mono_chunk[: self._spec_n_fft * 2], dtype=np.int16
+            ).astype(np.float32)
+            windowed = samples * self._spec_hann
+            spectrum = np.abs(np.fft.rfft(windowed))
+            out: list[float] = []
+            floor_db = self._spec_floor_db
+            ceiling_db = self._spec_ceiling_db
+            span_db = ceiling_db - floor_db
+            if span_db <= 0:
+                # Degenerate config — would divide by zero / give NaN.
+                span_db = 1.0
+            for (lo, hi) in self._spec_band_table:
+                band_mag = float(spectrum[lo : hi + 1].sum())
+                bin_count = hi - lo + 1
+                ref = self._spec_mag_ref * max(1, bin_count)
+                if band_mag < 1e-9 or ref <= 0:
+                    norm = 0.0
+                else:
+                    db = 20.0 * math.log10(band_mag / ref)
+                    if db < floor_db:
+                        db_clamped = floor_db
+                    elif db > ceiling_db:
+                        db_clamped = ceiling_db
+                    else:
+                        db_clamped = db
+                    norm = (db_clamped - floor_db) / span_db
+                out.append(round(norm, 3))
+            return out
+        except Exception as exc:  # noqa: BLE001 — must never break emit
+            self._emit("spectrum_error", {"err": str(exc)[:200]})
+            return None
 
     async def _level_emit_loop(self) -> None:
         """Phase 9 (REQ-AUDIO-LEVEL-CONTINUOUS): wall-clock fallback emitter.
@@ -633,6 +699,9 @@ class MicReader:
                 # Backfill — synthesise from cached RMS.
                 rms = self._last_mono_rms
                 norm = round(min(1.0, (rms / self._normalize_factor) ** 0.5), 3)
+                # Phase 21A: synthetic events OMIT 'bands' by design
+                # (RESEARCH §12). No fresh PCM → no honest spectrum.
+                # Frontend keeps last snapshot.
                 payload: dict[str, Any] = {
                     "level": norm,
                     "state": self._voice_state_for_event(),
@@ -775,7 +844,7 @@ class MicReader:
                 self._drained_bytes_total += len(chunk)
 
                 self._level_tick += 1
-                if self._level_tick >= _AUDIO_LEVEL_EMIT_EVERY_N_FRAMES:
+                if self._level_tick >= self._audio_level_emit_every_n:
                     self._emit_audio_level(chunk)
                     self._level_tick = 0
 
