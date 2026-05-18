@@ -827,6 +827,24 @@ class MicReader:
         idx = min(max(0, fail_idx - 1), len(self._backoff_seq) - 1)
         return float(self._backoff_seq[idx])
 
+    def _should_trigger_stream_restart(self, now: float | None = None) -> bool:
+        """Phase 21A-08 watchdog gate predicate. Extracted from `_run` for testability.
+
+        Returns True when the watchdog should fire a `:81` restart:
+        - feature is enabled (`esp_stream_restart_after_fails > 0`)
+        - failure budget exceeded
+        - cooldown since previous trigger has elapsed
+        The caller is responsible for the probe-alive precondition; in
+        `_run` this is implicit because a failing probe earlier in the
+        same iteration `continue`s before reaching this gate.
+        """
+        if self._esp_stream_restart_after_fails <= 0:
+            return False
+        if self._consecutive_fails < self._esp_stream_restart_after_fails:
+            return False
+        ts = time.perf_counter() if now is None else now
+        return (ts - self._last_auto_restart_t) >= self._esp_stream_restart_cooldown_sec
+
     async def _trigger_stream_restart(self) -> bool:
         """Phase 21A-08 watchdog: POST :80/api/system/stream/restart to ESP32.
 
@@ -1041,12 +1059,7 @@ class MicReader:
             # restart it via :80/api/system/stream/restart. Cooldown is
             # enforced via _last_auto_restart_t so we do not loop when
             # ESP takes >backoff to come back up.
-            if (
-                self._esp_stream_restart_after_fails > 0
-                and self._consecutive_fails >= self._esp_stream_restart_after_fails
-                and (time.perf_counter() - self._last_auto_restart_t)
-                >= self._esp_stream_restart_cooldown_sec
-            ):
+            if self._should_trigger_stream_restart():
                 self._last_auto_restart_t = time.perf_counter()
                 restart_ok = await self._trigger_stream_restart()
                 # Give ESP firmware time to spin :81 back up. ~8 sec is
