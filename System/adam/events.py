@@ -15,13 +15,27 @@ def utc_now() -> str:
 
 
 class EventLog:
-    def __init__(self, data_dir: Path, memory_limit: int = 500) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        memory_limit: int = 500,
+        *,
+        audio_cfg: dict[str, Any] | None = None,
+    ) -> None:
         self.data_dir = data_dir
         self.path = data_dir / "events.jsonl"
         self._lock = threading.Lock()
         self._recent: deque[dict[str, Any]] = deque(maxlen=memory_limit)
         self._subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]] = []
         self._dropped_count: int = 0
+        # Phase 21A-04: writing-side sampler for high-frequency audio_level events.
+        # Default 1 = no sampling (legacy behavior, also used when audio_cfg is None for tests).
+        # Production Config.json value is 5 (write every 5th audio_level to disk).
+        # SSE broadcast cadence and the in-memory _recent deque are UNAFFECTED.
+        self._jsonl_sample_audio_level: int = max(
+            1, int((audio_cfg or {}).get("events_jsonl_sample_audio_level", 1))
+        )
+        self._jsonl_write_counters: dict[str, int] = {}
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -38,10 +52,24 @@ class EventLog:
         }
         if turn_id:
             event["turn_id"] = turn_id
+
+        # Phase 21A-04: writing-side sampler for high-frequency audio_level events.
+        # Decide whether THIS event reaches the .jsonl file. SSE broadcast and the
+        # in-memory _recent deque still receive every event unconditionally — the
+        # frontend EQ widget keeps its full cadence; only disk pressure is reduced.
+        # Silent-skip is intentional; emitting a "skipped" event would defeat the purpose.
+        skip_file_write = False
+        if event_type == "audio_level" and self._jsonl_sample_audio_level > 1:
+            with self._lock:
+                c = self._jsonl_write_counters.get("audio_level", 0) + 1
+                self._jsonl_write_counters["audio_level"] = c
+            skip_file_write = (c % self._jsonl_sample_audio_level) != 0
+
         encoded = json.dumps(event, ensure_ascii=False, sort_keys=True)
         with self._lock:
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(encoded + "\n")
+            if not skip_file_write:
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(encoded + "\n")
             self._recent.append(event)
             subscribers = list(self._subscribers)
         self._broadcast(subscribers, event)
