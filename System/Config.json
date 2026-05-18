@@ -278,7 +278,7 @@
       }
     },
     "echoes": {
-      "enabled": false,
+      "enabled": true,
       "global_cooldown_turns": 12,
       "per_echo_cooldown_days": 7,
       "match_threshold": 0.55,

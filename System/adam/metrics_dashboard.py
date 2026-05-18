@@ -170,7 +170,7 @@ class MetricsDashboard:
             return {
                 "status": "no_data",
                 "value": None,
-                "note": "поле tuning_hash не найдено — нужна обновлённая версия системы",
+                "note": "поле хеша настроек не найдено — нужна обновлённая версия системы",
                 "automation": "full",
             }
         changes = sum(1 for i in range(1, len(hashes)) if hashes[i] != hashes[i - 1])
@@ -182,7 +182,7 @@ class MetricsDashboard:
             "value_pct": round(rate * 100, 1),
             "changes": changes,
             "total": len(hashes),
-            "note": "доля turn'ов без смены конфига персонажа; 1.0 = полная стабильность",
+            "note": "доля реплик без смены настроек персонажа; 1,0 — полная стабильность",
             "automation": "full",
         }
 
@@ -204,7 +204,7 @@ class MetricsDashboard:
         rate = round(len(injected) / len(turns), 4)
         disabled_note = ""
         if rate == 0:
-            disabled_note = "; echoes.enabled=false в Config.json — для теста включить временно"
+            disabled_note = "; пул заготовленных реплик отключён"
         return {
             "status": "ok",
             "value": rate,
@@ -212,7 +212,7 @@ class MetricsDashboard:
             "injected_count": len(injected),
             "total": len(turns),
             "pools": dict(pools),
-            "note": "доля turn'ов с инжекцией echo-реплики" + disabled_note,
+            "note": "доля реплик с использованием заготовленной фразы из пула" + disabled_note,
             "automation": "full",
         }
 
@@ -247,7 +247,7 @@ class MetricsDashboard:
             "no_action_reasons": dict(reasons),
             "total": total,
             "thresholds": {"normal_min": 0.05, "normal_max": 0.15},
-            "note": "норма 5–15%; >30% = рассогласование промпта и whitelist",
+            "note": "норма 5–15%; выше 30% — список допустимых сцен не совпадает с предложениями модели",
             "automation": "full",
         }
 
@@ -279,7 +279,7 @@ class MetricsDashboard:
             return {
                 "status": "insufficient_data",
                 "value": None,
-                "note": f"нужны сессии ≥20 реплик; найдено {len(long_sessions)} сессий ≥5 реплик в окне",
+                "note": f"нужны сессии от 20 реплик; в текущем окне найдено {len(long_sessions)} длинных сессий",
                 "automation": "full",
             }
         avg_sim = round(statistics.mean(r["cosine_similarity"] for r in results), 4)
@@ -290,7 +290,7 @@ class MetricsDashboard:
             "sessions_analyzed": len(results),
             "sessions": results,
             "threshold": 0.70,
-            "note": ">0.70 = стилистическая стабильность; измерено на сессиях ≥20 реплик",
+            "note": "выше 0,70 — стиль устойчив; вычисляется при наличии сессий от 20 реплик",
             "automation": "full",
         }
 
@@ -305,9 +305,9 @@ class MetricsDashboard:
         total = len(turns)
         rate = round(len(with_episodic) / total, 4)
         has_new_field = any(t.get("memory_retrieved_count") is not None for t in turns)
-        note = "прокси: доля turn'ов с активированным episodic retrieval"
+        note = "доля реплик, в которых нашлись записи о прошлых визитах этого гостя"
         if not has_new_field:
-            note += "; поле memory_retrieved_count не найдено — нужна обновлённая система"
+            note += "; счётчик найденных эпизодов отсутствует — нужна обновлённая версия системы"
         return {
             "status": "ok" if has_new_field else "degraded",
             "value": rate,
@@ -328,7 +328,7 @@ class MetricsDashboard:
             return {
                 "status": "no_data",
                 "value": None,
-                "note": "нет эпизодов в памяти; нужны реальные сессии",
+                "note": "нет записей о прошлых сессиях; нужны реальные посетители",
                 "automation": "heuristic",
             }
 
@@ -366,7 +366,7 @@ class MetricsDashboard:
                 "theme_boost": theme_boost,
                 "passed": f"{passed}/{len(checks)}",
             },
-            "note": "автоматическая внутренняя согласованность формулы salience; ручная аннотация даёт Спирмена",
+            "note": "проверяет логику формулы значимости: длинные сессии с именем должны быть значимее коротких анонимных; точный коэффициент — по ручной аннотации",
             "automation": "heuristic",
         }
 
@@ -387,7 +387,7 @@ class MetricsDashboard:
             return {
                 "status": "no_data",
                 "value": None,
-                "note": "diary.md пуст и summaries/ не заполнена — консолидатор ещё не запускался",
+                "note": "дневник агента пуст — ночной консолидатор ещё не запускался",
                 "automation": "partial",
             }
         return {
@@ -396,7 +396,7 @@ class MetricsDashboard:
             "diary_exists": diary.exists(),
             "summaries_count": files_count,
             "summaries_total_bytes": files_size,
-            "note": "объём diary.md и summaries/ — полнота и когерентность требуют ручной оценки 10 summary",
+            "note": "объём дневника агента и папки сводок; полноту содержания оценивают вручную",
             "automation": "partial",
         }
 
@@ -425,7 +425,7 @@ class MetricsDashboard:
             "combined_turns": len(with_memory),
             "total": total,
             "expected_range": [0.10, 0.25],
-            "note": "прокси: доля turn'ов с активацией памяти; ручная разметка транскриптов даёт точность",
+            "note": "доля реплик, в которых агент обращался к памяти прошлых визитов; точное измерение — по ручной разметке диалогов",
             "automation": "proxy",
         }
 
@@ -437,7 +437,7 @@ class MetricsDashboard:
             return {
                 "status": "no_data",
                 "value": None,
-                "note": "нет закрытых сессий в metrics_sessions.jsonl — нужна обновлённая система",
+                "note": "нет завершённых разговоров в журнале — нужна обновлённая версия системы",
                 "automation": "full",
             }
         avg = round(statistics.mean(counts), 1)
@@ -496,7 +496,7 @@ class MetricsDashboard:
                 "tts_ms": "300–800",
                 "total_ms": "11000–15000",
             },
-            "note": "LLM ~9с из-за SWA cache reset (Gemma 4 E4B); filler-фраза компенсирует задержку",
+            "note": "языковая модель занимает ~9 секунд из-за архитектуры скользящего внимания; фраза «Хм…» компенсирует паузу",
             "automation": "full",
         }
 
@@ -512,7 +512,7 @@ class MetricsDashboard:
             "detections_in_window": len(detections),
             "oww_scores_in_window": len(score_vals),
             "avg_score": round(statistics.mean(score_vals), 3) if score_vals else None,
-            "note": "TPR/FPR требуют контрольного теста (см. scripts/test_wake_word.py)",
+            "note": "обнаружение слова и ложные срабатывания измеряются контрольным тестом произнесений",
             "automation": "semi",
         }
 
@@ -549,7 +549,7 @@ class MetricsDashboard:
             "violations": len(violations),
             "expected": 0,
             "details": violations[:5],
-            "note": "ожидаемое значение 0 (half_duplex_mute=true — архитектурный инвариант)",
+            "note": "ожидаемое значение 0: пока агент говорит, микрофон заглушён",
             "automation": "full",
         }
 
@@ -577,6 +577,6 @@ class MetricsDashboard:
             "transitions": dict(transitions),
             "engagement_distribution": dict(engagement_counts),
             "proactive_mcu_reactions": 0,
-            "note": "scene_engagement_changed требует инструментации SceneWorker; проактивные MCU = 0 (механизм в разработке)",
+            "note": "события от камеры; моторная реакция без речевого обращения пока не реализована",
             "automation": "partial",
         }

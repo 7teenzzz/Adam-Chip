@@ -146,21 +146,16 @@ function statusColor(status) {
 
 function automationBadge(level) {
   const map = {
-    full: { label: "авто", color: "var(--good, #4caf50)" },
-    proxy: { label: "прокси", color: "var(--accent)" },
-    heuristic: { label: "эвристика", color: "var(--accent)" },
-    partial: { label: "частично", color: "var(--warning, #ff9800)" },
-    semi: { label: "тест", color: "var(--warning, #ff9800)" },
+    full:      { label: "автоматически",  color: "var(--good, #4caf50)" },
+    proxy:     { label: "косвенно",       color: "var(--accent)" },
+    heuristic: { label: "эвристика",      color: "var(--accent)" },
+    partial:   { label: "частично",       color: "var(--warning, #ff9800)" },
+    semi:      { label: "нужен тест",     color: "var(--warning, #ff9800)" },
   };
   const cfg = map[level] || { label: level || "?", color: "var(--muted)" };
   return el("span", {
     style: `font-size:10px; padding:1px 5px; border-radius:2px; border:1px solid ${cfg.color}; color:${cfg.color}; letter-spacing:0.05em`,
   }, cfg.label);
-}
-
-function pct(val) {
-  if (val == null) return "—";
-  return `${(val * 100).toFixed(1)}%`;
 }
 
 function fmtVal(m) {
@@ -170,43 +165,63 @@ function fmtVal(m) {
   return String(m.value);
 }
 
-function metricCard(id, label, m) {
+// label — название метрики; hint — одна строка для первого знакомства
+function metricCard(id, label, m, hint) {
   if (!m) return el("div", { class: "card" }, el("div", { class: "card-body muted" }, label + ": нет данных"));
   const color = statusColor(m.status);
   const val = fmtVal(m);
+  const actionBreakdown = m.action_kinds
+    ? el("div", { style: "font-size:11px; font-family:var(--font-mono); color:var(--muted); margin-top:2px" },
+        Object.entries(m.action_kinds).map(([k, v]) => `${_actionKindRu(k)}: ${v}`).join("   "))
+    : null;
+  const dialogStats = (m.avg != null && id === "М9")
+    ? el("div", { style: "font-size:11px; color:var(--muted); font-family:var(--font-mono)" },
+        `ср: ${m.avg}  медиана: ${m.median}  макс: ${m.max}`)
+    : null;
   return el("div", { class: "card", style: "min-width:0" }, [
     el("div", { class: "card-header", style: "gap:6px" }, [
       el("span", { class: "mono", style: "font-size:11px; color:var(--muted)" }, id),
       el("span", { class: "card-title", style: "font-size:12px; flex:1" }, label),
       m.automation ? automationBadge(m.automation) : null,
     ]),
-    el("div", { class: "card-body", style: "display:flex; flex-direction:column; gap:6px" }, [
+    hint ? el("div", { style: "font-size:11px; color:var(--muted); padding:0 14px 6px; line-height:1.4; border-bottom:1px solid var(--bg-3)" }, hint) : null,
+    el("div", { class: "card-body", style: "display:flex; flex-direction:column; gap:4px" }, [
       el("div", { style: `font-size:24px; font-family:var(--font-mono); color:${color}; line-height:1` }, val),
-      m.note ? el("div", { style: "font-size:11px; color:var(--muted); line-height:1.4" }, m.note) : null,
-      m.action_kinds ? el("div", { style: "font-size:11px; font-family:var(--font-mono); color:var(--muted)" },
-        Object.entries(m.action_kinds).map(([k, v]) => `${k}:${v}`).join("  ")) : null,
-      m.avg != null && id === "M9" ? el("div", { style: "font-size:11px; color:var(--muted); font-family:var(--font-mono)" },
-        `avg:${m.avg} med:${m.median} max:${m.max}`) : null,
+      actionBreakdown,
+      dialogStats,
     ]),
   ]);
 }
 
+function _actionKindRu(kind) {
+  if (kind === "no_action") return "без действия";
+  if (kind === "scene") return "сцена";
+  if (kind === "channel") return "канал";
+  return kind;
+}
+
 function latencyBlock(m10) {
-  if (!m10 || m10.status === "no_data") return el("div", { class: "card-body muted" }, "нет данных о латентности");
+  if (!m10 || m10.status === "no_data") return el("div", { class: "card-body muted" }, "нет данных о задержке");
   const rows = [
-    ["ASR", m10.asr_ms],
-    ["LLM", m10.llm_ms],
-    ["TTS", m10.tts_ms],
-    ["∑ Total", m10.total_ms],
+    ["Распознавание речи", m10.asr_ms],
+    ["Языковая модель",    m10.llm_ms],
+    ["Синтез речи",        m10.tts_ms],
+    ["∑ Итого",            m10.total_ms],
   ];
+  function kvRu(label, value) {
+    return el("div", { style: "display:flex; flex-direction:column; gap:2px" }, [
+      el("span", { class: "caps", style: "color:var(--muted); font-size:10px" }, label),
+      el("span", { style: "color:var(--accent)" }, fmtMs(value)),
+    ]);
+  }
   return el("div", { style: "display:grid; grid-template-columns:repeat(4,1fr); gap:8px" },
     rows.map(([label, s]) => el("div", { class: "card", style: "min-width:0" }, [
       el("div", { class: "card-header" }, [
-        el("span", { class: "card-title" }, label),
+        el("span", { class: "card-title", style: "font-size:12px" }, label),
         automationBadge("full"),
       ]),
       s ? el("div", { class: "card-body", style: "display:grid; grid-template-columns:repeat(4,1fr); gap:4px; font-family:var(--font-mono); font-size:12px" }, [
-        kv("min", s.min), kv("avg", s.avg), kv("p95", s.p95), kv("max", s.max),
+        kvRu("мин", s.min), kvRu("ср", s.avg), kvRu("95%", s.p95), kvRu("макс", s.max),
       ]) : el("div", { class: "card-body muted" }, "—"),
     ]))
   );
@@ -220,18 +235,18 @@ function blockSection(title, cards) {
 }
 
 function sessionsTable(sessions) {
-  if (!sessions || !sessions.length) return el("div", { class: "card-body muted" }, "нет закрытых сессий");
+  if (!sessions || !sessions.length) return el("div", { class: "card-body muted" }, "нет завершённых разговоров");
   const rows = sessions.slice().reverse().slice(0, 20);
   return el("div", { style: "overflow-x:auto" }, [
     el("table", { style: "width:100%; border-collapse:collapse; font-size:12px" }, [
       el("thead", null, el("tr", { style: "background:var(--bg-2); color:var(--muted); font-size:10px; text-transform:uppercase" }, [
-        ["Время", "left"], ["Turn'ы", "right"], ["Сек", "right"], ["Имя", "left"],
-        ["Значимость", "right"], ["Темы", "left"], ["Эпизод", "center"],
+        ["Время", "left"], ["Реплики", "right"], ["Длит.", "right"], ["Имя", "left"],
+        ["Значимость", "right"], ["Темы", "left"], ["Сохранён", "center"],
       ].map(([h, a]) => el("th", { style: `padding:6px 8px; text-align:${a}` }, h)))),
       el("tbody", null, rows.map(s => el("tr", { style: "border-bottom:1px solid var(--bg-3)" }, [
         el("td", { style: "padding:5px 8px; font-family:var(--font-mono); color:var(--muted)" }, (s.ts || "").slice(0, 16)),
         el("td", { style: "padding:5px 8px; text-align:right; font-family:var(--font-mono)" }, String(s.turn_count ?? "—")),
-        el("td", { style: "padding:5px 8px; text-align:right; font-family:var(--font-mono)" }, String(s.duration_s ?? "—")),
+        el("td", { style: "padding:5px 8px; text-align:right; font-family:var(--font-mono)" }, s.duration_s != null ? `${s.duration_s}с` : "—"),
         el("td", { style: "padding:5px 8px" }, s.visitor_name || el("span", { class: "muted" }, "анон")),
         el("td", { style: "padding:5px 8px; text-align:right; font-family:var(--font-mono); color:var(--accent)" }, s.salience != null ? s.salience.toFixed(3) : "—"),
         el("td", { style: "padding:5px 8px; color:var(--muted)" }, (s.themes || []).slice(0, 3).join(", ") || "—"),
@@ -304,31 +319,45 @@ export function mount(target) {
       const mt = b.memory_temporal || {};
       const ia = b.interactivity || {};
 
-      dashRoot.appendChild(blockSection("3.4.2 Удержание роли и нормативность", [
-        metricCard("M1", "Стабильность персонажа", rn.m1_persona_consistency),
-        metricCard("M2", "Инжекция echo-реплик", rn.m2_echo_injection),
-        metricCard("M3", "Отклонения ActionLayer", rn.m3_action_rejection),
-        metricCard("M4", "Дрейф стиля (cosine)", rn.m4_style_drift),
+      dashRoot.appendChild(blockSection("3.4.2 — Удержание роли и нормативность", [
+        metricCard("М1", "Стабильность персонажа", rn.m1_persona_consistency,
+          "Менялись ли настройки персонажа во время диалога. 100% — настройки стабильны на протяжении всей беседы."),
+        metricCard("М2", "Использование заготовленных фраз", rn.m2_echo_injection,
+          "Как часто агент вставлял заранее написанную фразу из пула. Повышает выразительность речи."),
+        metricCard("М3", "Фильтрация действий", rn.m3_action_rejection,
+          "Сколько предложений о физических действиях система отклонила. Норма 5–15%."),
+        metricCard("М4", "Устойчивость стиля", rn.m4_style_drift,
+          "Похожи ли первые и последние реплики длинной сессии. Ближе к 100% — персонаж не «уплывает» к концу выставки."),
       ]));
 
-      dashRoot.appendChild(blockSection("3.4.3 Память и темпоральная связность", [
-        metricCard("M5", "Retrieval-активация", mt.m5_retrieval_proxy),
-        metricCard("M6", "Salience — внутр. согласованность", mt.m6_salience_internal),
-        metricCard("M7", "Консолидация — охват", mt.m7_consolidation),
-        metricCard("M8", "Межсессионная память", mt.m8_cross_session_proxy),
+      dashRoot.appendChild(blockSection("3.4.3 — Память и темпоральная связность", [
+        metricCard("М5", "Активация памяти прошлых визитов", mt.m5_retrieval_proxy,
+          "В скольких репликах система нашла что-то о прошлых визитах этого гостя. Работает только если гость назвал имя."),
+        metricCard("М6", "Логика оценки значимости", mt.m6_salience_internal,
+          "Проверяет, что длинные сессии с именем гостя получают более высокую значимость, чем короткие анонимные."),
+        metricCard("М7", "Накопление дневника", mt.m7_consolidation,
+          "Заполнен ли дневник агента. Ночной процесс сжимает прошедшие сессии в краткие записи для будущих разговоров."),
+        metricCard("М8", "Межсессионная связность", mt.m8_cross_session_proxy,
+          "В скольких репликах агент обращался к воспоминаниям о прошлых визитах — эпизодам или записям дневника."),
       ]));
 
-      dashRoot.appendChild(blockSection("3.4.4 Интеракционность и инициатива", [
-        metricCard("M9", "Длина диалога (avg turn'ов)", ia.m9_dialog_length),
-        metricCard("M11", "Wake word (OWW scores)", ia.m11_wake_word),
-        metricCard("M12", "Half-duplex нарушения", ia.m12_half_duplex),
-        metricCard("M13", "Смены вовлечённости", ia.m13_engagement),
+      dashRoot.appendChild(blockSection("3.4.4 — Интеракционность и инициатива", [
+        metricCard("М9", "Средняя длина разговора", ia.m9_dialog_length,
+          "Среднее число реплик за один разговор. Меньше 2 — гости не вступают в диалог. Больше 5 — активное общение."),
+        metricCard("М11", "Точность распознавания обращения", ia.m11_wake_word,
+          "Как часто система слышит слово «адам» и как часто реагирует на посторонние звуки. Требует специального теста."),
+        metricCard("М12", "Самоэхо микрофона", ia.m12_half_duplex,
+          "Пока агент говорит, микрофон должен быть заглушён. Любое ненулевое значение — критическая ошибка."),
+        metricCard("М13", "Смены вовлечённости гостей", ia.m13_engagement,
+          "Сколько раз камера зафиксировала изменение поведения гостей — подошли ближе, остановились, отошли."),
       ]));
 
-      // M10 latency — отдельный широкий блок
+      // М10 — отдельный широкий блок с разбивкой по компонентам
       dashRoot.appendChild(el("section", { class: "col", style: "gap:8px" }, [
-        el("div", { class: "caps", style: "color:var(--muted); font-size:11px; padding:4px 0; border-bottom:1px solid var(--line)" },
-          "M10 — Латентность ответа"),
+        el("div", { style: "display:flex; align-items:baseline; gap:8px; padding:4px 0; border-bottom:1px solid var(--line)" }, [
+          el("div", { class: "caps", style: "color:var(--muted); font-size:11px" }, "М10 — Задержка ответа"),
+          el("span", { style: "font-size:11px; color:var(--muted)" }, "время от конца фразы гостя до начала речи агента"),
+        ]),
         latencyBlock(ia.m10_latency),
       ]));
 
@@ -336,7 +365,7 @@ export function mount(target) {
       sessionsRoot.appendChild(sessionsTable(sess.sessions || []));
 
       const ts = (dash.computed_at || "").slice(11, 19);
-      dashStatus.textContent = `обновлено ${ts} · окно: ${dash.window_turns} turn'ов · ${dash.window_sessions} сессий`;
+      dashStatus.textContent = `обновлено ${ts} · окно: ${dash.window_turns} реплик · ${dash.window_sessions} разговоров`;
     } catch (e) {
       dashStatus.textContent = "ошибка: " + e.message;
     }
