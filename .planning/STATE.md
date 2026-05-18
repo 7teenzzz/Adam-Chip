@@ -161,6 +161,7 @@ Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-r
 
 ## History
 
+- 2026-05-18: Phase 29 (Audio Out — PCM5102A → PAM8403 → 2×8Ω parallel) добавлена в ROADMAP. Ветка `V-S09.1-Audio_out` репурпозирована под этот scope (Phase 21A на ней завершена). Discuss-phase следующим шагом.
 - 2026-05-18: Merge ветки `V-S08.1-code_rev_ref_opt` → `main`. ROADMAP перенумерован: voice-фазы получили номера 7-11, diploma+planning фазы сдвинуты на +5 (Phase 7→12, …, Phase 23→28). Phase 11 (Voice Pipeline Refactor) — active.
 - 2026-05-17: Phase 14 (Next-Phases Planning) завершена. 12 фаз спроектированы.
 - 2026-05-17: Phase 13 (Theory-Code Verification) завершена. 48 терминов через 3 графа.

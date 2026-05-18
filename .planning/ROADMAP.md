@@ -960,6 +960,16 @@ Plans:
 
 **Связь:** дополняет Phase 19 (idle-scheduler) и Phase 23 (дельта-реакция на сцену) — три независимых слоя проактивности. Тематический триггер — наиболее «персонажный» слой: Адам реагирует не на тишину и не на движение, а на смысл разговора вокруг него.
 
+### Phase 29: Audio Out на ESP32 динамики — PCM5102A → PAM8403 → 2×8Ω parallel
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 28
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 29 to break down)
+
 ---
 
 ### AIIM Dynamic: Рефлексивный уровень идентичности
