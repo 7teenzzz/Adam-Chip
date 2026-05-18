@@ -253,28 +253,28 @@ Mood = Literal["neutral", "curious", "warm", "sharp", "uneasy"]
 stateDiagram-v2
     [*] --> STANDBY
     STANDBY --> LISTENING: обнаружено пробуждное слово
-    LISTENING --> PROCESSING: эндпоинтинг VAD (тишина > command_endpointing_ms)
-    LISTENING --> STANDBY: wake_silence_timeout_sec
+    LISTENING --> PROCESSING: эндпоинтинг VAD (тишина > silence_after_speech_ms)
+    LISTENING --> STANDBY: listening_silence_timeout_sec
     PROCESSING --> REPLYING: начало воспроизведения речи
     REPLYING --> LISTENING: обнаружена речь зрителя
-    REPLYING --> STANDBY: reply_window_sec (мягкий) или reply_absolute_deadline_sec (жёсткий)
+    REPLYING --> STANDBY: reply_window_sec (мягкий) или reply_silence_timeout_sec (жёсткий)
 ```
 
 Каждый переход управляется конкретным параметром из `Config.json`, что позволяет настраивать чувствительность системы к выставочному пространству без правки кода:
 
-| Параметр                                | Значение   | Назначение                                                         |
-| --------------------------------------- | ---------- | ------------------------------------------------------------------ |
-| `wake_word.threshold`                   | 0.10       | Порог уверенности OpenWakeWord для перехода STANDBY → LISTENING    |
-| `wake_word.debounce_hits`               | 2          | Кол-во последовательных кадров для подтверждения пробуждного слова |
-| `media.audio.webrtc_vad_aggressiveness` | 2          | Уровень агрессивности VAD (0–3) для выделения речи в LISTENING     |
-| `asr.command_endpointing_ms`            | 1500       | Длительность тишины (мс) для эндпоинтинга речи зрителя             |
-| `media.audio.min_speech_ms`             | 200        | Минимальная длительность речевого сегмента, передаваемого в ASR    |
-| `media.audio.max_command_segment_ms`    | 15000      | Жёсткий лимит длины речевого сегмента                              |
-| `asr.reply_window_sec`                  | 3.75       | Мягкое окно ожидания ответа после TTS                              |
-| `asr.reply_absolute_deadline_sec`       | 7.5        | Жёсткий лимит окна ожидания (от начала REPLYING)                   |
-| `wake_word.wake_silence_timeout_sec`    | 3          | Возврат LISTENING → STANDBY при тишине без речи                    |
+| Параметр                                       | Значение | Назначение                                                         |
+| ---------------------------------------------- | -------- | ------------------------------------------------------------------ |
+| `wake_word.threshold`                          | 0.10     | Порог уверенности OpenWakeWord для перехода STANDBY → LISTENING    |
+| `wake_word.debounce_hits`                      | 2        | Кол-во последовательных кадров для подтверждения пробуждного слова |
+| `media.audio.webrtc_vad_aggressiveness`        | 2        | Уровень агрессивности VAD (0–3) для выделения речи в LISTENING     |
+| `services.asr.silence_after_speech_ms`         | 1500     | Длительность тишины (мс) для эндпоинтинга речи зрителя             |
+| `media.audio.min_speech_ms`                    | 200      | Минимальная длительность речевого сегмента, передаваемого в ASR    |
+| `media.audio.max_command_segment_ms`           | 15000    | Жёсткий лимит длины речевого сегмента                              |
+| `services.asr.reply_window_sec`                | 3.75     | Мягкое окно ожидания ответа после TTS                              |
+| `services.asr.reply_silence_timeout_sec`       | 5.0      | Жёсткий лимит окна ожидания ответа в фазе REPLYING                 |
+| `services.asr.listening_silence_timeout_sec`   | 6        | Возврат LISTENING → STANDBY при тишине без речи                    |
 
-При шумном пространстве увеличивается `vad_aggressiveness` и `command_endpointing_ms`; при интимной экспозиции — снижается `wake_silence_timeout_sec`, чтобы агент быстрее возвращался в фоновый режим.
+При шумном пространстве увеличивается `vad_aggressiveness` и `silence_after_speech_ms`; при интимной экспозиции — снижается `listening_silence_timeout_sec`, чтобы агент быстрее возвращался в фоновый режим.
 
 Диалоговым режимом инсталляция не ограничивается. Проактивный контур реализован как самостоятельная подсистема из трёх слоёв с разной природой инициирования: проактивное поведение есть реакция на разные классы событий, а не равномерный фоновый шум.
 
