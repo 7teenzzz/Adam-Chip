@@ -1,0 +1,33 @@
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#fff','primaryBorderColor':'#222','lineColor':'#222','clusterBkg':'#f5f5f5','clusterBorder':'#222'},'flowchart':{'rankSpacing':30,'nodeSpacing':18,'padding':10}}}%%
+flowchart TB
+    subgraph APP["Приложение"]
+        direction LR
+        A1["Orchestrator"] ~~~ A2["prompt.py"] ~~~ A3["action.py"] ~~~ A4["memory.py"]
+    end
+
+    subgraph SVC["Сервисы инференса"]
+        direction LR
+        S1["llama.cpp"] ~~~ S2["WhisperX"] ~~~ S3["Silero"] ~~~ S4["VILA"]
+    end
+
+    subgraph CONT["Контейнер-приложение"]
+        direction LR
+        C1["Docker"] ~~~ C2["systemd"] ~~~ C3["изолированные сервисы"]
+    end
+
+    subgraph OSL["Операционная система"]
+        direction LR
+        O1["Ubuntu 22.04"] ~~~ O2["JetPack"] ~~~ O3["CUDA"]
+    end
+
+    subgraph HWL["Платформа"]
+        direction LR
+        H1["Jetson Orin NX"] ~~~ H2["16 ГБ ОЗУ"] ~~~ H3["ARM × 8"]
+    end
+
+    APP --> SVC
+    SVC --> CONT
+    CONT --> OSL
+    OSL --> HWL
+
+linkStyle default stroke:#222,stroke-width:3px
