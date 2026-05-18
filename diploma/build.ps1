@@ -8,11 +8,15 @@ $ROOT     = Split-Path -Parent $MyInvocation.MyCommand.Path
 $REF_DOC  = "$ROOT\reference.docx"
 $OUTPUT   = "$ROOT\diploma.docx"
 $CHAPTERS = "$ROOT\chapters"
-$ASSETS   = "$ROOT\assets"
-$LUA      = "$ROOT\svg2png.lua"
 $SVG2PNG  = "$ROOT\svg2png.js"
 
 # --- Guard: reference.docx ---
+$LOCK = "$ROOT\~`$iploma.docx"
+if (Test-Path $LOCK) {
+    Write-Host "FAIL: diploma.docx is open in Word. Close it first." -ForegroundColor Red
+    exit 1
+}
+
 if (-not (Test-Path $REF_DOC)) {
     Write-Host "FAIL: reference.docx not found. Generate it first:" -ForegroundColor Red
     Write-Host "   python `"$ROOT\make_reference.py`"" -ForegroundColor Yellow
@@ -26,36 +30,45 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "WARNING: svg2png.js failed, images may be missing in docx" -ForegroundColor Yellow
 }
 
-# --- Chapter order ---
+# --- Chapter order (basenames only — Set-Location below sets the working dir) ---
 $files = @(
     "ch03_chapter3.md"
 ) | ForEach-Object {
-    $path = Join-Path $CHAPTERS $_
-    if (-not (Test-Path $path)) {
+    if (-not (Test-Path (Join-Path $CHAPTERS $_))) {
         Write-Warning "Chapter not found, skipping: $_"
         $null
-    } else {
-        $path
-    }
+    } else { $_ }
 } | Where-Object { $_ -ne $null }
 
 Write-Host ""
 Write-Host "Step 2: Chapters included:" -ForegroundColor Cyan
 $files | ForEach-Object { Write-Host "  $_" }
 
-# --- Step 2: Run Pandoc ---
+# --- Step 2: Run Pandoc (chapters dir as CWD; forward slashes for named opts) ---
 Write-Host ""
 Write-Host "Step 3: Converting to $OUTPUT ..." -ForegroundColor Cyan
 
-& $PANDOC @files `
-    --from  "markdown+smart+escaped_line_breaks" `
-    --to    "docx" `
-    --output $OUTPUT `
-    --reference-doc $REF_DOC `
-    --lua-filter $LUA `
-    --resource-path "$CHAPTERS;$ASSETS;$ASSETS\diagrams" `
-    --standalone `
-    --wrap  "none"
+$ROOT_FWD = $ROOT    -replace '\\','/'
+$OUT_FWD  = "$ROOT_FWD/diploma.docx"
+$REF_FWD  = "$ROOT_FWD/reference.docx"
+$LUA_FWD  = "$ROOT_FWD/svg2png.lua"
+
+# Run Pandoc in a fresh subprocess to avoid any CWD pollution from node/Chrome
+$pandocArgs = @(
+    "--from",  "markdown+smart+escaped_line_breaks",
+    "--to",    "docx",
+    "--output",        $OUT_FWD,
+    "--reference-doc", $REF_FWD,
+    "--lua-filter",    $LUA_FWD,
+    "--standalone",
+    "--wrap", "none"
+) + $files
+
+$proc = Start-Process -FilePath $PANDOC `
+    -ArgumentList $pandocArgs `
+    -WorkingDirectory $CHAPTERS `
+    -NoNewWindow -Wait -PassThru
+$global:LASTEXITCODE = $proc.ExitCode
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "FAIL: Pandoc exit $LASTEXITCODE" -ForegroundColor Red
