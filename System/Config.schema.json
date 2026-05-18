@@ -252,6 +252,61 @@
               "type": "integer",
               "description": "Target RMS level for audio normalisation before ASR submission.",
               "default": 8000
+            },
+            "spectrum_bands": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 128,
+              "description": "Number of log-spaced frequency bands rendered in the chat-panel equaliser widget. Computed server-side from each audio frame's FFT (see _compute_bands in mic_reader.py). Emitted to clients as the `bands[]` field on audio_level events. 24 is the production default — wider bars are legible at typical UI sizes.",
+              "default": 24
+            },
+            "spectrum_min_hz": {
+              "type": "number",
+              "minimum": 20,
+              "maximum": 8000,
+              "description": "Lowest frequency (Hz) covered by the spectrum widget. Bands below this are not rendered. 80 Hz is approximately the fundamental of male speech; below that the ESP32 INMP441 has limited response anyway.",
+              "default": 80.0
+            },
+            "spectrum_max_hz": {
+              "type": "number",
+              "minimum": 1000,
+              "maximum": 8000,
+              "description": "Highest frequency (Hz) covered. Capped at Nyquist (sample_rate / 2). At 16 kHz sample rate, max useful = 8000 Hz.",
+              "default": 8000.0
+            },
+            "spectrum_floor_db": {
+              "type": "number",
+              "maximum": 0,
+              "description": "Per-band dBFS value mapped to bar height 0. Energies below this are rendered as zero. -60 dB is the conventional noise floor for visualisation.",
+              "default": -60.0
+            },
+            "spectrum_ceiling_db": {
+              "type": "number",
+              "minimum": -20,
+              "maximum": 0,
+              "description": "Per-band dBFS value mapped to bar height 1.0 (full-scale). 0 dB = digital full scale. Bars at this level read solid red.",
+              "default": 0.0
+            },
+            "spectrum_cadence_hz": {
+              "type": "number",
+              "minimum": 5,
+              "maximum": 50,
+              "description": "Target emission rate (Hz) for audio_level events carrying spectrum bands. Backend derives the per-Nth-frame counter from this and frame_ms — at sample_rate=16000, frame_ms=20, value 25 emits every 2nd frame. Higher cadence = smoother widget, more events.jsonl bytes (~10 KB/s at 25 Hz).",
+              "default": 25.0
+            },
+            "spectrum_color_yellow_at": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Per-bar normalised level at which the colour transitions from green to yellow. Below this value bars render green→yellow gradient; above it they render yellow→red.",
+              "default": 0.6
+            },
+            "spectrum_color_red_at": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Per-bar normalised level at which the colour reaches solid red. Bars above this are clipped/peaking — useful visual cue for input gain calibration.",
+              "default": 0.85
             }
           }
         },
