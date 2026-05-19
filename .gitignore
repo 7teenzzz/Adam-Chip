@@ -12,6 +12,8 @@ PLAN.md
 
 # Temp staff
 .tmp/
+diploma/ui-screenshots/
+diploma/ui_screenshot.js
 Subsystem/AdamsServer/artifacts/
 Subsystem/AdamsServer/config/PrivateConfig.h
 Subsystem/Models/
