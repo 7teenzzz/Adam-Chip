@@ -29,10 +29,14 @@ def _set_tbl_autofit(table):
     layout.set(qn("w:type"), "autofit")
     tblPr.append(layout)
 
-    # Remove fixed table-level width
+    # Set table width to 100% of text body (prevents overflow beyond page margins).
+    # w:type="pct" uses units of 1/50 of a percent, so 5000 = 100%.
     for tblW in tblPr.findall(qn("w:tblW")):
-        tblW.set(qn("w:type"), "auto")
-        tblW.set(qn("w:w"), "0")
+        tblPr.remove(tblW)
+    tblW = OxmlElement("w:tblW")
+    tblW.set(qn("w:w"), "5000")
+    tblW.set(qn("w:type"), "pct")
+    tblPr.append(tblW)
 
     # Remove fixed column widths from tblGrid
     tblGrid = tbl.find(qn("w:tblGrid"))
@@ -97,6 +101,40 @@ def fix_captions(doc):
     return count
 
 
+def fix_table_titles(doc):
+    """Remove first-line indent from paragraphs immediately preceding tables."""
+    count = 0
+    body = doc.element.body
+    elems = list(body)
+    for i, el in enumerate(elems):
+        if el.tag.split("}")[-1] == "tbl" and i > 0:
+            prev = elems[i - 1]
+            if prev.tag.split("}")[-1] == "p":
+                pPr = prev.find(qn("w:pPr"))
+                if pPr is None:
+                    pPr = OxmlElement("w:pPr")
+                    prev.insert(0, pPr)
+                for old in pPr.findall(qn("w:ind")):
+                    pPr.remove(old)
+                ind = OxmlElement("w:ind")
+                ind.set(qn("w:firstLine"), "0")
+                pPr.append(ind)
+                count += 1
+    return count
+
+
+def remove_bookmarks(doc):
+    count = 0
+    body = doc.element.body
+    for tag in (qn("w:bookmarkStart"), qn("w:bookmarkEnd")):
+        for bm in body.findall(".//" + tag):
+            parent = bm.getparent()
+            if parent is not None:
+                parent.remove(bm)
+                count += 1
+    return count
+
+
 def main():
     if not os.path.exists(INPUT):
         print(f"FAIL: {INPUT} not found")
@@ -105,8 +143,10 @@ def main():
     doc = Document(INPUT)
     tables = process_tables(doc)
     captions = fix_captions(doc)
+    titles = fix_table_titles(doc)
+    bookmarks = remove_bookmarks(doc)
     doc.save(INPUT)
-    print(f"OK: postprocessed {INPUT} ({tables} tables, {captions} captions)")
+    print(f"OK: postprocessed {INPUT} ({tables} tables, {captions} captions, {titles} table titles, {bookmarks} bookmarks removed)")
 
 
 if __name__ == "__main__":

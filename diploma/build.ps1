@@ -32,7 +32,8 @@ if ($LASTEXITCODE -ne 0) {
 
 # --- Chapter order (basenames only — Set-Location below sets the working dir) ---
 $files = @(
-    "ch03_chapter3.md"
+    "ch03_chapter3.md",
+    "ch04_conclusion.md"
 ) | ForEach-Object {
     if (-not (Test-Path (Join-Path $CHAPTERS $_))) {
         Write-Warning "Chapter not found, skipping: $_"
