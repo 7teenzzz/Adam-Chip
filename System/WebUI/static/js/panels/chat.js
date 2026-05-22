@@ -408,7 +408,7 @@ export function mount(target) {
   });
 
   const sendBtn = el("button", { class: "btn btn-primary", onclick: () => send() }, "Отправить ⏎");
-  const clearBtn = el("button", { class: "btn btn-ghost", onclick: () => { input.value = ""; input.focus(); } }, "Очистить");
+  const clearBtn = el("button", { class: "btn btn-ghost", onclick: () => { transcript.innerHTML = ""; pendingAdamBubble = null; input.value = ""; input.focus(); } }, "Очистить");
 
   // Phase 9 (REQ-UI-CHAT-CLEANUP): calibrate button removed from chat panel.
   // The shared widget still lives on the Settings page (settings.js) — that

@@ -74,7 +74,7 @@
       "model_path": "Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
     },
     "vlm": {
-      "base_url": "http://127.0.0.1:8084",
+      "base_url": "http://127.0.0.1:8050",
       "model": "Efficient-Large-Model/VILA1.5-3b",
       "timeout_sec": 20,
       "max_new_tokens": 80,
