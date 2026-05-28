@@ -78,10 +78,36 @@ def _fix_cell(cell):
         para.paragraph_format.first_line_indent = Cm(0)
 
 
+def _fix_header_row_border(table):
+    """Explicitly set 1pt bottom border on header row cells (overrides tblHeader quirk)."""
+    if not table.rows:
+        return
+    first_row = table.rows[0]
+    for cell in first_row.cells:
+        tc = cell._tc
+        tcPr = tc.find(qn("w:tcPr"))
+        if tcPr is None:
+            tcPr = OxmlElement("w:tcPr")
+            tc.insert(0, tcPr)
+        tcBorders = tcPr.find(qn("w:tcBorders"))
+        if tcBorders is None:
+            tcBorders = OxmlElement("w:tcBorders")
+            tcPr.append(tcBorders)
+        for old in tcBorders.findall(qn("w:bottom")):
+            tcBorders.remove(old)
+        bottom = OxmlElement("w:bottom")
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), "8")    # 1pt — visually separates header from data rows
+        bottom.set(qn("w:space"), "0")
+        bottom.set(qn("w:color"), "000000")
+        tcBorders.append(bottom)
+
+
 def process_tables(doc):
     count = 0
     for table in doc.tables:
         _set_tbl_autofit(table)
+        _fix_header_row_border(table)
         for row in table.rows:
             for cell in row.cells:
                 _fix_cell(cell)
@@ -123,6 +149,61 @@ def fix_table_titles(doc):
     return count
 
 
+def _apply_tnr_font(rPr):
+    """Set Times New Roman in all font slots; strip theme-font overrides. Does not touch size."""
+    for old in rPr.findall(qn("w:rFonts")):
+        rPr.remove(old)
+    fonts = OxmlElement("w:rFonts")
+    for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+        fonts.set(qn(attr), "Times New Roman")
+    for attr in ("w:asciiTheme", "w:hAnsiTheme", "w:cstheme", "w:eastAsiaTheme"):
+        fonts.attrib.pop(qn(attr), None)
+    rPr.insert(0, fonts)
+
+
+def _set_tnr_14(rPr):
+    """Overwrite font and size in an rPr element: Times New Roman 14pt, all slots."""
+    _apply_tnr_font(rPr)
+    for old in rPr.findall(qn("w:sz")):
+        rPr.remove(old)
+    for old in rPr.findall(qn("w:szCs")):
+        rPr.remove(old)
+    sz = OxmlElement("w:sz")
+    sz.set(qn("w:val"), "28")
+    szCs = OxmlElement("w:szCs")
+    szCs.set(qn("w:val"), "28")
+    rPr.append(sz)
+    rPr.append(szCs)
+
+
+def fix_heading_fonts(doc):
+    """Force Times New Roman font on all Heading styles (keeps style-defined sizes)."""
+    fixed = 0
+    for style in doc.styles:
+        if style.name.startswith("Heading"):
+            rPr = style.element.find(qn("w:rPr"))
+            if rPr is None:
+                rPr = OxmlElement("w:rPr")
+                style.element.append(rPr)
+            _apply_tnr_font(rPr)
+            fixed += 1
+    return fixed
+
+
+def fix_verbatim_font_size(doc):
+    """Force Times New Roman 14pt on all code styles (Verbatim Char, Source Code)."""
+    fixed = 0
+    for style in doc.styles:
+        if style.name in ("Verbatim Char", "Source Code"):
+            rPr = style.element.find(qn("w:rPr"))
+            if rPr is None:
+                rPr = OxmlElement("w:rPr")
+                style.element.append(rPr)
+            _set_tnr_14(rPr)
+            fixed += 1
+    return fixed
+
+
 def remove_bookmarks(doc):
     count = 0
     body = doc.element.body
@@ -135,6 +216,24 @@ def remove_bookmarks(doc):
     return count
 
 
+def add_appendix_page_breaks(doc):
+    """Insert page-break-before on every heading that starts with «Приложение»."""
+    count = 0
+    for para in doc.paragraphs:
+        if para.style.name.startswith("Heading") and para.text.strip().startswith("Приложение"):
+            pPr = para._p.find(qn("w:pPr"))
+            if pPr is None:
+                pPr = OxmlElement("w:pPr")
+                para._p.insert(0, pPr)
+            for old in pPr.findall(qn("w:pageBreakBefore")):
+                pPr.remove(old)
+            pb = OxmlElement("w:pageBreakBefore")
+            pb.set(qn("w:val"), "true")
+            pPr.append(pb)
+            count += 1
+    return count
+
+
 def main():
     if not os.path.exists(INPUT):
         print(f"FAIL: {INPUT} not found")
@@ -144,9 +243,12 @@ def main():
     tables = process_tables(doc)
     captions = fix_captions(doc)
     titles = fix_table_titles(doc)
+    fix_verbatim_font_size(doc)
+    headings = fix_heading_fonts(doc)
     bookmarks = remove_bookmarks(doc)
+    appendices = add_appendix_page_breaks(doc)
     doc.save(INPUT)
-    print(f"OK: postprocessed {INPUT} ({tables} tables, {captions} captions, {titles} table titles, {bookmarks} bookmarks removed)")
+    print(f"OK: postprocessed {INPUT} ({tables} tables, {captions} captions, {titles} table titles, {headings} heading styles fixed, {bookmarks} bookmarks removed, {appendices} appendix breaks)")
 
 
 if __name__ == "__main__":

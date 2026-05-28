@@ -1,4 +1,4 @@
-# build.ps1 -- Convert diploma Markdown chapters to diploma.docx
+# build.ps1 -- Convert Chapter 3, conclusion and appendices to ch03.docx
 # Run from any directory: powershell -File "f:\Adam-Chip\diploma\build.ps1"
 
 $ErrorActionPreference = "Stop"
@@ -6,14 +6,14 @@ $ErrorActionPreference = "Stop"
 $PANDOC   = "C:\Users\XVII\AppData\Local\Pandoc\pandoc.exe"
 $ROOT     = Split-Path -Parent $MyInvocation.MyCommand.Path
 $REF_DOC  = "$ROOT\reference.docx"
-$OUTPUT   = "$ROOT\diploma.docx"
+$OUTPUT   = "$ROOT\ch03.docx"
 $CHAPTERS = "$ROOT\chapters"
 $SVG2PNG  = "$ROOT\svg2png.js"
 
 # --- Guard: reference.docx ---
-$LOCK = "$ROOT\~`$iploma.docx"
+$LOCK = "$ROOT\~`$h03.docx"
 if (Test-Path $LOCK) {
-    Write-Host "FAIL: diploma.docx is open in Word. Close it first." -ForegroundColor Red
+    Write-Host "FAIL: ch03.docx is open in Word. Close it first." -ForegroundColor Red
     exit 1
 }
 
@@ -33,7 +33,8 @@ if ($LASTEXITCODE -ne 0) {
 # --- Chapter order (basenames only — Set-Location below sets the working dir) ---
 $files = @(
     "ch03_chapter3.md",
-    "ch04_conclusion.md"
+    "ch04_conclusion.md",
+    "ch05_appendices.md"
 ) | ForEach-Object {
     if (-not (Test-Path (Join-Path $CHAPTERS $_))) {
         Write-Warning "Chapter not found, skipping: $_"
@@ -47,10 +48,10 @@ $files | ForEach-Object { Write-Host "  $_" }
 
 # --- Step 2: Run Pandoc (chapters dir as CWD; forward slashes for named opts) ---
 Write-Host ""
-Write-Host "Step 3: Converting to $OUTPUT ..." -ForegroundColor Cyan
+Write-Host "Step 3: Converting to ch03.docx ..." -ForegroundColor Cyan
 
 $ROOT_FWD = $ROOT    -replace '\\','/'
-$OUT_FWD  = "$ROOT_FWD/diploma.docx"
+$OUT_FWD  = "$ROOT_FWD/ch03.docx"
 $REF_FWD  = "$ROOT_FWD/reference.docx"
 $LUA_FWD  = "$ROOT_FWD/svg2png.lua"
 
@@ -78,7 +79,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # --- Step 4: Post-process (tables, captions) ---
 Write-Host ""
-Write-Host "Step 4: Post-processing $OUTPUT ..." -ForegroundColor Cyan
+Write-Host "Step 4: Post-processing ch03.docx ..." -ForegroundColor Cyan
 python "$ROOT\postprocess.py"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "WARNING: postprocess.py failed" -ForegroundColor Yellow
@@ -86,4 +87,4 @@ if ($LASTEXITCODE -ne 0) {
 
 $size = [math]::Round((Get-Item $OUTPUT).Length / 1KB)
 Write-Host ""
-Write-Host "OK: diploma.docx -> $OUTPUT  ($size KB)" -ForegroundColor Green
+Write-Host "OK: ch03.docx -> $OUTPUT  ($size KB)" -ForegroundColor Green
