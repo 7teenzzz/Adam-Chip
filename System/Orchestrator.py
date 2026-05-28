@@ -2648,6 +2648,9 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         "memory_retrieved_count": memory_retrieved_count,
         "memory_retrieved_ids": memory_retrieved_ids,
         "semantic_used": bool(trace_record.get("semantic_used")),
+        # proactive=False: all dialogue-pipeline turns are reactive (user speech → LLM → action).
+        # Future background scene-director acts will set proactive=True.
+        "proactive": False,
     })
 
     trace_record.update(
