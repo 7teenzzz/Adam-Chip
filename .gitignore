@@ -238,5 +238,8 @@ Knowledge-graphs/**/.graphify_uncached.txt
 Knowledge-graphs/**/manifest.json
 Knowledge-graphs/**/cost.json
 
+# Windows shortcuts
+*.lnk
+
 *.[oa]
 *~
