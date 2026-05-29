@@ -3170,6 +3170,11 @@ async def _warmup_wakeup() -> None:
     if messages and messages[0]["role"] == "system":
         messages[0] = {"role": "system", "content": messages[0]["content"] + warmup_directive}
 
+    # Skip warmup TTS if real conversation already started during mic wait.
+    if bool(event_log.tail(1, types=["adam_reply"])):
+        event_log.append("warmup_skipped", {"reason": "conversation_already_started"})
+        return
+
     async with turn_lock:
         runtime_state["thinking"] = True
         try:
