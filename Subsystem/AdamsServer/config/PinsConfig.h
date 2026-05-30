@@ -1,7 +1,8 @@
 /*************** ESP32S3 N16R8 WROOM CAM РАСПИНОВКА МОДУЛЕЙ *****************/
 
 
-/*********************** КАМЕРА OV5640 **********************/
+/*********************** КАМЕРА OV5640 / OV7670 **********************/
+// PWDN / RESET: -1 = not GPIO-controlled (tied to GND / 3.3V on module)
 
 #define PWDN_GPIO_NUM  -1
 #define RESET_GPIO_NUM -1
@@ -28,7 +29,6 @@
 // Оба микрофона используют одни и те же пины — I2S time-division multiplex:
 //   Mic 1: L/R → GND  (левый канал, выходит на SD когда WS=LOW)
 //   Mic 2: L/R → VDD  (правый канал, выходит на SD когда WS=HIGH)
-// Пин SD не конфликтует — неактивный микрофон переходит в Hi-Z.
 
 #define I2S_MIC_BCLK   48   // SCK / BCLK  — shared mic1 + mic2
 #define I2S_MIC_WS     47   // LRCLK / WS  — shared mic1 + mic2
@@ -60,7 +60,6 @@
 //both have pull-ups 4.7K resistors
 
 /*********************** W5500 LITE Ethernet ****************************/
-// Шелкография модуля W5500 НОТАЦИЯ ОБРАТНАЯ относительно ESP:
 //   MI (Module Input)  = физически ESP MISO (GPIO 46)
 //   MO (Module Output) = физически ESP MOSI (GPIO 42)
 

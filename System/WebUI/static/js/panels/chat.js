@@ -407,8 +407,18 @@ export function mount(target) {
     },
   });
 
+  // Streaming Adam bubble: created by llm_partial events, finalized by adam_reply or send().
+  let pendingAdamBubble = null;
+
+  function clearTranscript() {
+    while (transcript.firstChild) transcript.removeChild(transcript.firstChild);
+    pendingAdamBubble = null;
+    input.value = "";
+    input.focus();
+  }
+
   const sendBtn = el("button", { class: "btn btn-primary", onclick: () => send() }, "Отправить ⏎");
-  const clearBtn = el("button", { class: "btn btn-ghost", onclick: () => { input.value = ""; input.focus(); } }, "Очистить");
+  const clearBtn = el("button", { class: "btn btn-ghost", type: "button", onclick: clearTranscript }, "Очистить");
 
   // Phase 9 (REQ-UI-CHAT-CLEANUP): calibrate button removed from chat panel.
   // The shared widget still lives on the Settings page (settings.js) — that
@@ -468,9 +478,6 @@ export function mount(target) {
   ]);
 
   target.appendChild(card);
-
-  // Streaming Adam bubble: created by llm_partial events, finalized by adam_reply or send().
-  let pendingAdamBubble = null;
 
   let pending = false;
   async function send() {

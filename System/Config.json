@@ -83,11 +83,11 @@
       "model_path": "Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
     },
     "vlm": {
-      "base_url": "http://127.0.0.1:8084",
+      "base_url": "http://127.0.0.1:8050",
       "model": "Efficient-Large-Model/VILA1.5-3b",
       "timeout_sec": 20,
       "max_new_tokens": 80,
-      "prompt": "You are a fixed camera sensor in an interactive art installation. Describe in this format:\n\"Scene: [count+position]. Engagement: [none/watching/approaching/leaving/interacting].\"\nExample: \"Scene: 2 people near installation, one leaning in. Engagement: watching.\"\nIf empty: \"Scene: empty room. Engagement: none.\"\nEnglish only."
+      "prompt": "You are a fixed camera sensor in an interactive art installation. Look at the image and write ONE short English sentence describing what you actually see, using this structure:\nScene: <people count and position>. Engagement: <one of: none, watching, approaching, leaving, interacting>.\n\nReference examples (style only — do not copy):\n- Scene: 2 people near installation, one leaning in. Engagement: watching.\n- Scene: 1 person walking away from the camera. Engagement: leaving.\n- Scene: empty room. Engagement: none.\n\nOutput only the final sentence about this specific image. Never output placeholders like <people count and position> or angle-bracket tokens. English only."
     },
     "asr": {
       "provider": "whisperx",
@@ -289,7 +289,7 @@
       }
     },
     "echoes": {
-      "enabled": false,
+      "enabled": true,
       "global_cooldown_turns": 12,
       "per_echo_cooldown_days": 7,
       "match_threshold": 0.55,

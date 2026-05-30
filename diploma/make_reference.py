@@ -27,13 +27,14 @@ def extract_default_reference():
 
 
 def force_tnr_all(doc):
-    """Force Times New Roman + no italic on every style in the document."""
+    """Force Times New Roman, no italic, black color on every style."""
     for style in doc.styles:
         try:
             f = style.font
             if f is not None:
                 f.name = "Times New Roman"
                 f.italic = False
+                f.color.rgb = RGBColor(0, 0, 0)
         except Exception:
             pass
 
@@ -118,17 +119,17 @@ def main():
     # --- Normal (body text) ---
     normal_style(doc.styles["Normal"])
 
-    # --- Heading 1: chapter title, centered, page break before ---
+    # --- Heading 1: chapter title, centered, no auto page break ---
     heading_style(
         doc.styles["Heading 1"],
-        size=16, centered=True, page_break=True,
+        size=16, centered=True, page_break=False,
         space_before=Pt(0), space_after=Pt(12)
     )
 
-    # --- Heading 2: section, 1.25cm indent, page break before ---
+    # --- Heading 2: section, 1.25cm indent, no auto page break ---
     heading_style(
         doc.styles["Heading 2"],
-        size=16, centered=False, page_break=True,
+        size=16, centered=False, page_break=False,
         space_before=Pt(0), space_after=Pt(12)
     )
 

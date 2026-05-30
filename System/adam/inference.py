@@ -537,17 +537,30 @@ def create_asr_client(config: dict[str, Any]) -> WhisperXASRClient | WhisperASRC
 
 _VLM_DEFAULT_PROMPT = (
     "You are a fixed camera sensor in an interactive art installation. "
-    "Describe in this format:\n"
-    "\"Scene: [count+position]. Engagement: [none/watching/approaching/leaving/interacting].\"\n"
-    "Example: \"Scene: 2 people near installation, one leaning in. Engagement: watching.\"\n"
-    "If empty: \"Scene: empty room. Engagement: none.\"\n"
-    "English only."
+    "Look at the image and write ONE short English sentence describing what you actually see, "
+    "using this structure:\n"
+    "Scene: <people count and position>. Engagement: <one of: none, watching, approaching, leaving, interacting>.\n\n"
+    "Reference examples (style only — do not copy):\n"
+    "- Scene: 2 people near installation, one leaning in. Engagement: watching.\n"
+    "- Scene: 1 person walking away from the camera. Engagement: leaving.\n"
+    "- Scene: empty room. Engagement: none.\n\n"
+    "Output only the final sentence about this specific image. "
+    "Never output angle-bracket placeholders. English only."
 )
 
 # CJK Unified Ideographs (U+4E00..U+9FFF) — VILA 1.5-3b occasionally outputs Chinese.
 # We count ideographs and reject the response (no retry — caller keeps stale scene).
 _CJK_RE = re.compile(r"[一-鿿]")
 _CJK_REJECT_THRESHOLD = 3  # 3+ Chinese ideographs → reject immediately
+
+# Placeholder echoes — VILA1.5-3b sometimes just repeats the prompt template back
+# (e.g. "Scene: [count+position]. Engagement: [none/watching/...]") instead of
+# describing the image. Reject so the scene cache isn't poisoned and the next
+# prompt doesn't include this template as Previous observation.
+_VLM_PLACEHOLDER_RE = re.compile(
+    r"\[(?:count\+position|none/watching|<[^>]+>)\]|<people count|<one of:|<description>",
+    re.IGNORECASE,
+)
 
 
 class VLMClient:
@@ -600,6 +613,8 @@ class VLMClient:
             raise RuntimeError(
                 f"vlm cjk output rejected (>={_CJK_REJECT_THRESHOLD} ideographs): {text[:80]!r}"
             )
+        if _VLM_PLACEHOLDER_RE.search(text):
+            raise RuntimeError(f"vlm placeholder echo rejected: {text[:120]!r}")
         return text
 
     def _build_prompt(self, prev_scene: str = "") -> str:
