@@ -52,7 +52,8 @@ uint32_t sLatestFrameSequence = 0;
 
 CameraModel sDetectedCameraModel = CameraModel::Unknown;
 constexpr uint16_t kOv5640Pid = 0x5640;
-constexpr uint16_t kOv7670Pid = 0x7673;
+// OV7670_PID in sensor.h = 0x76 (8-bit PIDH only); id.PID is uint16_t → 0x0076
+constexpr uint16_t kOv7670Pid = 0x0076;
 
 bool isPresetSupportedByCurrentCamera(framesize_t framesize) {
   if (sDetectedCameraModel == CameraModel::OV7670) {
@@ -180,7 +181,10 @@ camera_config_t buildCameraConfig(const CameraControlState &state, CameraModel m
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_DRAM;
 
-  if (psramFound()) {
+  // OV7670 produces YUV422 — CONFIG_CAMERA_PSRAM_DMA is not set, so raw-pixel
+  // formats cannot be allocated in PSRAM (would cause ESP_ERR_NOT_SUPPORTED).
+  // OV5640 JPEG frames work fine in PSRAM (JPEG DMA path is always enabled).
+  if (psramFound() && model != CameraModel::OV7670) {
     config.fb_location = CAMERA_FB_IN_PSRAM;
     config.fb_count = 2;
     config.grab_mode = CAMERA_GRAB_LATEST;
@@ -598,27 +602,28 @@ bool reinitializeCamera(const CameraControlState &state, const char *reason) {
     clearLatestCameraFrameLocked();
   }
 
-  bool cameraInitedDuringProbe = false;
   if (sDetectedCameraModel == CameraModel::Unknown) {
-    // First boot: detect camera model via two-phase probe
-    camera_config_t probeCfg = buildCameraConfig(state, CameraModel::OV5640);
+    // Probe at QVGA — safe for all supported cameras.
+    // OV7670 max = VGA; probing at HD (boot preset default) fails immediately.
+    CameraControlState probeState = state;
+    probeState.framesize = FRAMESIZE_QVGA;
+
+    camera_config_t probeCfg = buildCameraConfig(probeState, CameraModel::OV5640);
     if (esp_camera_init(&probeCfg) == ESP_OK) {
       sensor_t *s = esp_camera_sensor_get();
       const uint16_t pid = (s != nullptr) ? s->id.PID : 0;
-      if (pid == kOv7670Pid) {
-        // OV7670 accepted JPEG probe (unexpected) — deinit, reinit with correct format below
-        esp_camera_deinit();
-        sDetectedCameraModel = CameraModel::OV7670;
-      } else {
-        sDetectedCameraModel = CameraModel::OV5640;
-        cameraInitedDuringProbe = true;
-      }
+      sDetectedCameraModel = (pid == kOv7670Pid) ? CameraModel::OV7670 : CameraModel::OV5640;
+      esp_camera_deinit();  // reinit below with correct model + real framesize
     } else {
-      // JPEG probe failed — try OV7670 (YUV422, 24 MHz XCLK)
-      camera_config_t ov7Cfg = buildCameraConfig(state, CameraModel::OV7670);
+      // JPEG probe failed (expected for OV7670 — no HW JPEG encoder).
+      // Deinit clears any partial peripheral state before second probe.
+      esp_camera_deinit();
+      vTaskDelay(pdMS_TO_TICKS(100));  // let XCLK, I2C, and sensor settle
+      // Try OV7670 (YUV422, DRAM, same 20 MHz XCLK)
+      camera_config_t ov7Cfg = buildCameraConfig(probeState, CameraModel::OV7670);
       if (esp_camera_init(&ov7Cfg) == ESP_OK) {
         sDetectedCameraModel = CameraModel::OV7670;
-        cameraInitedDuringProbe = true;
+        esp_camera_deinit();
       } else {
         if (sCameraMutex != nullptr) {
           xSemaphoreGive(sCameraMutex);
@@ -634,8 +639,15 @@ bool reinitializeCamera(const CameraControlState &state, const char *reason) {
       sDetectedCameraModel == CameraModel::OV7670 ? "OV7670" : "OV5640",
       sDetectedCameraModel == CameraModel::OV7670 ? kOv7670Pid : kOv5640Pid);
   }
-  if (!cameraInitedDuringProbe) {
-    camera_config_t config = buildCameraConfig(state, sDetectedCameraModel);
+
+  // Clamp framesize to VGA for OV7670 (max supported resolution)
+  CameraControlState initState = state;
+  if (sDetectedCameraModel == CameraModel::OV7670 && initState.framesize > FRAMESIZE_VGA) {
+    bootLogf("camera", "OV7670: clamped framesize %d to VGA", state.framesize);
+    initState.framesize = FRAMESIZE_VGA;
+  }
+  {
+    camera_config_t config = buildCameraConfig(initState, sDetectedCameraModel);
     const esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
       if (sCameraMutex != nullptr) {
@@ -650,7 +662,7 @@ bool reinitializeCamera(const CameraControlState &state, const char *reason) {
   }
 
   sensor_t *sensor = esp_camera_sensor_get();
-  bool ok = sensor != nullptr && applyLiveSettings(sensor, state);
+  bool ok = sensor != nullptr && applyLiveSettings(sensor, initState);
   if (!ok) {
     esp_camera_deinit();
     sCameraInitialized = false;
@@ -674,16 +686,16 @@ bool reinitializeCamera(const CameraControlState &state, const char *reason) {
   gRuntimeState.cameraReinitCount = gRuntimeState.cameraReinitCount + 1;
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
-  setPresetName(state.preset);
+  setPresetName(initState.preset);
   setLastReinitReason(reason);
-  saveCameraState(state);
+  saveCameraState(initState);
 
   if (sCameraMutex != nullptr) {
     xSemaphoreGive(sCameraMutex);
   }
 
   bootLogf("camera", "reinitialized: reason=%s framesize=%d quality=%d",
-    reason == nullptr ? "unknown" : reason, state.framesize, state.quality);
+    reason == nullptr ? "unknown" : reason, initState.framesize, initState.quality);
   return true;
 }
 
