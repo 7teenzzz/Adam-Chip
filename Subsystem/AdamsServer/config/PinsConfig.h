@@ -35,12 +35,15 @@
 #define I2S_MIC_SD     21   // SD / DATA   — shared, time-multiplexed
 
 
-/*********************** I2S DAC PCM5102 / PCM5102A *********************/
+/*********************** I2S DAC MAX98357A x2 ***************************/
+// Оба модуля разделяют одни пины — канал выбирается через SD:
+//   LEFT  module: SD → floating       (left channel)
+//   RIGHT module: SD → VIN (3.3V)     (right channel)
+//   GAIN  both  : floating            (+15 dB)
 
-#define I2S_DAC_BCLK   38   // SCK / BCLK
-#define I2S_DAC_LRCK   39   // LR / LRCK / WS
-#define I2S_DAC_DATA   40   // SD / DATA
-// MCLK → GND
+#define I2S_DAC_BCLK   38   // BCLK — shared left + right
+#define I2S_DAC_LRCK   39   // LRC  — shared left + right
+#define I2S_DAC_DATA   40   // DIN  — shared left + right
 
 
 /*********************** ДАТЧИКИ ****************************************/
