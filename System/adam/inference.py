@@ -72,11 +72,33 @@ def _parse_wav(wav_bytes: bytes) -> tuple[int, int, int, int, int, int]:
     raise ValueError("no data chunk found")
 
 
+def _resample_pcm16_mono(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
+    """Resample mono 16-bit PCM from src_rate to dst_rate.
+
+    Prefers soxr (high-quality polyphase). audioop.ratecv is only a cheap linear
+    interpolator; on the non-integer 24000→44100 ratio Silero produces, its
+    artifacts are audible as crackle on the ESP32 speaker (confirmed by A/B test
+    vs soxr). Falls back to audioop.ratecv when soxr/numpy are unavailable so the
+    path never hard-fails on a minimal host.
+    """
+    if src_rate == dst_rate:
+        return pcm
+    try:
+        import numpy as np
+        import soxr
+        x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        y = np.clip(soxr.resample(x, src_rate, dst_rate, quality="VHQ"), -1.0, 1.0)
+        return (y * 32767.0).astype("<i2").tobytes()
+    except Exception:
+        converted, _state = audioop.ratecv(pcm, 2, 1, src_rate, dst_rate, None)
+        return converted
+
+
 def _prepare_wav_for_esp32_speaker(wav_bytes: bytes) -> bytes:
     """Convert arbitrary 16-bit PCM WAV to ESP32 contract: mono / 16-bit / 44100 Hz.
 
     Validates the source header, downmixes stereo→mono if needed, resamples to
-    44100 Hz via audioop.ratecv, and rebuilds a minimal 44-byte WAV header.
+    44100 Hz (soxr HQ, audioop fallback), and rebuilds a minimal 44-byte WAV header.
     """
     audio_format, channels, sample_rate, bits, data_off, data_size = _parse_wav(wav_bytes)
     if audio_format != 1 or bits != ESP32_SPEAKER_BITS:
@@ -87,7 +109,7 @@ def _prepare_wav_for_esp32_speaker(wav_bytes: bytes) -> bytes:
     if channels == 2:
         pcm = audioop.tomono(pcm, 2, 0.5, 0.5)
     if sample_rate != ESP32_SPEAKER_SAMPLE_RATE:
-        pcm, _state = audioop.ratecv(pcm, 2, 1, sample_rate, ESP32_SPEAKER_SAMPLE_RATE, None)
+        pcm = _resample_pcm16_mono(pcm, sample_rate, ESP32_SPEAKER_SAMPLE_RATE)
     return _build_wav_header(len(pcm), ESP32_SPEAKER_SAMPLE_RATE,
                              ESP32_SPEAKER_CHANNELS, ESP32_SPEAKER_BITS) + pcm
 

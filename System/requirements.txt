@@ -9,6 +9,10 @@ openwakeword>=0.6.0
 onnxruntime>=1.16.0
 numpy>=1.24.0
 
+# High-quality resampling for the ESP32 speaker path (24000→44100). audioop
+# is the linear-interpolation fallback; soxr removes the audible crackle.
+soxr>=0.3.0
+
 # Voice activity detection — WebRTC VAD (CPU, no PyTorch)
 webrtcvad>=2.0.10
 
