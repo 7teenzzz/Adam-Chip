@@ -57,6 +57,8 @@ struct CameraControlUpdate {
   bool vflip = false;
 };
 
+enum class CameraModel : uint8_t { Unknown, OV5640, OV7670 };
+
 enum class LatestFrameCopyStatus : uint8_t {
   Ok = 0,
   InvalidArgs = 1,
@@ -65,6 +67,7 @@ enum class LatestFrameCopyStatus : uint8_t {
   CapacityTooSmall = 4
 };
 
+CameraModel getDetectedCameraModel();
 bool initCamera();
 sensor_t *getCameraSensor();
 camera_fb_t *captureCameraFrame();
