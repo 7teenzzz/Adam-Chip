@@ -630,6 +630,13 @@
               "description": "ALSA device for local TTS playback when output_target='jetson_hdmi'. 'plughw:1,3' = HDMI audio (card 1, HDA NVIDIA). hw:1,0 (Jetson APE I2S) does not produce PCM output — do not use. Ignored when output_target='esp32_speaker'.",
               "default": "plughw:1,3"
             },
+            "esp32_loudness_gain": {
+              "type": "number",
+              "minimum": 1.0,
+              "maximum": 10.0,
+              "description": "Loudness compression applied to audio sent to the ESP32 speaker (output_target='esp32_speaker' only). Speech has a high crest factor, so even at tuning.voice.volume=1.0 (digital ceiling) the small MAX98357A drivers sound quiet. A tanh soft-limiter, y=tanh(gain·x) then peak-normalize, raises perceived loudness while saturating peaks smoothly (much softer than hard clipping). 1.0 = off (clean full amplitude). ~4.0 gives roughly +10 dB RMS (≈2× perceived loudness) with acceptable speech quality (A/B confirmed). Higher values get louder but increasingly coloured/distorted. This is the software loudness lever once volume is at 1.0; real clean headroom beyond this is hardware (MAX98357A GAIN pin → GND for +12…15 dB, cleaner 3.3V supply). Ignored for jetson_hdmi output.",
+              "default": 1.0
+            },
             "filler_enabled": {
               "type": "boolean",
               "description": "When true, TTS plays a short filler phrase (e.g. 'Хм...') while the LLM is generating, to reduce perceived silence latency.",
