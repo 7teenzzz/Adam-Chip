@@ -1,47 +1,36 @@
-# Branch: V-S09.1-Audio_out
+# Branch: V-R09.2-OV7670-fix
 
-**Diverged from:** main @ e254a09
-**Goal:** Phase 29 — Audio Out на ESP32 динамики. Перевести голос Адама с HDMI Jetson на динамики в корпусе персонажа: 2× MAX98357A I2S DAC+усилитель → 2 пары 8Ω динамиков последовательно-параллельно на канал (8Ω нагрузка), питание 3.3V.
-**Status:** executing (Wave 1 / Plan 02)
+**Diverged from:** main @ 597fb61
+**Goal:** Перевести видео-ввод Адама исключительно на камеру ESP32 (OV7670, подключена напрямую к ESP32-S3 по DVP). Сейчас Адам использует Jetson-вебкамеру, потому что `CameraReader` свалился в `jetson_fallback` на сломанном OV5640. Цель — убрать fallback на вебкамеру: ESP32-камера используется эксклюзивно, при сбое — бесконечный retry (как у микрофона `disable_local_fallback`). Логика стрима и VLM не меняется — только устройство ввода.
+**Status:** executing
 **Merge target:** main
 **Merge conditions:**
 
-- Phase 29 артефакты созданы (`29-CONTEXT.md` → `29-PLAN.md` → execute → verify)
-- Hardware смонтирован: 2× MAX98357A подключены к GPIO38/39/40, SD-пины ОБА → 3.3V (оба модуля играют одинаковое моно L=R; SD floating = shutdown/молчит — проверено трактом 2026-05-30), динамики 8Ω
-- `services.tts.output_target = "esp32_speaker"` в Config.json, рестарт `adam-orchestrator.service` подтверждён
-- `tuning.voice.volume` = 1.0 (100% = полная амплитуда Silero без digital clipping); cap `maximum` = 2.0 (>1.0 клиппит — потолок чистого звука 1.0)
-- Smoke-тест на корпусе: `volume=1.0` без клиппинга, динамики не нагреваются 30 мин, 0 self-echo `asr_result`
-- `docs/RUNBOOK_JETSON_EXHIBITION.md` дополнен секцией «Аудио-маршрут» с failover
+- Firmware OV7670 прошита на ESP32 (dual-path detection из commit 597fb61), `/capture` (порт 80) отдаёт валидный JPEG
+- На Jetson проверено: `camera_reader.active_source == "esp"` стабильно, `jetson_fallback` не активируется
+- VLM получает кадры с ESP32 (`vlm_request_started` события с `camera_source: esp`)
+- Smoke-тест: отключение/сбой ESP32 → `camera_error` с `fallback: disabled`, после восстановления кадры идут снова, вебкамера ни разу не использована
 
 **Modified areas:**
 
-- `System/Config.json` — `services.tts.output_target=esp32_speaker` + `tuning.voice.volume=1.0`
-- `System/Config.schema.json` — `tuning.voice.volume` default 0.5→1.0, max 2.0, описание под MAX98357A
-- `System/adam/inference.py` — `speak()`/cue роутинг на ESP32 + soxr HQ resample (24000→44100)
-- `System/Orchestrator.py` — `_play_cue_sound` (cue success/error на ESP32 по `output_target`)
-- `System/adam/tuning.py` — `VoiceTuning.volume` default 1.0, `le=2.0`
-- `System/requirements.txt` — добавлен `soxr`
-- `docs/RUNBOOK_JETSON_EXHIBITION.md` — новая секция «Аудио-маршрут»
-- `.planning/phases/29-audio-out-esp32-pcm5102a-pam8403-2-8-parallel/` — артефакты фазы
-- `.planning/ROADMAP.md` + `.planning/STATE.md` — учёт Phase 29
+- `System/Config.json` — `media.video.disable_jetson_fallback = true` (branch-only эксперимент)
+- `System/Config.schema.json` — документация `disable_jetson_fallback`
+- `System/adam/camera.py` — `CameraReader`: флаг `disable_jetson_fallback`, блокировка перехода в `jetson_fallback`, throttle `camera_error` во время сбоя, re-read флага в `apply_config`
+- `BRANCH.md` — этот файл (был устаревший от V-S09.1-Audio_out)
 
-**Не трогаем (готово в коде наследия):**
+**Не трогаем (готово в коде):**
 
-- `Subsystem/AdamsServer/src/audio/AudioModule.cpp` — I2S init совместим с MAX98357A без изменений (Philips 16-bit, без MCLK)
-- `Subsystem/AdamsServer/src/web/WebServerModule.cpp` — `/speaker` endpoint готов
+- `Subsystem/AdamsServer/` — firmware OV7670 dual-path уже в commit 597fb61 (detection, SW-JPEG `frame2jpg`, per-model XCLK, preset filter)
+- `System/Orchestrator.py` / `SceneWorker` — источник-независимы, читают `camera_reader.get_latest()`, изменений не требуют
+- `System/adam/inference.py` `VLMClient` — без изменений
 
 **Global changes:**
 
-- `tuning.voice.volume` operating = 1.0 (100%), cap `maximum` = 2.0. UI slider берёт max из schema (2.0); значения >1.0 дают digital clipping — рабочий потолок чистого звука 1.0.
-- Дефолт `output_target=esp32_speaker` после мёржа становится production-default. Для разработки без железа использовать `output_target=jetson_hdmi` override через env или edit Config.json.
+- Изменение Config.json помечено как **branch-only**: `disable_jetson_fallback=true` живёт на этой ветке, в main попадёт только после проверки на железе. Schema-дефолт = `false` (обратная совместимость для dev без ESP).
 
 **Notes for agents:**
 
-- Phase 21A (Chat EQ Real Spectrum) была завершена на этой ветке ранее (commit `8e6f6bb` 2026-05-18). Те изменения в `wakeMeter.js` / `mic_reader.py` / `Config.json` (spectrum параметры) уже мёржены и не относятся к Phase 29.
-- `_play_wav_bytes_to_esp32_sync` ждёт `duration_sec` после POST для синхронизации «TTS finished» с реальным окончанием I2S DMA. Не трогать без сильной причины.
-- Hardware изменён с PCM5102A+PAM8403 на MAX98357A (2026-05-30). Plan 02 переписан, firmware не требует изменений — I2S протокол совместим.
-- Barge-in на ESP-target в этой фазе **не работает** (firmware не имеет stop-endpoint). Accepted V1 limitation, зафиксирован в `29-CONTEXT.md` `<deferred>`.
-- `half_duplex_mute=true` остаётся инвариантом. Физическая близость MAX98357A к мик INMP441 — без mute self-loop гарантирован.
-- MAX98357A питается от 3.3V (отдельная линия от 5V моторов PCA9685) — spike-тест не нужен.
-- Resample 24000→44100 для ESP идёт через `soxr` HQ (audioop.ratecv давал слышимый треск; A/B подтвердил soxr). Fallback на audioop, если soxr нет.
-- Остаточный треск на тихом сигнале = шум питания class-D по линии 3.3V (НЕ ресемпл, НЕ клиппинг). Лечится hardware: развязка по питанию (100–470µF+0.1µF на VIN каждого модуля), отдельное чистое питание усилителей, звезда по земле, GAIN-пин. TODO hardware, вне кода.
+- Распиновка OV7670↔ESP32 совпадает с `Subsystem/AdamsServer/config/PinsConfig.h` (XCLK→15, SIOD→4, SIOC→5, D7→16…D0→11, VSYNC→6, HREF→7, PCLK→13). RESET→3.3V, PWDN→GND ⇒ оба пина `-1` (не управляются GPIO).
+- `esp_mjpeg_url = http://10.10.10.171:81/stream`; snapshot URL для per-frame захвата выводится из hostname → `http://10.10.10.171/capture` (порт 80). Не путать с MJPEG-стримом на `:81`.
+- ⚠️ Гигиена истории: эта ветка несёт неслитые в main коммиты Phase 29 (Audio Out на ESP32, `feat(29)…`). Они НЕ относятся к камере — разбирать/мёржить отдельно, не смешивать с камерным PR.
+- `disable_jetson_fallback` влияет только при `primary='esp_mjpeg'`. Для разработки без ESP32 ставить `primary='jetson_gstreamer'` (флаг тогда иррелевантен) — не выключать флаг в Config.json.

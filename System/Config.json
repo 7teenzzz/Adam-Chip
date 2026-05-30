@@ -27,6 +27,7 @@
       "esp_mjpeg_url": "http://10.10.10.171:81/stream",
       "esp_fail_threshold": 3,
       "esp_retry_interval_sec": 30.0,
+      "disable_jetson_fallback": true,
       "video_device": "/dev/video0",
       "camera_width": 640,
       "camera_height": 480,

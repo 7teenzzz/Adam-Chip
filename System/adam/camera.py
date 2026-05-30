@@ -38,6 +38,9 @@ class CameraReader:
         self.esp_snapshot_url: str = f"{_p.scheme}://{_p.hostname}/capture" if _p.hostname else ""
         self.esp_fail_threshold = int(video_config.get("esp_fail_threshold", 3))
         self.esp_retry_interval_sec = float(video_config.get("esp_retry_interval_sec", 30.0))
+        # ESP-exclusive mode: never fall back to the Jetson webcam, retry ESP32 forever.
+        # Mirrors services.asr.disable_local_fallback for the mic.
+        self.disable_jetson_fallback = bool(video_config.get("disable_jetson_fallback", False))
         self._on_event = on_event  # callback(event_type, payload) for event logging
 
         self._latest: bytes = b""
@@ -50,6 +53,7 @@ class CameraReader:
         self._active_source: str = "esp" if self.primary == "esp_mjpeg" else "jetson"
         self._esp_fail_count: int = 0
         self._esp_last_retry: float = 0.0
+        self._esp_last_error_emit: float = 0.0
 
     def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
         if self._on_event is not None:
@@ -102,6 +106,7 @@ class CameraReader:
         _p = _urlparse(new_url)
         self.esp_snapshot_url = f"{_p.scheme}://{_p.hostname}/capture" if _p.hostname else ""
         self.capture_interval = float(video_cfg.get("camera_capture_interval_sec", self.capture_interval))
+        self.disable_jetson_fallback = bool(video_cfg.get("disable_jetson_fallback", self.disable_jetson_fallback))
         if new_primary != self.primary:
             self.primary = new_primary
             self._active_source = "esp" if new_primary == "esp_mjpeg" else "jetson"
@@ -158,10 +163,19 @@ class CameraReader:
 
             except Exception as exc:
                 self._last_error = str(exc)
-                self._emit("camera_error", {"source": self._active_source, "error": str(exc)})
                 if self._active_source == "esp":
                     self._esp_fail_count += 1
-                    if self._esp_fail_count >= self.esp_fail_threshold:
+                if self.disable_jetson_fallback:
+                    # ESP-exclusive: never switch to the webcam, keep retrying ESP32 forever.
+                    # Throttle camera_error events during a sustained outage: emit for the first
+                    # esp_fail_threshold failures, then at most once per esp_retry_interval_sec.
+                    now = time.perf_counter()
+                    if self._esp_fail_count <= self.esp_fail_threshold or (now - self._esp_last_error_emit) >= self.esp_retry_interval_sec:
+                        self._esp_last_error_emit = now
+                        self._emit("camera_error", {"source": "esp", "error": str(exc), "consecutive_fails": self._esp_fail_count, "fallback": "disabled"})
+                else:
+                    self._emit("camera_error", {"source": self._active_source, "error": str(exc)})
+                    if self._active_source == "esp" and self._esp_fail_count >= self.esp_fail_threshold:
                         prev = self._active_source
                         self._active_source = "jetson_fallback"
                         self._esp_last_retry = time.perf_counter()

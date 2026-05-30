@@ -118,6 +118,11 @@
               "description": "Seconds between ESP32 camera reconnection attempts after failure.",
               "default": 30.0
             },
+            "disable_jetson_fallback": {
+              "type": "boolean",
+              "description": "When true, CameraReader uses the ESP32 camera EXCLUSIVELY and never switches to the local Jetson webcam (jetson_gstreamer/cv2) on failure. On ESP32 errors it keeps retrying the ESP32 /capture endpoint forever (camera_error events throttled to esp_retry_interval_sec during a sustained outage). Mirrors services.asr.disable_local_fallback for the mic. Only affects primary='esp_mjpeg'; when primary is a local source this flag is irrelevant. Set false only for development on hardware where the ESP32 camera is unavailable and the webcam fallback is desired.",
+              "default": false
+            },
             "video_device": {
               "type": "string",
               "description": "Linux video device path for local camera. Used by jetson_gstreamer pipeline.",
