@@ -94,11 +94,38 @@ def _resample_pcm16_mono(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
         return converted
 
 
-def _prepare_wav_for_esp32_speaker(wav_bytes: bytes) -> bytes:
+def _apply_esp32_loudness(pcm: bytes, gain: float) -> bytes:
+    """Soft-knee loudness compression for the ESP32 speaker.
+
+    Speech has a high crest factor (peaks ≫ RMS), so at full amplitude the
+    perceived loudness on the small MAX98357A speakers is low. tanh(gain·x)
+    raises low-level RMS while peaks saturate smoothly (much softer than hard
+    clipping), then we peak-normalize to ~full scale. gain<=1.0 is a no-op
+    (clean full-amplitude path). Needs numpy; on import error returns pcm
+    unchanged so the speaker path never hard-fails. This is the software lever
+    for loudness once tuning.voice.volume=1.0 is already at the digital ceiling;
+    real headroom beyond this is hardware (MAX98357A GAIN pin / supply).
+    """
+    if gain <= 1.0:
+        return pcm
+    try:
+        import numpy as np
+    except Exception:
+        return pcm
+    x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    y = np.tanh(gain * x)
+    peak = float(np.abs(y).max())
+    if peak > 0.0:
+        y = y / peak * 0.99
+    return (y * 32767.0).astype("<i2").tobytes()
+
+
+def _prepare_wav_for_esp32_speaker(wav_bytes: bytes, loudness_gain: float = 1.0) -> bytes:
     """Convert arbitrary 16-bit PCM WAV to ESP32 contract: mono / 16-bit / 44100 Hz.
 
     Validates the source header, downmixes stereo→mono if needed, resamples to
-    44100 Hz (soxr HQ, audioop fallback), and rebuilds a minimal 44-byte WAV header.
+    44100 Hz (soxr HQ, audioop fallback), optionally applies loudness compression
+    (loudness_gain>1.0), and rebuilds a minimal 44-byte WAV header.
     """
     audio_format, channels, sample_rate, bits, data_off, data_size = _parse_wav(wav_bytes)
     if audio_format != 1 or bits != ESP32_SPEAKER_BITS:
@@ -110,6 +137,7 @@ def _prepare_wav_for_esp32_speaker(wav_bytes: bytes) -> bytes:
         pcm = audioop.tomono(pcm, 2, 0.5, 0.5)
     if sample_rate != ESP32_SPEAKER_SAMPLE_RATE:
         pcm = _resample_pcm16_mono(pcm, sample_rate, ESP32_SPEAKER_SAMPLE_RATE)
+    pcm = _apply_esp32_loudness(pcm, loudness_gain)
     return _build_wav_header(len(pcm), ESP32_SPEAKER_SAMPLE_RATE,
                              ESP32_SPEAKER_CHANNELS, ESP32_SPEAKER_BITS) + pcm
 
@@ -247,6 +275,10 @@ class TTSClient:
         # mcu_speaker_url is required only when output_target='esp32_speaker'.
         # Stored regardless so a later runtime config swap can flip the target.
         self._mcu_speaker_url = (mcu_speaker_url or "").strip() or None
+        # Loudness compression for the ESP32 speaker path (tanh soft-limiter).
+        # 1.0 = off (clean full amplitude). >1.0 raises perceived loudness on the
+        # small MAX98357A drivers without exceeding the peak ceiling.
+        self._esp32_loudness_gain = float(config.get("esp32_loudness_gain", 1.0))
         self._current_play_proc: Any = None  # active aplay Popen handle for barge-in interrupt
         self._session: Any = None
         # Hook for orchestrator to log barge-in attempts that cannot stop ESP32 audio.
@@ -421,7 +453,7 @@ class TTSClient:
         if not self._mcu_speaker_url:
             return {"ok": False, "error": "mcu_speaker_url not configured", "target": "esp32_speaker"}
         try:
-            prepared = _prepare_wav_for_esp32_speaker(wav_bytes)
+            prepared = _prepare_wav_for_esp32_speaker(wav_bytes, self._esp32_loudness_gain)
         except ValueError as exc:
             return {"ok": False, "error": f"wav prep: {exc}", "target": "esp32_speaker"}
         # PCM bytes after the 44-byte header we built ourselves: prepared starts
