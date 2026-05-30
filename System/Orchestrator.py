@@ -3104,15 +3104,35 @@ def _schedule_success_sound(reason: str) -> None:
     asyncio.create_task(_play_success_sound(reason))
 
 
-async def _play_success_sound(reason: str) -> dict[str, Any]:
-    path = _sound_path("success_path")
+async def _play_cue_sound(path: Path) -> dict[str, Any]:
+    """Play a local cue file honoring services.tts.output_target.
+
+    When TTS is routed to the ESP32 speaker, cues go there too so EVERY sound
+    Adam makes comes out of the same physical speakers. Otherwise play locally
+    on the configured ALSA device. Returns a SoundResult-shaped dict
+    (ok / target / detail / error).
+    """
+    if tts.output_target == "esp32_speaker":
+        res = await asyncio.to_thread(tts.play_wav_file_to_esp32, str(path))
+        return {
+            "ok": bool(res.get("ok")),
+            "target": "esp32_speaker",
+            "detail": str(path),
+            "error": res.get("error"),
+        }
     tts_device = str(settings.section("services").get("tts", {}).get("output_device") or "")
     output_device = tts_device or str(settings.section("sounds").get("local_output_device", "default"))
-    result = await asyncio.to_thread(play_local_sound, path, output_device)
-    payload = {"reason": reason, "path": str(path), **result.as_dict()}
+    res = await asyncio.to_thread(play_local_sound, path, output_device)
+    return res.as_dict()
+
+
+async def _play_success_sound(reason: str) -> dict[str, Any]:
+    path = _sound_path("success_path")
+    result = await _play_cue_sound(path)
+    payload = {"reason": reason, "path": str(path), **result}
     event_log.append("sound_success", payload)
-    if not result.ok:
-        runtime_state["last_error"] = f"success_sound_failed:{result.error}"
+    if not result.get("ok"):
+        runtime_state["last_error"] = f"success_sound_failed:{result.get('error')}"
     return payload
 
 
@@ -3121,10 +3141,8 @@ async def _play_error_sound(reason: str) -> dict[str, Any]:
     if not path.exists():
         event_log.append("sound_error_skipped", {"reason": "file_not_found", "path": str(path)})
         return {"ok": False, "reason": reason, "error": "file_not_found"}
-    tts_device = str(settings.section("services").get("tts", {}).get("output_device") or "")
-    output_device = tts_device or str(settings.section("sounds").get("local_output_device", "default"))
-    result = await asyncio.to_thread(play_local_sound, path, output_device)
-    payload = {"reason": reason, "path": str(path), **result.as_dict()}
+    result = await _play_cue_sound(path)
+    payload = {"reason": reason, "path": str(path), **result}
     event_log.append("sound_error", payload)
     return payload
 

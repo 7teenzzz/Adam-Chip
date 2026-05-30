@@ -240,9 +240,44 @@ class TTSClient:
         chunks = [chunk for chunk in split_sentences(text) if chunk.strip()]
         results: list[dict[str, Any]] = []
         for chunk in chunks:
-            results.append(await asyncio.to_thread(self._synthesize_sync, chunk))
+            if self.output_target == "esp32_speaker":
+                # /speak makes the Silero service play on its OWN ALSA device
+                # (Jetson HDMI), bypassing output_target. For esp32_speaker we
+                # must fetch WAV bytes and POST them to the ESP32 ourselves so
+                # non-streaming callers (warmup phrase, turn fallback) also land
+                # on the ESP32 speaker.
+                results.append(await asyncio.to_thread(self._synthesize_and_play_esp32_sync, chunk))
+            else:
+                results.append(await asyncio.to_thread(self._synthesize_sync, chunk))
         ok = all(bool(result.get("ok")) for result in results) if results else True
         return {"ok": ok, "degraded": not ok, "chunks": len(chunks), "results": results}
+
+    def _synthesize_and_play_esp32_sync(self, text: str) -> dict[str, Any]:
+        """Synthesize via /wav and play through the ESP32 speaker (no local /speak).
+
+        Used by speak() when output_target='esp32_speaker'. Mirrors the streaming
+        consumer path (/wav → _play_wav_bytes_to_esp32_sync) so every TTS route
+        ends up on the same physical speakers.
+        """
+        wav = self._get_wav_bytes_sync(text)
+        if wav is None:
+            return {"ok": False, "error": "wav_synth_failed", "target": "esp32_speaker"}
+        return self._play_wav_bytes_to_esp32_sync(wav)
+
+    def play_wav_file_to_esp32(self, wav_path: str) -> dict[str, Any]:
+        """Play a local WAV file through the ESP32 speaker.
+
+        Lets cue sounds (success/error) reuse the TTS ESP32 path so ALL of
+        Adam's audio comes out of the same speakers. The file must be 16-bit
+        PCM WAV; _prepare_wav_for_esp32_speaker handles mono/stereo downmix and
+        resampling to the 44100 Hz ESP32 contract.
+        """
+        try:
+            with open(wav_path, "rb") as fh:
+                wav_bytes = fh.read()
+        except OSError as exc:
+            return {"ok": False, "error": f"read: {exc}", "target": "esp32_speaker"}
+        return self._play_wav_bytes_to_esp32_sync(wav_bytes)
 
     async def health(self) -> ServiceHealth:
         return await asyncio.to_thread(self._health_sync)
