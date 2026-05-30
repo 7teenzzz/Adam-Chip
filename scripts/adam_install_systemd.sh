@@ -73,7 +73,7 @@ ensure_env_line "ADAM_TTS_OUTPUT_DEVICE" "plughw:1,3"
 ensure_env_line "ADAM_ASR_HOST" "127.0.0.1"
 ensure_env_line "ADAM_ASR_PORT" "8095"
 ensure_env_line "ADAM_ASR_WHISPERX_BASE_URL" "http://127.0.0.1:8095"
-ensure_env_line "ADAM_ASR_WHISPERX_MODEL" "medium"
+ensure_env_line "ADAM_ASR_WHISPERX_MODEL" "small"
 ensure_env_line "ADAM_ASR_LANGUAGE" "ru"
 ensure_env_line "ADAM_ASR_DEVICE" "cuda"
 ensure_env_line "ADAM_VLM_BASE_URL" "http://127.0.0.1:8084"
@@ -92,7 +92,7 @@ install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-exhibition.target" /etc/systemd
 ensure_env_line "ADAM_LOG_VIEWER_PORT" "8083"
 
 systemctl daemon-reload
-systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service adam-logviewer.service adam-exhibition.target
+systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service adam-vlm.service adam-logviewer.service adam-exhibition.target
 
 echo "Installed Adam Chip systemd units."
 echo "Edit ${ENV_FILE} for device/service overrides."
