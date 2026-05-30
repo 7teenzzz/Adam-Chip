@@ -334,7 +334,7 @@
     "voice": {
       "speaker": "eugene",
       "speed_multiplier": 1.1,
-      "volume": 0.5
+      "volume": 1.0
     },
     "prompt": {
       "history_turns": 4,
