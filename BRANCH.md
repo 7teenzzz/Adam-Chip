@@ -1,32 +1,30 @@
-# Branch: V-S09.1-Audio_out
+# Branch: ESP-Audio-Out
 
-**Diverged from:** main @ e254a09
-**Goal:** Phase 21A — переделать «эквалайзер» на странице чата в реальный FFT-спектр + цвет-по-уровню + починить SSE-утечку виджета.
+**Diverged from:** main @ 7d30439
+**Goal:** Вывод голоса Адама по умолчанию на ESP-спикеры (2× MAX98357A, стерео) вместо HDMI Jetson.
 **Status:** experimenting
 **Merge target:** main
 **Merge conditions:**
-- Phase 21A артефакты созданы (`21A-CONTEXT.md` → `21A-PLAN.md` → execute → verify)
-- ROADMAP.md обновлён: Phase 21A зафиксирована как слайс Phase 21
-- Backend: FFT-публикация спектра не ломает существующий `audio_level` event
-- Frontend: OWW score / threshold / drag (на settings) работают как раньше
-- В Config.json вынесены параметры: число bands, cadence публикации, масштаб (lin/log), normalisation
-- Smoke-тест на чат-панели: бары следуют за голосом, при пике бар становится красным, при тишине плоско
+- Звук стабильно идёт из ESP-спикеров на тестовом turn
+- Самоэхо не ломает REPLY-фазу (Адам не транскрибирует свой голос) — `half_duplex_mute` + `post_tts_discard_window_ms` достаточно
+- Громкость приемлема (на 3.3 В питании — ~половина мощности; миграция на 5 В отложена)
+- Решение о дефолте в main принимается ПОСЛЕ теста (сейчас — только ветка)
 
 **Modified areas:**
-- `System/adam/` — источник звука (MicReader / audio worker) + event bus (новое событие или расширение `audio_level`)
-- `System/Config.json` + `System/Config.schema.json` — новые параметры FFT
-- `System/WebUI/static/js/widgets/wakeMeter.js` — рендер реального спектра, градиент цвета, fix SSE leak
-- `System/WebUI/static/js/panels/chat.js` — подпись/подсказка под виджетом
-- `.planning/phases/21-ui-rebuild/` или `.planning/phases/21A-chat-eq-real-spectrum/` — артефакты фазы
-- `.planning/ROADMAP.md` — фиксация Phase 21A как подфазы Phase 21
+- `System/Config.json` — `services.tts.output_target`: `jetson_hdmi` → `esp32_speaker`
+- `Subsystem/AdamsServer/config/PinsConfig.h` — комментарий блока DAC: PCM5102A → MAX98357A x2 (пины не меняются)
 
-**Global changes:**
-- Новое SSE-событие (или новое поле в `audio_level`) — фронт-код, который слушает `audio_level`, обязан игнорировать неизвестные поля. Координация: проверить settings.js / chat.js / любых других consumer'ов перед мёржем.
-- Новые ключи в Config.json (FFT bands, cadence). Hot-reload должен подхватить без рестарта.
+**Global changes:** есть — `output_target` влияет на то, куда идёт весь TTS. В main НЕ мёржить без подтверждения после теста. Решение пользователя: пока эксперимент только в ветке.
 
 **Notes for agents:**
-- Базовый отчёт по текущему коду «эквалайзера» — см. историю чата сессии 2026-05-18, или просто перечитать [System/WebUI/static/js/widgets/wakeMeter.js](System/WebUI/static/js/widgets/wakeMeter.js): бары — иллюзия (фиксированная Gaussian EQ_SHAPE × один скаляр `audioLevel` × `sin(Date.now())`).
-- OWW score (голубая линия) и threshold (оранжевый пунктир) — НЕ ТРОГАТЬ, логика отображения сохраняется.
-- Decay/peak-hold с баров убираем полностью: бары следуют за FFT-кадрами без сглаживания (решение пользователя — «максимально честно»).
-- Цвет бара = градиент по его уровню (зелёный → жёлтый → красный). `mic_source` остаётся индикатором в VU-meter и в badge, в эквалайзер не дублируется.
-- FFT источник: исключительно серверный (Jetson, MicReader или audio worker). Web Audio в браузере не подходит — будет микрофон ноутбука оператора, не Adam'a.
+- Прошивку перешивать НЕ обязательно для звука: пины 38/39/40 идентичны прежним PCM5102A, I2S-выход уже стерео 16-бит/44100 (`AudioModule.cpp` `initSpeakerStdTxChannel`), TX-цикл дублирует моно-сэмпл в оба канала. Перепрошивка нужна только чтобы подхватить обновлённый комментарий в PinsConfig.h.
+- ESP реально доступен по `10.10.10.171` (POD-сеть прямого подключения), НЕ по `192.168.0.171` из CLAUDE.md/firmware-доков. `mcu.speaker_url` в Config.json уже верный — не трогать.
+- Jetson-сторона готова: `inference.py` `_play_wav_bytes_to_esp32_sync` ресемплит Silero 24000 → 44100 моно 16-бит и POST'ит на `mcu.speaker_url`.
+- Питание усилителей: сейчас 2× MAX98357A на общей 3.3 В линии MP1584 вместе с INMP441 + W5500. Риски: MP1584 на пределе по току, Class-D шум/просадка в линию микрофонов и Ethernet на громком звуке. План миграции на отдельную 5 В линию — отложен пользователем.
+- Главный риск при тесте — самоэхо: спикеры теперь рядом с микрофонами на том же ESP.
+
+**Тест воспроизведения (2026-06-01):** ESP-вывод 100% работает надёжно (3/3 фразы чисто, slot освобождается, heap стабилен, underruns=0). Выводы:
+- `speaker_overflows` — доброкачественный счётчик backpressure (кольцо 32 КБ полно, Jetson придержан по TCP), НЕ потеря звука. Растёт ~634/фраза при underrun=0 и полном чистом проигрывании.
+- Надёжность требует дисциплины «одна фраза → ждать полного проигрывания → следующая». Оркестратор это уже делает (sleep на длительность в `_play_wav_bytes_to_esp32_sync`). Наложение посылок на единственный speaker-слот + оборванные соединения → зомби-сокеты → `:81` виснет.
+- Восстановление зависшего `:81`: `POST :80/api/system/stream/restart`; при глухом — `POST :80/api/system/reset` (ребут ~5с).
+- Громкость >100% (software gain >1.0) на 3.3 В только клиппит, не добавляет ватт. Реальный запас громкости — только 5 В питание.
