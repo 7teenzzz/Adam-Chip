@@ -32,6 +32,12 @@ _ESP_SPEAKER_CHUNK_BYTES = 2048
 # ~60 ms of trailing silence (44100 Hz mono 16-bit) so the I2S clock stops on
 # zeros, not mid-waveform → detaches the MAX98357A edge-click from the word.
 _ESP_SPEAKER_TAIL_SILENCE_BYTES = 5292
+# Boot resilience: if the ESP :81 /speaker handler is wedged it accepts the TCP
+# connection but never drains the ring → sendall blocks. Cap the per-operation
+# socket timeout so a dead speaker fails in seconds (warmup logs an error and
+# boot continues to standby) instead of stalling startup for 20-40 s.
+_ESP_SPEAKER_CONNECT_TIMEOUT = 4.0
+_ESP_SPEAKER_STALL_TIMEOUT = 6.0
 
 # Bypass system HTTP proxy for ESP32 LAN traffic (v2ray on this Jetson hijacks
 # urllib via env vars and leaks sockets back to ESP32:81 port pool of 4).
@@ -148,9 +154,13 @@ def _post_wav_paced_to_esp32(url: str, payload: bytes, bytes_per_sec: int,
         f"Content-Length: {len(payload)}\r\n"
         f"Connection: close\r\n\r\n"
     ).encode("ascii")
-    sock = socket.create_connection((host, port), timeout=timeout)
+    sock = socket.create_connection(
+        (host, port), timeout=min(timeout, _ESP_SPEAKER_CONNECT_TIMEOUT))
     try:
-        sock.settimeout(timeout)
+        # Per-operation stall timeout: each sendall on a healthy, draining ESP
+        # returns fast; only a wedged ring (handler not consuming) blocks this
+        # long, and we want to bail then — not wait the full playback budget.
+        sock.settimeout(_ESP_SPEAKER_STALL_TIMEOUT)
         sock.sendall(header)
         total = len(payload)
         # Prime: fill the ring up-front so it can absorb feed jitter.
@@ -509,7 +519,10 @@ class TTSClient:
             try:
                 req = Request(self._mcu_speaker_url, data=prepared, method="POST")
                 req.add_header("Content-Type", "audio/wav")
-                with _NO_PROXY_OPENER.open(req, timeout=post_timeout) as resp:
+                # Bound the fallback too so a dead :81 can't stall boot via the
+                # full-speed path either.
+                fallback_timeout = min(post_timeout, max(8.0, duration_sec + 3.0))
+                with _NO_PROXY_OPENER.open(req, timeout=fallback_timeout) as resp:
                     body = resp.read().decode("utf-8", errors="replace")
                     status = resp.status
                     ok = status < 400
