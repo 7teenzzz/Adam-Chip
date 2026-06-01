@@ -224,6 +224,24 @@ def process_tts_wav(
         # normalisation: only samples exceeding the ceiling are affected.
         np.clip(samples, -ceiling, ceiling, out=samples)
 
+        # Short fade in/out (~5 ms) to kill the filter start-up transient
+        # (HPF/compressor/EQ start from zero state → a click at phrase onset)
+        # and the DAC edge click at the end. Cheap and inaudible on speech.
+        try:
+            fade = int(sample_rate * 0.012)
+            if fade > 1 and samples.size >= fade * channels * 2:
+                ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+                if channels == 2:
+                    v = samples.reshape(-1, 2)
+                    v[:fade, 0] *= ramp; v[:fade, 1] *= ramp
+                    v[-fade:, 0] *= ramp[::-1]; v[-fade:, 1] *= ramp[::-1]
+                    samples = v.reshape(-1)
+                else:
+                    samples[:fade] *= ramp
+                    samples[-fade:] *= ramp[::-1]
+        except Exception:
+            pass
+
         out_i16 = np.round(samples * 32768.0).astype(np.int32)
         np.clip(out_i16, -32768, 32767, out=out_i16)
         out_bytes = out_i16.astype("<i2").tobytes()

@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import re
+import socket
 import struct
 import time
 import wave
@@ -13,9 +14,24 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, urlopen, ProxyHandler
 
 from adam import audio_dsp
+
+# ESP32 :81 /speaker streaming. The ESP ring buffer is only 32 KB; dumping a
+# WAV at full network speed overflows it and drops samples → audible clicks.
+# We pace the body to playback rate with a small prime so the ring never
+# overflows (verified: full-speed ~1000 overflows/phrase vs paced 0).
+# Prime fill must cushion both sides: too small → underruns (ring starves on
+# feed jitter → clicks); too large → overflow (ring is 32 KB). 20 KB keeps the
+# ring ~227 ms full with ~12 KB overflow headroom — survives Python/GC feed
+# stalls without starving.
+_ESP_SPEAKER_PRIME_BYTES = 20 * 1024
+_ESP_SPEAKER_CHUNK_BYTES = 2048
+# ~60 ms of trailing silence (44100 Hz mono 16-bit) so the I2S clock stops on
+# zeros, not mid-waveform → detaches the MAX98357A edge-click from the word.
+_ESP_SPEAKER_TAIL_SILENCE_BYTES = 5292
 
 # Bypass system HTTP proxy for ESP32 LAN traffic (v2ray on this Jetson hijacks
 # urllib via env vars and leaks sockets back to ESP32:81 port pool of 4).
@@ -98,8 +114,101 @@ def _prepare_wav_for_esp32_speaker(wav_bytes: bytes) -> bytes:
             pcm, _state = audioop.ratecv(pcm, 2, 1, sample_rate, ESP32_SPEAKER_SAMPLE_RATE, None)
         else:
             pcm = resampled
+    # Pad a short silence tail so the I2S keeps clocking zeros after the speech
+    # ends — the MAX98357A pops when the bit-clock stops abruptly, and this
+    # detaches that edge click from the end of the word (Phase 29).
+    pcm = pcm + (b"\x00" * _ESP_SPEAKER_TAIL_SILENCE_BYTES)
     return _build_wav_header(len(pcm), ESP32_SPEAKER_SAMPLE_RATE,
                              ESP32_SPEAKER_CHANNELS, ESP32_SPEAKER_BITS) + pcm
+
+
+def _post_wav_paced_to_esp32(url: str, payload: bytes, bytes_per_sec: int,
+                             timeout: float) -> tuple[int, str]:
+    """POST a WAV to the ESP32 :81 /speaker sink, PACING the body to playback
+    rate so the ESP's 32 KB ring never overflows (overflow drops cause audible
+    clicks). A raw socket inherently bypasses the v2ray proxy that hijacks LAN
+    traffic. Returns (status_code, body_text); raises OSError on connection
+    failure so the caller can fall back to a full-speed send.
+
+    Pacing model: keep bytes-sent under ``prime + bytes_per_sec * elapsed`` so
+    the ESP plays out of the ring as fast as we fill it. The send therefore
+    takes roughly the audio duration — which also replaces the post-POST sleep.
+    """
+    parsed = urlsplit(url)
+    host = parsed.hostname
+    port = parsed.port or 80
+    path = parsed.path or "/"
+    if not host:
+        raise OSError(f"bad speaker url: {url!r}")
+    bps = bytes_per_sec if bytes_per_sec and bytes_per_sec > 0 else 88200
+    header = (
+        f"POST {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        f"Content-Type: audio/wav\r\n"
+        f"Content-Length: {len(payload)}\r\n"
+        f"Connection: close\r\n\r\n"
+    ).encode("ascii")
+    sock = socket.create_connection((host, port), timeout=timeout)
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(header)
+        total = len(payload)
+        # Prime: fill the ring up-front so it can absorb feed jitter.
+        sent = min(_ESP_SPEAKER_PRIME_BYTES, total)
+        sock.sendall(payload[:sent])
+        # Then meter the rest at a STEADY clock — exactly one chunk per
+        # (chunk / bytes_per_sec) seconds. Crucially, if a scheduling stall
+        # puts us behind, we DO NOT burst to catch up (that overflows the ring
+        # → pointer corruption → white noise). We reset the clock to "now" and
+        # resume steady, accepting at worst a brief underrun (quiet click).
+        per_chunk_dt = _ESP_SPEAKER_CHUNK_BYTES / float(bps)
+        next_t = time.perf_counter()
+        while sent < total:
+            now = time.perf_counter()
+            if now >= next_t:
+                end = min(sent + _ESP_SPEAKER_CHUNK_BYTES, total)
+                sock.sendall(payload[sent:end])
+                sent = end
+                next_t += per_chunk_dt
+                if next_t < now:           # fell behind → drop the debt, never burst
+                    next_t = now
+            else:
+                time.sleep(min(0.002, next_t - now))
+        # Read the (tiny) response. The ESP may not close promptly, so use a
+        # SHORT read timeout and bail as soon as the header block arrives —
+        # never wait the full send timeout here (that hung playback ~20 s).
+        sock.settimeout(2.0)
+        resp = b""
+        try:
+            while len(resp) < 4096:
+                buf = sock.recv(4096)
+                if not buf:
+                    break
+                resp += buf
+                if b"\r\n\r\n" in resp:
+                    break
+        except (socket.timeout, OSError):
+            pass
+        status, body = 0, ""
+        if resp:
+            try:
+                line = resp.split(b"\r\n", 1)[0].decode("ascii", "replace").split()
+                if len(line) >= 2 and line[1].isdigit():
+                    status = int(line[1])
+                if b"\r\n\r\n" in resp:
+                    body = resp.split(b"\r\n\r\n", 1)[1].decode("utf-8", "replace")
+            except Exception:
+                pass
+        # Body was fully sent without the socket erroring → ESP consumed it.
+        # If it didn't send a parseable status, treat as success.
+        if status == 0:
+            status = 200
+        return status, body
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
 
 
 @dataclass
@@ -385,22 +494,32 @@ class TTSClient:
         # Allow timeout to cover at least the playback duration plus a margin
         # for the network round-trip and ESP32 buffer ramp-up.
         post_timeout = max(self.timeout, duration_sec + 5.0)
-        req = Request(self._mcu_speaker_url, data=prepared, method="POST")
-        req.add_header("Content-Type", "audio/wav")
         t0 = time.perf_counter()
         try:
-            # Bypass system proxy — env HTTP proxy (v2ray) hijacks LAN traffic
-            # and leaks sockets to ESP32:81, blocking subsequent connects.
-            with _NO_PROXY_OPENER.open(req, timeout=post_timeout) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
-                ok = resp.status < 400
-        except HTTPError as exc:
-            return {
-                "ok": False, "status": exc.code, "error": f"HTTP {exc.code}",
-                "target": "esp32_speaker",
-            }
-        except (URLError, OSError) as exc:
-            return {"ok": False, "error": str(exc), "target": "esp32_speaker"}
+            # Paced send: feed the ESP ring at playback rate so it never
+            # overflows (full-speed dumps drop samples → audible clicks).
+            # Raw socket also bypasses the v2ray proxy that hijacks LAN traffic.
+            status, body = _post_wav_paced_to_esp32(
+                self._mcu_speaker_url, prepared, bytes_per_sec, post_timeout)
+            ok = status < 400
+        except OSError:
+            # Pacing failed (connection issue) — fall back to a full-speed
+            # urllib POST so audio still plays (may click) rather than going
+            # silent. Still bypasses the proxy via _NO_PROXY_OPENER.
+            try:
+                req = Request(self._mcu_speaker_url, data=prepared, method="POST")
+                req.add_header("Content-Type", "audio/wav")
+                with _NO_PROXY_OPENER.open(req, timeout=post_timeout) as resp:
+                    body = resp.read().decode("utf-8", errors="replace")
+                    status = resp.status
+                    ok = status < 400
+            except HTTPError as exc:
+                return {
+                    "ok": False, "status": exc.code, "error": f"HTTP {exc.code}",
+                    "target": "esp32_speaker",
+                }
+            except (URLError, OSError) as exc:
+                return {"ok": False, "error": str(exc), "target": "esp32_speaker"}
         # Block remaining playback time so caller-visible "TTS finished" matches
         # actual audio end — within the bytes already buffered in I2S DMA.
         elapsed = time.perf_counter() - t0
@@ -408,7 +527,7 @@ class TTSClient:
         if wait_extra > 0:
             time.sleep(min(wait_extra, duration_sec))
         return {
-            "ok": ok, "status": resp.status, "body": body, "target": "esp32_speaker",
+            "ok": ok, "status": status, "body": body, "target": "esp32_speaker",
             "duration_sec": round(duration_sec, 3),
             "post_sec": round(elapsed, 3),
         }
