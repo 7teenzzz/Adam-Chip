@@ -27,6 +27,7 @@ namespace {
 
 httpd_handle_t sControlServer = nullptr;
 httpd_handle_t sStreamServer = nullptr;
+httpd_handle_t sSpeakerServer = nullptr;
 
 constexpr char kStreamContentType[] = "multipart/x-mixed-replace;boundary=123456789000000000000987654321";
 constexpr char kStreamBoundaryChunk[] = "\r\n--123456789000000000000987654321\r\n";
@@ -1619,7 +1620,7 @@ const char kRootV2Page[] PROGMEM =
   const groups=[
     {name:'UI',items:[['/dashboard','/dashboard'],['/live','/live'],['/ota','/ota']]},
     {name:'Video',items:[['/capture','/capture'],[':81/stream',()=>`http://${location.hostname}:81/stream`],['/api/camera','/api/camera'],['/api/camera/preset/apply','/api/camera/preset/apply']]},
-    {name:'Audio',items:[[':81/audio',()=>`http://${location.hostname}:81/audio`],[':81/speaker',()=>`http://${location.hostname}:81/speaker`],['/api/audio','/api/audio'],['/api/audio/clip?ms=2000','/api/audio/clip?ms=2000']]},
+    {name:'Audio',items:[[':81/audio',()=>`http://${location.hostname}:81/audio`],[':82/speaker',()=>`http://${location.hostname}:82/speaker`],['/api/audio','/api/audio'],['/api/audio/clip?ms=2000','/api/audio/clip?ms=2000']]},
     {name:'System',items:[['/api/status','/api/status'],['/api/dashboard','/api/dashboard'],['/api/sensors','/api/sensors'],['/api/pca9685','/api/pca9685'],['/api/ota','/api/ota'],['/ws','/ws']]}
   ];
   const state={health:{}};
@@ -1629,7 +1630,7 @@ const char kRootV2Page[] PROGMEM =
   async function check(label,url){
     if(label.includes(':81/stream')) return true;
     if(label.includes(':81/audio')) return true;
-    if(label.includes(':81/speaker')) return true;
+    if(label.includes(':82/speaker')) return true;
     if(label==='/ws') return true;
     const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(),900);
     try{ const r=await fetch(url,{cache:'no-store',signal:ctl.signal}); clearTimeout(t); return r.ok; }catch(_e){ clearTimeout(t); return false; }
@@ -2622,10 +2623,6 @@ esp_err_t audioMovedHandler(httpd_req_t *req) {
   return sendMovedEndpoint(req, kStreamPort, "/audio");
 }
 
-esp_err_t speakerMovedHandler(httpd_req_t *req) {
-  return sendMovedEndpoint(req, kStreamPort, "/speaker");
-}
-
 esp_err_t pcaChannelHandler(httpd_req_t *req) {
   portENTER_CRITICAL(&gRuntimeStateMux);
   const bool ready = gRuntimeState.pca9685Ready;
@@ -2891,7 +2888,6 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_uri_t captureUri = makeHttpUri("/capture", HTTP_GET, captureHandler);
   httpd_uri_t wsUri = makeWebSocketUri("/ws", wsHandler);
   httpd_uri_t audioMovedUri = makeHttpUri("/audio", HTTP_GET, audioMovedHandler);
-  httpd_uri_t speakerMovedUri = makeHttpUri("/speaker", HTTP_POST, speakerMovedHandler);
 
   httpd_register_uri_handler(server, &indexUri);
   httpd_register_uri_handler(server, &dashboardPageUri);
@@ -2933,7 +2929,6 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_register_uri_handler(server, &captureUri);
   httpd_register_uri_handler(server, &wsUri);
   httpd_register_uri_handler(server, &audioMovedUri);
-  httpd_register_uri_handler(server, &speakerMovedUri);
 }
 
 void registerStreamHandlers(httpd_handle_t server) {
@@ -3018,7 +3013,7 @@ esp_err_t systemStreamRestartHandler(httpd_req_t *req) {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port   = kHttpPort + 1 + 1;  // avoid collision with control ctrl_port
   streamConfig.max_uri_handlers  = 6;
-  streamConfig.max_open_sockets  = 4;  // T17 GSD: revert from 6 — peek-probe handles zombies, +16 KB stack risked OOM on Wi-Fi boot
+  streamConfig.max_open_sockets  = 3;  // speaker moved to its own server; mic + camera + transient fit in 3
   streamConfig.lru_purge_enable  = true;
   streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size        = 8192;
@@ -3028,7 +3023,9 @@ esp_err_t systemStreamRestartHandler(httpd_req_t *req) {
   if (ok) {
     registerStreamHandlers(sStreamServer);
     registerAudioHandlers(sStreamServer);
-    registerSpeakerHandlers(sStreamServer);
+    // NOTE: /speaker is NOT registered here — it lives on its own server
+    // (sSpeakerServer / kSpeakerServerPort). A mic-watchdog stream/restart
+    // therefore no longer disrupts speaker playback.
   }
   char buf[64];
   snprintf(buf, sizeof(buf), "{\"ok\":%s,\"stream_port\":%u}", ok ? "true" : "false", kStreamPort);
@@ -3063,7 +3060,7 @@ void registerSystemHandlers(httpd_handle_t server) {
 }  // namespace
 
 bool startWebServer() {
-  if (sControlServer != nullptr && sStreamServer != nullptr) {
+  if (sControlServer != nullptr && sStreamServer != nullptr && sSpeakerServer != nullptr) {
     return true;
   }
 
@@ -3074,6 +3071,10 @@ bool startWebServer() {
   if (sStreamServer != nullptr) {
     httpd_stop(sStreamServer);
     sStreamServer = nullptr;
+  }
+  if (sSpeakerServer != nullptr) {
+    httpd_stop(sSpeakerServer);
+    sSpeakerServer = nullptr;
   }
 
   portENTER_CRITICAL(&gRuntimeStateMux);
@@ -3104,7 +3105,7 @@ bool startWebServer() {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port = controlConfig.ctrl_port + 1;
   streamConfig.max_uri_handlers = 6;
-  streamConfig.max_open_sockets = 4;  // T17 GSD: revert from 6 — peek-probe handles zombies, +16 KB stack risked OOM on Wi-Fi boot
+  streamConfig.max_open_sockets = 3;  // mic stream + camera + transient; speaker moved to its own server. Leaves room for the dedicated speaker server within the lwIP socket pool.
   streamConfig.lru_purge_enable = true;
   streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size = 8192;
@@ -3118,12 +3119,35 @@ bool startWebServer() {
   }
   registerStreamHandlers(sStreamServer);
   registerAudioHandlers(sStreamServer);
-  registerSpeakerHandlers(sStreamServer);
+
+  // Durable fix: /speaker lives on its OWN httpd server (own FreeRTOS task) so
+  // it is NEVER blocked by the mic stream handler. ESP-IDF httpd runs one task
+  // per server and a streaming handler (the continuous mic /audio loop)
+  // monopolises that task — proven: GET :81 times out while mic streams, GET
+  // :80 is instant. With the speaker on its own task, playback is independent
+  // of the mic, and a stream/restart (mic watchdog) no longer kills it.
+  httpd_config_t speakerConfig = HTTPD_DEFAULT_CONFIG();
+  speakerConfig.server_port      = kSpeakerServerPort;
+  speakerConfig.ctrl_port        = controlConfig.ctrl_port + 2;  // unique internal ctrl socket
+  speakerConfig.max_uri_handlers = 2;
+  speakerConfig.max_open_sockets = 2;
+  speakerConfig.lru_purge_enable = true;
+  speakerConfig.send_wait_timeout = 5;
+  speakerConfig.stack_size       = 8192;
+  speakerConfig.open_fn          = streamServerOpenFn;  // keepalive + RST-close
+
+  if (httpd_start(&sSpeakerServer, &speakerConfig) != ESP_OK) {
+    bootLog("web", "failed to start speaker HTTP server");
+    httpd_stop(sStreamServer);  sStreamServer = nullptr;
+    httpd_stop(sControlServer); sControlServer = nullptr;
+    return false;
+  }
+  registerSpeakerHandlers(sSpeakerServer);
 
   portENTER_CRITICAL(&gRuntimeStateMux);
   gRuntimeState.webReady = true;
   portEXIT_CRITICAL(&gRuntimeStateMux);
-  bootLogf("web", "ready on ports control=%u streams=%u (video+audio+speaker)", kHttpPort, kStreamPort);
+  bootLogf("web", "ready on ports control=%u stream=%u speaker=%u", kHttpPort, kStreamPort, kSpeakerServerPort);
 
   return true;
 }

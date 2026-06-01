@@ -131,7 +131,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "mcu": {
         "base_url": "http://192.168.0.171",
-        "speaker_url": "http://192.168.0.171:81/speaker",
+        "speaker_url": "http://192.168.0.171:82/speaker",
         "timeout_sec": 1,
         "idle_scene": "boot_idle",
         "allowed_scenes": ["boot_idle", "all_on", "alternating"],
