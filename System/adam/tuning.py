@@ -142,10 +142,36 @@ class LLMTuning(BaseModel):
     response_word_target: int = Field(30, ge=5, le=200)
 
 
+class VoiceDspTuning(BaseModel):
+    """Phase 29 — TTS audio DSP chain (Stage A). Hot-reloadable like volume.
+
+    Applied to the Silero WAV before playback / ESP32 send. Stage A guarantees
+    zero clipping via the brickwall limiter regardless of makeup_db / volume.
+    Stage B fields (compressor, presence EQ) are added in a later slice.
+    """
+
+    enabled: bool = True
+    hpf_hz: float = Field(180.0, ge=0, le=2000)
+    makeup_db: float = Field(6.0, ge=-12, le=24)
+    limiter_ceiling_dbfs: float = Field(-1.0, ge=-12, le=0)
+    # Stage B — soft-knee compressor + presence EQ (opt-in, tuned by ear).
+    comp_enabled: bool = True
+    comp_threshold_dbfs: float = Field(-24.0, ge=-60, le=0)
+    comp_ratio: float = Field(2.0, ge=1.0, le=20.0)
+    comp_attack_ms: float = Field(10.0, ge=0.1, le=200.0)
+    comp_release_ms: float = Field(120.0, ge=5.0, le=2000.0)
+    comp_knee_db: float = Field(6.0, ge=0, le=24.0)
+    presence_enabled: bool = True
+    presence_hz: float = Field(3000.0, ge=500, le=8000)
+    presence_db: float = Field(2.5, ge=-12, le=12)
+    presence_q: float = Field(0.9, ge=0.1, le=10.0)
+
+
 class VoiceTuning(BaseModel):
     speaker: str = "eugene"
     speed_multiplier: float = Field(1.0, ge=0.5, le=2.0)
     volume: float = Field(1.0, ge=0, le=2.0)
+    dsp: VoiceDspTuning = Field(default_factory=VoiceDspTuning)
 
 
 class PromptTuning(BaseModel):

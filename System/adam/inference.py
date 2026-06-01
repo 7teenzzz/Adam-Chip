@@ -15,6 +15,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, urlopen, ProxyHandler
 
+from adam import audio_dsp
+
 # Bypass system HTTP proxy for ESP32 LAN traffic (v2ray on this Jetson hijacks
 # urllib via env vars and leaks sockets back to ESP32:81 port pool of 4).
 _NO_PROXY_OPENER = build_opener(ProxyHandler({}))
@@ -87,7 +89,15 @@ def _prepare_wav_for_esp32_speaker(wav_bytes: bytes) -> bytes:
     if channels == 2:
         pcm = audioop.tomono(pcm, 2, 0.5, 0.5)
     if sample_rate != ESP32_SPEAKER_SAMPLE_RATE:
-        pcm, _state = audioop.ratecv(pcm, 2, 1, sample_rate, ESP32_SPEAKER_SAMPLE_RATE, None)
+        # High-quality resample via soxr (Phase 29). ESP32 REQUIRES 44100, so
+        # if soxr is unavailable/fails (resample_pcm16_soxr returns input
+        # unchanged) we MUST still resample — fall back to audioop.ratecv.
+        resampled = audio_dsp.resample_pcm16_soxr(
+            pcm, ESP32_SPEAKER_CHANNELS, sample_rate, ESP32_SPEAKER_SAMPLE_RATE)
+        if resampled is pcm:
+            pcm, _state = audioop.ratecv(pcm, 2, 1, sample_rate, ESP32_SPEAKER_SAMPLE_RATE, None)
+        else:
+            pcm = resampled
     return _build_wav_header(len(pcm), ESP32_SPEAKER_SAMPLE_RATE,
                              ESP32_SPEAKER_CHANNELS, ESP32_SPEAKER_BITS) + pcm
 
