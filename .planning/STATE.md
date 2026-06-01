@@ -161,7 +161,7 @@ Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-r
 
 ## History
 
-- 2026-06-01: Phase 29 (ESP Audio Output — TTS DSP chain) добавлена в ROADMAP. Ветка `ESP-Audio-Out`. Слайс 1 (route TTS → ESP MAX98357A, commit `2b27ac3`) сделан; слайс 2 — DSP chain (HPF + compressor + limiter + soxr).
+- 2026-06-01: Phase 29 (ESP Audio Output — TTS DSP chain) — аудио-часть готова (commits `2b27ac3`, `e99ced0`, `0b7361a`). DSP-цепочка (HPF/comp/presence/limiter/soxr) + paced-подача без щелчков; профиль hpf240/makeup4/comp2.0. Итоги: `29-SUMMARY.md`. Deferred: хрип = аналог (GAIN +15дБ / 5В), firmware backpressure, самоэхо. Урок сессии: обрывы громкого звука были от USB-питания, не от кода.
 - 2026-05-18: Merge ветки `V-S08.1-code_rev_ref_opt` → `main`. ROADMAP перенумерован: voice-фазы получили номера 7-11, diploma+planning фазы сдвинуты на +5 (Phase 7→12, …, Phase 23→28). Phase 11 (Voice Pipeline Refactor) — active.
 - 2026-05-17: Phase 14 (Next-Phases Planning) завершена. 12 фаз спроектированы.
 - 2026-05-17: Phase 13 (Theory-Code Verification) завершена. 48 терминов через 3 графа.
