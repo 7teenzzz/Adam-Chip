@@ -2583,13 +2583,29 @@ esp_err_t speakerHandler(httpd_req_t *req) {
       // speakerPlaybackTask can drain it rather than silently dropping data.
       // Ring drains at kSpeakerSampleRate × 2 B/s ≈ 88 KB/s; a 4 ms yield
       // frees ~353 bytes, so a 1024 B chunk needs at most ~3 retries.
+      //
+      // Fix A (zombie/wedge): bound the wait. If the ring stops draining for
+      // kSpeakerDrainStallTimeoutMs (I2S playback task stalled / TX disabled
+      // after boot-sound), abort instead of spinning forever — an unbounded
+      // loop here holds the speaker slot AND blocks recv, wedging /speaker.
+      static constexpr int kSpeakerDrainStallTimeoutMs = 2000;
       size_t offset = 0;
+      int stallMs = 0;
       while (offset < payloadLen) {
-        offset += writeSpeakerData(payload + offset, payloadLen - offset);
+        const size_t written = writeSpeakerData(payload + offset, payloadLen - offset);
+        offset += written;
         if (offset < payloadLen) {
+          stallMs = (written == 0) ? (stallMs + 4) : 0;
+          if (stallMs >= kSpeakerDrainStallTimeoutMs) {
+            result = ESP_FAIL;
+            break;
+          }
           vTaskDelay(pdMS_TO_TICKS(4));
         }
       }
+    }
+    if (result != ESP_OK) {
+      break;  // drain stalled — exit the recv loop and clean up the slot
     }
   }
 
@@ -2953,6 +2969,17 @@ esp_err_t streamServerOpenFn(httpd_handle_t /*hd*/, int sockfd) {
   setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,      sizeof(idle));
   setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl,     sizeof(intvl));
   setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,       sizeof(cnt));
+
+  // W5500 socket-headroom fix (item 2): close with RST instead of FIN so the
+  // socket is freed IMMEDIATELY and never sits in TIME_WAIT. The W5500 has
+  // only 8 hardware sockets total; TIME_WAIT accumulation from connection
+  // churn (per-clip /speaker POSTs, /api/* polling, camera reconnects)
+  // exhausts the pool and hangs BOTH servers while the MCU keeps running.
+  // RST-close removes that accumulation. Used by control + stream servers.
+  struct linger so_linger;
+  so_linger.l_onoff  = 1;
+  so_linger.l_linger = 0;
+  setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
   return ESP_OK;
 }
 
@@ -3056,9 +3083,15 @@ bool startWebServer() {
   httpd_config_t controlConfig = HTTPD_DEFAULT_CONFIG();
   controlConfig.server_port = kHttpPort;
   controlConfig.max_uri_handlers = 48;
-  controlConfig.max_open_sockets = 4;
+  // Item 3 (W5500 headroom): 3 (was 4). With RST-close (open_fn) the control
+  // server no longer leaks sockets to TIME_WAIT, so 3 covers WS telemetry +
+  // transient /api/* calls, freeing 1 of the 8 W5500 sockets as global slack.
+  controlConfig.max_open_sockets = 3;
   controlConfig.lru_purge_enable = true;
   controlConfig.stack_size = 8192;
+  // Item 2: same keepalive + RST-close open_fn as the stream server, so :80
+  // API-poll churn does not accumulate TIME_WAIT and exhaust the socket pool.
+  controlConfig.open_fn = streamServerOpenFn;
 
   if (httpd_start(&sControlServer, &controlConfig) != ESP_OK) {
     bootLog("web", "failed to start control HTTP server");
