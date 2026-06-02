@@ -633,6 +633,21 @@ void speakerPlaybackTask(void *parameter) {
       portEXIT_CRITICAL(&gRuntimeStateMux);
     }
 
+    // I2S TX gate: when there is no active client and the ring is empty, skip
+    // the i2s_channel_write entirely and sleep instead. Without this gate the
+    // task continuously clocks zeros through the I2S bus even in silence —
+    // MAX98357A (Class-D, +15 dB) switches at full rate, radiating EMI into
+    // the INMP441 mic lines. Sleeping here lets the I2S peripheral idle and
+    // the amplifier go quiet between TTS clips (~80% reduction in mic baseline
+    // noise measured after separate speaker PSU was added). When a new HTTP
+    // POST arrives beginSpeakerStream() sets sSpeakerClientActive = true and
+    // the next iteration immediately resumes i2s_channel_write.
+    if (!clientActive && producedSamples == 0) {
+      vTaskDelay(pdMS_TO_TICKS(20));
+      updateSpeakerFillRuntime();
+      continue;
+    }
+
     for (size_t i = 0; i < kSpeakerTxChunkSamples; ++i) {
       stereoFrames[i * 2] = monoSamples[i];
       stereoFrames[i * 2 + 1] = monoSamples[i];
