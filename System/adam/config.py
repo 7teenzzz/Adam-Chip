@@ -60,7 +60,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "min_speech_ms": 200,
             "max_segment_ms": 9000,
             "mic_source": "esp32",
-            "esp32_mic_profile": "inmp441_philips32_stereo",
+            "esp32_mic_profile": "inmp441_philips32_right",
             "esp_health": {
                 "poll_interval_s": 60,
                 "silence_threshold": 24,

@@ -43,7 +43,7 @@
       "min_speech_ms": 200,
       "max_segment_ms": 9000,
       "mic_source": "esp32",
-      "esp32_mic_profile": "inmp441_philips32_stereo",
+      "esp32_mic_profile": "inmp441_philips32_right",
       "esp_health": {
         "poll_interval_s": 60,
         "silence_threshold": 24,
@@ -86,8 +86,8 @@
       "base_url": "http://127.0.0.1:8084",
       "model": "Efficient-Large-Model/VILA1.5-3b",
       "timeout_sec": 20,
-      "max_new_tokens": 80,
-      "prompt": "You are a fixed camera sensor in an interactive art installation. Describe in this format:\n\"Scene: [count+position]. Engagement: [none/watching/approaching/leaving/interacting].\"\nExample: \"Scene: 2 people near installation, one leaning in. Engagement: watching.\"\nIf empty: \"Scene: empty room. Engagement: none.\"\nEnglish only."
+      "max_new_tokens": 120,
+      "prompt": "You are a fixed camera sensor in an art installation. Describe in this format:\n\"Scene: [count+position]. Engagement: [none/watching/approaching/leaving/interacting].\"\nExample: \"Scene: 2 people near installation, one leaning in. Engagement: watching.\"\nIf empty: \"Scene: empty room. Engagement: none.\"\nEnglish only."
     },
     "asr": {
       "provider": "whisperx",
@@ -334,7 +334,7 @@
     "voice": {
       "speaker": "eugene",
       "speed_multiplier": 1.0,
-      "volume": 0.35,
+      "volume": 0.9,
       "dsp": {
         "enabled": true,
         "hpf_hz": 240.0,
