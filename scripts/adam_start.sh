@@ -136,10 +136,19 @@ has_microphone() {
 USB_CAM=$(has_usb_camera && echo 1 || echo 0)
 ESP_CAM=$(has_esp_camera && echo 1 || echo 0)
 MIC_OK=$(has_microphone && echo 1 || echo 0)
+MIC_SOURCE="$(python3 -c "import json; print(json.load(open('${ROOT_DIR}/System/Config.json'))['media']['audio'].get('mic_source','local'))" 2>/dev/null || echo local)"
 
-# Auto-skip ASR if no mic (only in full-start mode)
+# Auto-skip ASR if no mic (only in full-start mode).
+# ВАЖНО: при mic_source=esp32 микрофон — это ESP (INMP441), а НЕ локальное
+# ALSA-устройство, поэтому has_microphone()/arecord его не видит. В этом случае
+# НЕ пропускаем ASR — наличие микрофона определяется доступностью ESP.
 if ! ${EXPLICIT_NODES} && ! ${EMPTY_MODE}; then
-  if [[ "${MIC_OK}" != "1" ]] && [[ "${ADAM_FORCE_ASR:-0}" != "1" ]]; then
+  if [[ "${MIC_SOURCE}" == "esp32" ]]; then
+    if [[ "${ESP_CAM}" != "1" ]] && [[ "${ADAM_FORCE_ASR:-0}" != "1" ]]; then
+      # mic_source=esp32, но ESP недоступен — микрофона по факту нет
+      START_ASR=false
+    fi
+  elif [[ "${MIC_OK}" != "1" ]] && [[ "${ADAM_FORCE_ASR:-0}" != "1" ]]; then
     START_ASR=false
   fi
 fi
@@ -178,17 +187,19 @@ printf "  hw:      USB-cam=%s  ESP-cam=%s  mic=%s\n" \
   "$([[ ${USB_CAM} == 1 ]] && echo ✓ || echo ✗)" \
   "$([[ ${ESP_CAM} == 1 ]] && echo ✓ || echo ✗)" \
   "$([[ ${MIC_OK} == 1 ]] && echo ✓ || echo ✗)"
-if ! ${EXPLICIT_NODES} && ! ${EMPTY_MODE}; then
-  [[ "${MIC_OK}" != "1" ]] && echo "  · ASR пропущен (нет микрофона). Принудительно: ADAM_FORCE_ASR=1"
+if ! ${EXPLICIT_NODES} && ! ${EMPTY_MODE} && ! ${START_ASR}; then
+  echo "  · ASR пропущен (нет микрофона: source=${MIC_SOURCE}). Принудительно: ADAM_FORCE_ASR=1"
 fi
 echo
 
 # --------- 0. Log Viewer (always-on, independent of AI services) -------------
 if systemctl cat adam-logviewer.service >/dev/null 2>&1; then
-  if ! systemctl is-active --quiet adam-logviewer 2>/dev/null; then
-    sudo systemctl start adam-logviewer >/dev/null 2>&1 || true
+  if ! systemctl is-active --quiet adam-logviewer.service 2>/dev/null; then
+    # .service суффикс обязателен — NOPASSWD-правило задано как `adam-*.service`;
+    # без суффикса sudo запросит пароль.
+    sudo systemctl start adam-logviewer.service >/dev/null 2>&1 || true
   fi
-  systemctl is-active --quiet adam-logviewer 2>/dev/null \
+  systemctl is-active --quiet adam-logviewer.service 2>/dev/null \
     && echo "  ✓ adam-logviewer.service (:${ADAM_LOG_VIEWER_PORT:-8083})" \
     || echo "  ! adam-logviewer.service не стартовал"
 fi

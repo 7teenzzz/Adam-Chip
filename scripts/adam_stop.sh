@@ -107,7 +107,12 @@ done
 if ${need_systemd}; then
   echo
   echo "⏵ Остановка сервисов (sudo):"
-  sudo systemctl stop "${SYSTEMD_SERVICES[@]}" || true
+  # По одному сервису: NOPASSWD-правило задано как `systemctl stop adam-*.service`
+  # и матчит только одиночную команду; мульти-аргумент `stop A B C` под него не
+  # попадает → sudo запросил бы пароль.
+  for s in "${SYSTEMD_SERVICES[@]}"; do
+    sudo systemctl stop "${s}" || true
+  done
 fi
 
 for s in "${SYSTEMD_SERVICES[@]}"; do
