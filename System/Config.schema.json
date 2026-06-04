@@ -633,6 +633,162 @@
         }
       }
     },
+    "flora": {
+      "type": "object",
+      "description": "Technoflora reactive layer (Phase 29, FLORA-05). Jetson-side source of truth for the light/vibro animation engine on the ESP32 PCA9685. Plain top-level section read via settings.section('flora') — NOT pydantic tuning (tuning.py is persona-only). All numbers are Config-First (D-13). Channel masks light 0-10 / vibro 11-14 (D-02). Structural defaults (channel masks, gamma) are duplicated firmware-side in AdamsConfig.h because the ESP boots independently before the Jetson connects — keep the two copies consistent; this section is the runtime source of truth pushed to the ESP via POST /api/flora/state params.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Master switch for the technoflora reactive layer. When false, FloraController does not subscribe to the event bus and no /api/flora/state POSTs or RMS frames are sent.",
+          "default": true
+        },
+        "light_channels": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 15 },
+          "description": "PCA9685 channel indices driven as light (D-02). Channels 0-10 (11 lamps). Channel masks live in Config so firmware and Jetson agree.",
+          "default": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        },
+        "vibro_channels": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 15 },
+          "description": "PCA9685 channel indices driven as vibration motors (D-02). Channels 11-14 (4 motors). Channel 15 is left free. Vibro shares the same PCA9685 burst as light but is NOT subject to safety.motor_* clamps (those are for action.py LLM motor commands; flora vibro is continuous low-amplitude presence, D-04/D-12).",
+          "default": [11, 12, 13, 14]
+        },
+        "gamma": {
+          "type": "number",
+          "description": "Gamma correction exponent applied at frame-write time (duty = round(4095 * (level/255)^gamma)). Edison lamps + human perception are non-linear; gamma ~2.2 linearises perceived brightness (D-13). Firmware precomputes a 256-entry LUT from this value (duplicated in AdamsConfig.h). Calibration-tunable on hardware.",
+          "default": 2.2,
+          "minimum": 1.0,
+          "maximum": 3.0
+        },
+        "tick_ms": {
+          "type": "integer",
+          "description": "Informational mirror of the ESP firmware animation-task tick period in milliseconds (~50 Hz at 20 ms). The real tick lives in the firmware FreeRTOS task; this Config value documents the intended rate and is pushed for reference. Keep <= 50 ms tick (>= 20 Hz) for smooth breathing; do not exceed ~50 Hz to avoid I2C bus contention with the sensor task.",
+          "default": 20,
+          "minimum": 10,
+          "maximum": 100
+        },
+        "crossfade_ms": {
+          "type": "integer",
+          "description": "Duration in milliseconds over which the firmware interpolates from current duties to a new preset's duties on a state transition (D-09, 150-250 ms). Lamps are thermally inertial so short crossfades read as smooth. Barge-in jumps to listening immediately regardless (handled Jetson-side).",
+          "default": 200,
+          "minimum": 0,
+          "maximum": 2000
+        },
+        "speech": {
+          "type": "object",
+          "description": "Parameters for the Jetson-driven RMS speech-light state (state 4, D-07). When Adam speaks, the Jetson streams brightness frames for light channels 0-10 in time with TTS playback (FLORA-04, filled in plan 04).",
+          "properties": {
+            "frame_interval_ms": {
+              "type": "integer",
+              "description": "Milliseconds between RMS brightness frames pushed to the ESP (~12.5 fps at 80 ms, D-07). The RMS envelope is windowed at this granularity. ~15 fps ceiling — higher rates risk ESP control-server (:80) socket pressure (LWIP_MAX_SOCKETS=16). Lamp thermal inertia hides dropped frames.",
+              "default": 80,
+              "minimum": 33,
+              "maximum": 500
+            },
+            "hdmi_latency_offset_ms": {
+              "type": "integer",
+              "description": "Milliseconds the light stream is shifted to compensate for HDMI/ALSA audio buffer drain after aplay returns (D-07, Pitfall 5). Without it light leads the heard sound. Pure starting guess ~150 ms — calibrate by eye/ear on hardware.",
+              "default": 150,
+              "minimum": 0,
+              "maximum": 1000
+            },
+            "base_duty_pct": {
+              "type": "integer",
+              "description": "Baseline light brightness percentage during speech (RMS envelope floor, D-08). ~25% — lamps never go fully dark mid-utterance.",
+              "default": 25,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "peak_duty_pct": {
+              "type": "integer",
+              "description": "Peak light brightness percentage at the loudest RMS samples during speech (D-08). ~90%. Normalized envelope maps base_duty_pct..peak_duty_pct.",
+              "default": 90,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "spark_probability": {
+              "type": "number",
+              "description": "Probability (0.0-1.0) that a random subset of light channels gets boosted toward peak for one frame on an RMS peak — the rare 'sparks' on peaks (D-08). 0 disables sparks.",
+              "default": 0.15,
+              "minimum": 0.0,
+              "maximum": 1.0
+            }
+          }
+        },
+        "vibro": {
+          "type": "object",
+          "description": "Vibration-motor policy (channels 11-14, FLORA-06). Thin rhythmic presence linked to the light (D-11). NOT clamped by safety.motor_* (D-04/D-12).",
+          "properties": {
+            "intensity_pct": {
+              "type": "integer",
+              "description": "Ceiling on vibro motor amplitude as a percentage of full duty (D-12, restrained default). Acts as the flora-side intensity clamp instead of safety.motor_* (which apply only to action.py motor commands). Firmware should also clamp to this ceiling regardless of requested duty (defence-in-depth, T-29-05).",
+              "default": 30,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "silent_states": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Preset names during which vibro MUST be silent (channels 11-14 zeroed). 'attentive' (listening) is mandatory (D-11) — motor vibration couples into the INMP441 chassis and corrupts ASR. Enforced on both tiers: Jetson sends vibro_enabled=false and the ESP zeroes vibro when preset is in this list (Pitfall 4).",
+              "default": ["attentive"]
+            }
+          }
+        },
+        "states": {
+          "type": "object",
+          "description": "Per-preset start defaults for the five autonomous firmware animation states (D-05). Start values per RESEARCH §Config-First — calibration-tunable on hardware. Pushed to the ESP as POST /api/flora/state params; the ESP holds matching structural defaults in AdamsConfig.h.",
+          "properties": {
+            "breathe": {
+              "type": "object",
+              "description": "Idle / standby preset (покой): slow collective breathing across all light channels, vibro off.",
+              "properties": {
+                "base_pct": { "type": "integer", "description": "Trough brightness percentage of the breathing cycle.", "default": 8, "minimum": 0, "maximum": 100 },
+                "peak_pct": { "type": "integer", "description": "Crest brightness percentage of the breathing cycle.", "default": 30, "minimum": 0, "maximum": 100 },
+                "period_ms": { "type": "integer", "description": "Full breathing-cycle period in milliseconds (~7 s — slow, calm).", "default": 7000, "minimum": 1000, "maximum": 30000 },
+                "vibro": { "type": "boolean", "description": "Whether vibro participates in this preset. False for breathe.", "default": false }
+              }
+            },
+            "accent": {
+              "type": "object",
+              "description": "Detection preset (детекция): a brighter accent flash on wake-word/face detection, with a vibro pulse.",
+              "properties": {
+                "peak_pct": { "type": "integer", "description": "Accent peak brightness percentage.", "default": 75, "minimum": 0, "maximum": 100 },
+                "attack_ms": { "type": "integer", "description": "Rise time of the accent flash in milliseconds.", "default": 250, "minimum": 0, "maximum": 5000 },
+                "vibro": { "type": "boolean", "description": "Whether vibro pulses with the accent. True.", "default": true },
+                "vibro_pulse_ms": { "type": "integer", "description": "Duration of the vibro pulse accompanying the accent in milliseconds.", "default": 120, "minimum": 0, "maximum": 2000 }
+              }
+            },
+            "attentive": {
+              "type": "object",
+              "description": "Listening preset (слушание): a steady plateau of light, vibro OFF (mandatory, D-11 — protects ASR from motor->mic coupling).",
+              "properties": {
+                "plateau_pct": { "type": "integer", "description": "Steady plateau brightness percentage held while listening.", "default": 40, "minimum": 0, "maximum": 100 },
+                "vibro": { "type": "boolean", "description": "MUST be false (D-11). Vibro silent in listening.", "default": false }
+              }
+            },
+            "think_pulse": {
+              "type": "object",
+              "description": "Thinking preset (раздумье): low base with intermittent flashes on a random subset of channels, double vibro pulse.",
+              "properties": {
+                "base_pct": { "type": "integer", "description": "Low base brightness percentage between flashes.", "default": 20, "minimum": 0, "maximum": 100 },
+                "flash_ms": { "type": "integer", "description": "Interval/duration scale of the thinking flashes in milliseconds.", "default": 1750, "minimum": 100, "maximum": 10000 },
+                "vibro": { "type": "string", "description": "Vibro rhythm mode for thinking. 'double_pulse' = two short pulses per flash cycle.", "default": "double_pulse" }
+              }
+            },
+            "wake_bloom": {
+              "type": "object",
+              "description": "Awakening preset (пробуждение): from-dark random sprouting bloom played once when the pipeline leaves boot_warmup, then settles into another preset. Triggered Jetson-side on the first voice_state_change with from=='boot_warmup' (plan 03).",
+              "properties": {
+                "from_dark": { "type": "boolean", "description": "Whether the bloom starts from fully dark channels.", "default": true },
+                "settle_to": { "type": "string", "description": "Preset name to crossfade into after the bloom completes.", "default": "breathe" },
+                "vibro": { "type": "boolean", "description": "Whether vibro participates in the bloom. True.", "default": true }
+              }
+            }
+          }
+        }
+      }
+    },
     "sounds": {
       "type": "object",
       "description": "Local audio cue configuration for Jetson-side system sounds.",
