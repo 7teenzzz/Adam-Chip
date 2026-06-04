@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-06-04T17:11:47.734Z"
+last_updated: "2026-06-04T20:06:28.645Z"
 progress:
   total_phases: 32
   completed_phases: 2
   total_plans: 34
-  completed_plans: 16
+  completed_plans: 17
   percent: 6
 ---
 
 # Adam-Chip — Project State
 
 **Last Updated:** 2026-05-18
-**Status:** Ready to execute
+**Status:** Executing Phase 29
 
 ## Active Phase
 
@@ -161,6 +161,7 @@ Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-r
 
 ## History
 
+- 2026-06-04: Phase 29 Plan 02 завершён (ветка `LuxFlora-modes`). Config-First секция `flora` (FLORA-05): маски каналов свет 0-10 / вибро 11-14 (D-02), gamma 2.2, crossfade, speech RMS-параметры (D-07/D-08), вибро-политика (D-11/D-12), 5 пресетов состояний — в Config.json + DEFAULT_CONFIG + Config.schema.json. Wave 0 scaffold `tests/test_flora.py` (test_flora_config green, 3 skip-стаба для планов 03/04). Решение: flora — plain section (`settings.section('flora')`), не pydantic tuning (Pitfall 6). Commits `77af3fb`, `4256019`.
 - 2026-05-18: Merge ветки `V-S08.1-code_rev_ref_opt` → `main`. ROADMAP перенумерован: voice-фазы получили номера 7-11, diploma+planning фазы сдвинуты на +5 (Phase 7→12, …, Phase 23→28). Phase 11 (Voice Pipeline Refactor) — active.
 - 2026-05-17: Phase 14 (Next-Phases Planning) завершена. 12 фаз спроектированы.
 - 2026-05-17: Phase 13 (Theory-Code Verification) завершена. 48 терминов через 3 графа.

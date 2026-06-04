@@ -910,13 +910,13 @@ Plans:
 
 **Requirement IDs:** FLORA-01 (ESP-движок), FLORA-02 (эндпоинт state), FLORA-03 (Jetson event-слой), FLORA-04 (RMS-синхронизация), FLORA-05 (Config-First параметры), FLORA-06 (вибро-политика)
 
-**Plans:** 4 plans (3 waves)
+**Plans:** 1/4 plans executed
 
 Plans:
 **Wave 1**
 
 - [ ] 29-01-PLAN.md — ESP firmware animation engine (FreeRTOS task) + POST /api/flora/state [FLORA-01, FLORA-02]
-- [ ] 29-02-PLAN.md — Config-First flora section + Config.schema + Wave 0 tests/test_flora.py [FLORA-05]
+- [x] 29-02-PLAN.md — Config-First flora section + Config.schema + Wave 0 tests/test_flora.py [FLORA-05]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
