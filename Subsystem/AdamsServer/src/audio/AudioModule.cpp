@@ -685,7 +685,7 @@ bool initAudioCapture() {
     const AudioProfileDefinition *profile = defaultProfile();
     applyProfileDefaults(*profile);
     sCaptureConfig.dcBlock = true;
-    sCaptureConfig.softwareGain = 7.0f;
+    sCaptureConfig.softwareGain = 2.0f;
   }
 
   const bool ready = reconfigureAudioCaptureLocked("boot");
