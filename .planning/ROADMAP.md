@@ -878,6 +878,14 @@ Plans:
 
 **Requirement IDs:** FLORA-01 (ESP-движок), FLORA-02 (эндпоинт state), FLORA-03 (Jetson event-слой), FLORA-04 (RMS-синхронизация), FLORA-05 (Config-First параметры), FLORA-06 (вибро-политика)
 
+**Plans:** 4 plans (3 waves)
+
+Plans:
+- [ ] 29-01-PLAN.md — ESP firmware animation engine (FreeRTOS task) + POST /api/flora/state [FLORA-01, FLORA-02]
+- [ ] 29-02-PLAN.md — Config-First flora section + Config.schema + Wave 0 tests/test_flora.py [FLORA-05]
+- [ ] 29-03-PLAN.md — Jetson FloraController event layer + vibro policy + lifespan wiring [FLORA-03, FLORA-06]
+- [ ] 29-04-PLAN.md — RMS speech sync streamer (WAV→envelope→light, barge-in) [FLORA-04]
+
 ---
 
 ## Backlog (неспланированные задачи)
