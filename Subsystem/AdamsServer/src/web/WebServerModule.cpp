@@ -19,6 +19,7 @@
 #include "../core/NetworkModule.h"
 #include "../core/OtaModule.h"
 #include "../camera/CameraModule.h"
+#include "../io/FloraModule.h"
 #include "../io/Pca9685Module.h"
 #include "../core/RuntimeState.h"
 #include "../core/VideoLatencyMetrics.h"
@@ -2680,6 +2681,61 @@ esp_err_t pcaSceneHandler(httpd_req_t *req) {
   return sendJson(req, json);
 }
 
+// Technoflora preset control (Phase 29, FLORA-02). Mirrors pcaSceneHandler:
+// ready-gate, readRequestBody (4096-byte cap -> DoS mitigation T-29-01), parse
+// `state` + optional flat params via the hand-rolled extractJson* helpers (NOT
+// ArduinoJson, per project convention), apply via setFloraState. Unknown preset
+// -> 400 (T-29-01). Registered on the control server (:80), not the :81 pool.
+esp_err_t floraStateHandler(httpd_req_t *req) {
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  const bool ready = gRuntimeState.pca9685Ready;
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+  if (!ready) {
+    return sendError(req, "503 Service Unavailable", "{\"error\":\"pca9685_not_ready\"}");
+  }
+
+  String body;
+  if (!readRequestBody(req, body)) {
+    return sendError(req, "400 Bad Request", "{\"error\":\"invalid_request_body\"}");
+  }
+
+  String state;
+  if (!extractJsonString(body, "state", state)) {
+    return sendError(req, "400 Bad Request", "{\"error\":\"missing_state\"}");
+  }
+
+  // Optional flat params (the parser is flat-key: it scans the whole body for
+  // the first occurrence of each key, ignoring object boundaries). Clamp duties
+  // 0-4095 here (T-29-02/T-29-03); setFloraState clamps again as defence-in-depth.
+  FloraParams params;
+  int intValue = 0;
+  bool boolValue = false;
+  if (extractJsonInt(body, "base_duty", intValue)) {
+    params.baseDuty = static_cast<uint16_t>(constrain(intValue, 0, 4095));
+  }
+  if (extractJsonInt(body, "peak_duty", intValue)) {
+    params.peakDuty = static_cast<uint16_t>(constrain(intValue, 0, 4095));
+  }
+  if (extractJsonInt(body, "period_ms", intValue)) {
+    params.periodMs = static_cast<uint32_t>(max(intValue, 0));
+  }
+  if (extractJsonInt(body, "crossfade_ms", intValue)) {
+    params.crossfadeMs = static_cast<uint32_t>(max(intValue, 0));
+  }
+  if (extractJsonBool(body, "vibro_enabled", boolValue)) {
+    params.vibroEnabled = boolValue ? 1 : 0;
+  }
+  if (extractJsonInt(body, "vibro_duty", intValue)) {
+    params.vibroDuty = static_cast<uint16_t>(constrain(intValue, 0, 4095));
+  }
+
+  if (!setFloraState(state.c_str(), params)) {
+    return sendError(req, "400 Bad Request", "{\"error\":\"invalid_flora_state\"}");
+  }
+
+  return sendJson(req, "{\"ok\":true}");
+}
+
 esp_err_t pcaFrequencyHandler(httpd_req_t *req) {
   portENTER_CRITICAL(&gRuntimeStateMux);
   const bool ready = gRuntimeState.pca9685Ready;
@@ -2863,6 +2919,7 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_uri_t pcaChannelsUri = makeHttpUri("/api/pca9685/channels", HTTP_POST, pcaChannelsHandler);
   httpd_uri_t pcaSceneUri = makeHttpUri("/api/pca9685/scene", HTTP_POST, pcaSceneHandler);
   httpd_uri_t pcaFrequencyUri = makeHttpUri("/api/pca9685/frequency", HTTP_POST, pcaFrequencyHandler);
+  httpd_uri_t floraStateUri = makeHttpUri("/api/flora/state", HTTP_POST, floraStateHandler);
   httpd_uri_t audioStatusUri = makeHttpUri("/api/audio", HTTP_GET, audioStatusHandler);
   httpd_uri_t audioConfigUri = makeHttpUri("/api/audio", HTTP_POST, audioConfigHandler);
   httpd_uri_t audioClipUri = makeHttpUri("/api/audio/clip", HTTP_GET, audioClipHandler);
@@ -2905,6 +2962,7 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_register_uri_handler(server, &pcaChannelsUri);
   httpd_register_uri_handler(server, &pcaSceneUri);
   httpd_register_uri_handler(server, &pcaFrequencyUri);
+  httpd_register_uri_handler(server, &floraStateUri);
   httpd_register_uri_handler(server, &audioStatusUri);
   httpd_register_uri_handler(server, &audioConfigUri);
   httpd_register_uri_handler(server, &audioClipUri);
