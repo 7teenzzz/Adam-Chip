@@ -320,10 +320,12 @@ V-S07.1 после `_transcribe_and_dispatch` явно вызывал `_drain_es
 3. **Защита TCP-буфера ESP32** (не Drain socket напрямую как V-S07.1, а через MicReader): после `flush_queue()` ставится `_discard_until_ts` — drain_loop ПРОДОЛЖАЕТ читать socket (kernel TCP buffer дренируется, W5500 SPI не переполняется), но скип `_put_or_drop` 200 мс. Это адаптация V-S07.1 под MicReader-стрим — собственный socket-read MicReader'а сохраняется, drain происходит на уровне queue.
 
 **Чего НЕ делается:**
+
 - Flush на `wake_word_detected` — Phase 10 v1 показал что это убивает первые 200 мс речи пользователя (regression 64%→33% success).
 - Прямое чтение socket из `_vad_loop` — это бы сломало MicReader-стрим архитектуру (пользователь запретил).
 
 **Deliverables:**
+
 - `MicReader.flush_queue(discard_window_ms=200.0)` — публичный метод.
 - `_discard_until_ts` поле + gate в `_drain_loop` (mirror of mute-gate).
 - 2 вызова в Orchestrator: post-transcribe + reply_silence_timeout. БЕЗ wake.
@@ -453,6 +455,7 @@ V-S07.1 после `_transcribe_and_dispatch` явно вызывал `_drain_es
 **Completed:** 2026-05-17 (13 фаз спроектированы, 32 REQUIREMENTS-IDs, dependency graph, 4 артефакта)
 
 Plans:
+
 - [x] 09-01-PLAN.md — CANDIDATES.md: реестр ~13 кандидатов из Ф8 §4.1 + Backlog + активных веток
 - [x] 09-02-PLAN.md — 09-PRIORITIZATION.md: матрица 4 критериев (Impact/Effort/Strategic/Exhibition) + P0–P3 группы
 - [x] 09-03-PLAN.md — 09-PHASE-DRAFTS.md: полные ROADMAP-style drafts для P0 (10A/10B/11) + компактные для P1–P3
@@ -492,10 +495,12 @@ Plans:
 **Goal:** Применить все оставшиеся текстовые правки диплома из Phase 13 (4 A-path + 7 C-path + 10 оставшихся EMERGENT), финализировать диплом и подготовить ветку `diploma-chapter3` к мёржу в `main`.
 
 **Requires:**
+
 - Phase 13 завершена ✓ (08-SUMMARY.md создан, топ-3 EMERGENT применены)
 - Phase 14 завершена ✓ (09-SUMMARY.md создан)
 
 **Delivers:**
+
 - Правка ch01.1.1.4 — мета-параграф «AIIM как философский мост Брайдотти↔Латур↔код» (EMERGENT #13, F-04)
 - Правка ch03.3.2.3 — раздел «Динамическая модуляция AIIM» с TuningStore hot-reload (EMERGENT #2, F-05) + centralность AIIM как god-node (EMERGENT #1) + future-work «Профили активации AIIM» (EMERGENT #4)
 - Правка ch03.3.3.4 — полная state-diagram Voice Loop FSM с Config-параметрами (EMERGENT #9, F-06, Mermaid)
@@ -518,10 +523,12 @@ Plans:
 **Goal:** Вынести все хардкодированные числовые параметры в `Config.json` / `Config.schema.json` и устранить BUG F-07 (рассинхронизацию `history_turns=2` vs `limit=8`), закрыв Pattern 4 из Phase 13.
 
 **Requires:**
+
 - Phase 13 завершена ✓ (F-07 BUG, Τ-30/31/36 задокументированы)
 - Не блокируется другими фазами (независима)
 
 **Delivers:**
+
 - Новый Config-ключ `agent.session_turn_limit` (limit=8 из `prompt.py` → Config) — устраняет Τ-30
 - Новый Config-ключ `memory.episodic_decay_days` (14d из `episodic.py` → Config) — устраняет Τ-31
 - Новый Config-ключ `memory.salience_weights` (dict из `episodic.py` → Config) — устраняет Τ-36
@@ -544,10 +551,12 @@ Plans:
 **Goal:** После каждой сессии консолидатор анализирует паттерны взаимодействия и автоматически корректирует параметры `Tuning.json` (drive, verbosity, доминирующие аспекты) в пределах заданных magnitude limits, реализуя рефлексивный уровень AIIM.
 
 **Requires:**
+
 - Phase 18 (Memory Consolidation) — желательно; integration hook требует работающего consolidator (можно вести параллельно)
 - Phase 15A (Diploma Convergence Pass) — согласование diploma-side описания AIIM Dynamic (DIPL-10)
 
 **Delivers:**
+
 - Новый модуль `System/adam/aiim_reflection.py` с функцией `adjust_tuning(session_summary, current_tuning) -> dict`
 - Whitelist параметров для автокоррекции в `Config.json::aiim.adjustable_params` (drive, verbosity, aspect_weights)
 - Magnitude limits per parameter в `Config.json::aiim.magnitude_limits` — защита от дрейфа
@@ -569,10 +578,12 @@ Plans:
 **Goal:** Интегрировать `Engineering/consolidator.py` в Orchestrator runtime с daily cron или post-session trigger, создав работающий механизм консолидации эпизодической памяти.
 
 **Requires:**
+
 - Phase 6A завершена ✓ (consolidator.py создан с llama.cpp API + rule-based fallback)
 - Независима от других активных фаз
 
 **Delivers:**
+
 - Интеграция `consolidator.py` в Orchestrator runtime (daily cron scheduler или post-session event hook)
 - Daily cron scheduler или Orchestrator event hook для запуска консолидации после сессии
 - Корректный flow флага `Episode.consolidated: bool` — от `episodic.py` до diary
@@ -592,9 +603,11 @@ Plans:
 **Goal:** Завершить разработку в `Identity-tuning` (Φ-13 path C, Α-24 path A, калибровка 5 mood-состояний) и выполнить merge в `main`.
 
 **Requires:**
+
 - Phase 15A (Diploma Convergence Pass) — согласование diploma-side правок Α-24 и Φ-13
 
 **Delivers:**
+
 - Финализация кода в ветке `Identity-tuning` (Φ-13 path C параграф + Α-24 mood калибровка)
 - Code review пройден (`/gsd-code-review`)
 - Merge `Identity-tuning` → `main` выполнен
@@ -614,9 +627,11 @@ Plans:
 **Goal:** Доработать `action.py` для парсинга явных mood-маркеров из LLM-ответа вместо текущего keyword matching по `reply_text`.
 
 **Requires:**
+
 - Независима (улучшает NVR метрику Phase 17)
 
 **Delivers:**
+
 - Доработка `action.py`: парсинг явных mood-маркеров из структуры LLM-ответа (не keyword matching)
 - Обновлённый системный промпт: шаблон для генерации mood-маркеров в формате, парсируемом action.py
 - A/B тест: сравнение качества mood detection (keyword vs LLM-маркеры)
@@ -635,10 +650,12 @@ Plans:
 **Goal:** Заменить TF-IDF векторизацию в `FaissEpisodeIndex` на llama.cpp `/embeddings` endpoint для семантического поиска по эпизодической памяти.
 
 **Requires:**
+
 - Phase 18 (Memory Consolidation) завершена — prereq
 - Свободная VRAM ≥ 4 GB при работающем Gemma 4 E4B
 
 **Delivers:**
+
 - Замена TF-IDF → llama.cpp `/embeddings` в `FaissEpisodeIndex` (интерфейс `.build()/.search()/.save()/.load()` не меняется)
 - VRAM check при запуске Wave 2 (≥4 GB свободной VRAM при работающем LLM)
 - Тесты семантического поиска (релевантность vs keyword matching)
@@ -657,9 +674,11 @@ Plans:
 **Goal:** Расширить `scripts/adam_pull_logs.py` и API до полноценного удалённого мониторинга pipeline-этапов с фильтрацией по turn_id / stage / временному диапазону.
 
 **Requires:**
+
 - Независима (частично реализована: `adam_pull_logs.py` + `/api/agent/turns` + `/api/agent/events`)
 
 **Delivers:**
+
 - Расширение `adam_pull_logs.py`: фильтрация по stage, временному диапазону, turn_id
 - Расширение `/api/agent/events` API: дополнительные фильтры
 - Опциональная базовая auth (token) для удалённого API при exposition за пределами локальной сети
@@ -678,9 +697,11 @@ Plans:
 **Goal:** Завершить разработку в ветке `VLM-upgrade` и выполнить merge в `main`.
 
 **Requires:**
+
 - Независима (Phase 13 не выявила блокеров)
 
 **Delivers:**
+
 - Финализация кода в ветке `VLM-upgrade`
 - Code review пройден (`/gsd-code-review`)
 - Merge `VLM-upgrade` → `main` выполнен
@@ -700,9 +721,11 @@ Plans:
 **Goal:** Добавить idle-scheduler — фоновый процесс, который при наличии посетителей и тишине дольше N секунд вызывает LLM с промптом-затравкой и воспроизводит ответ без wake word.
 
 **Requires:**
+
 - Phase 18 (Memory Consolidation) завершена — контекст истории сессий
 
 **Delivers:**
+
 - idle-scheduler в Orchestrator: при тишине > N секунд и наличии посетителей (VLM engagement) вызывать LLM
 - Промпт-затравка для спонтанных реплик (без wake word) — отдельный системный промпт в Config или Tuning.json
 - Rate limiter (не чаще M минут) + соблюдение half_duplex_mute инварианта (idle не перекрывает активный диалог)
@@ -722,9 +745,11 @@ Plans:
 **Goal:** Пересобрать операторский веб-интерфейс (`:8080`) с перегруппировкой параметров по доменным блокам (ESP / Agent / Identity), визуализацией уровня микрофона, настройкой silence timeout и управлением громкостью.
 
 **Requires:**
+
 - Phase 15B (Config-First Refactor) завершена — параметры должны быть в Config.json до UI-привязки
 
 **Delivers:**
+
 - Перегруппировка операторского UI по доменным блокам: ESP (камера/mic/PCA9685/PCM5102A), Agent (ASR/VLM/LLM/TTS), Adam Identity
 - Real-time визуализация уровня микрофона (mic эквалайзер / VU-meter)
 - Настройка silence timeout (command_endpointing_ms, reply_window_sec) через UI без рестарта
@@ -744,10 +769,12 @@ Plans:
 **Goal:** Провести структурный рефакторинг кодовой базы: пересмотр директорий `System/`, `Subsystem/`, `Engineering/`, единый реестр параметров и глубокий Config-аудит поверх Phase 15B.
 
 **Requires:**
+
 - Phase 15B (Config-First Refactor) завершена и смёржена
 - Feature-freeze других веток на время рефакторинга
 
 **Delivers:**
+
 - Единый реестр всех параметров системы (глубокий аудит поверх Phase 15B — второй слой параметров)
 - Пересмотр директорной структуры `System/`, `Subsystem/`, `Engineering/` — логическая группировка по доменам
 - Все тесты зелёные после рефакторинга
@@ -766,6 +793,7 @@ Plans:
 **Goal:** Реализовать автоматический сбор и расчёт метрик качества работы агента, заявленных в дипломе (3.4): RAS, RDI, NVR, RI, CRS, LMRR, SCS, SIAR. Закрывает диплом-задачи №3 (формализация критериев устойчивости роли) и №6 (демонстрация в реальном времени + оценка).
 
 **Requires:**
+
 - Стабилизация активных веток: `Memory-upgrade`, `Identity-tuning`, `VLM-upgrade`, `dynamic-aiim` → merged in main
 - Phase 16 (AIIM Dynamic) завершена — без рефлексивного цикла часть метрик (RDI, CRS) не имеет источника данных
 
@@ -801,10 +829,12 @@ Plans:
 **Goal:** Перевести AIIM из чисто текстовой семантики (`Identity.md` в системном промпте) в структурированную runtime-конфигурацию: 12 аспектов сознания с уровнями, состояниями и Δ-приоритетами должны жить как валидируемая структура в `Tuning.json`, читаться при каждом цикле и модулироваться правиловым или модельным контуром. Закрывает гэп между текстом ch3 §3.2.3 диплома и фактической реализацией.
 
 **Requires:**
+
 - Phase 15A (Diploma Convergence Pass) завершена ✓ — текст ch3 §3.2.3 финализирован
 - Независима от Phase 16 (Phase 16 — рефлексивный уровень, Phase 27 — конфигурационный + динамический уровни)
 
 **Delivers:**
+
 - Pydantic-модель `AIIMTuning` в `tuning.py`: 12 аспектов (co, se, sp, im, pe, at, be, wi, lo, ho, em, me), каждый — уровень (B/P/S/T/I), состояние (Ac-Or / Ac-Ch / Pa-Or / Pa-Ch), Δ-вес [0..1]
 - Парсер `Identity.md` → `Tuning.json::aiim` при первом запуске (если секция `aiim` ещё не создана)
 - Модуль `System/adam/aiim.py` с правиловым контуром Δ-сдвигов: эмпатичный ввод → +Δ для `lo` и `em`, ироничный → +Δ для `im`, попытка вытащить из персонажа → +Δ для `ho`
@@ -830,11 +860,13 @@ Plans:
 **Goal:** Реализовать второй слой проактивного контура из диплома §3.3.4 — событийную дельта-реакцию на изменения сцены. В отличие от Phase 24 (idle-scheduler — реакция на длительный простой) и существующего `scene_director` (периодическая фоновая моторика), Phase 28 запускает спонтанные реакции по событийному триггеру и с вероятностной модуляцией.
 
 **Requires:**
+
 - Phase 25 (VLM Upgrade) или текущий VILA 1.5-3b с включённым scene worker и кэшем сцен
 - Phase 27 (AIIM Core Runtime) — желательно, для интеграции Δ-сдвигов аспектов на дельта-событие
 - Независима от Phase 24 — слои дополняют друг друга
 
 **Delivers:**
+
 - Модуль `System/adam/scene_delta.py` — сравнение текущего описания VLM с предыдущим из `scene_buffer`. Возвращает категоризированное событие: `appeared` / `disappeared` / `count_change` / `engagement_change` (none → watching / watching → approaching / approaching → interacting), либо `no_delta`
 - Парсер двухчастного формата VLM-промпта (Scene + Engagement) для извлечения переходов уровня вовлечённости
 - Вероятностный модулятор `proactive.spontaneous_speech_prob` в `Tuning.json` (база 0.17 на значимое дельта-событие) с механизмом затухания: при повторных однотипных триггерах вероятность снижается коэффициентом `proactive.repeat_decay` (база 0.5)
@@ -881,9 +913,17 @@ Plans:
 **Plans:** 4 plans (3 waves)
 
 Plans:
+**Wave 1**
+
 - [ ] 29-01-PLAN.md — ESP firmware animation engine (FreeRTOS task) + POST /api/flora/state [FLORA-01, FLORA-02]
 - [ ] 29-02-PLAN.md — Config-First flora section + Config.schema + Wave 0 tests/test_flora.py [FLORA-05]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 29-03-PLAN.md — Jetson FloraController event layer + vibro policy + lifespan wiring [FLORA-03, FLORA-06]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 29-04-PLAN.md — RMS speech sync streamer (WAV→envelope→light, barge-in) [FLORA-04]
 
 ---
@@ -923,6 +963,7 @@ Plans:
 **Суть задачи:** добавить idle-scheduler — фоновый процесс, который при выполнении условий (посетители в пространстве, тишина дольше N секунд, не во время TTS) вызывает LLM с коротким промптом-затравкой и воспроизводит ответ без wake word.
 
 **Ключевые вопросы до планирования:**
+
 - Пороговое условие: через сколько секунд тишины инициировать? (зависит от выставочного контекста)
 - Контроль частоты: не чаще 1 раза в M минут, чтобы не «засорять» пространство
 - Промпт-затравка: отдельный системный промпт или модификация основного?
@@ -958,6 +999,7 @@ Plans:
 **Суть задачи:** после каждой сессии консолидатор (или отдельный модуль) анализирует паттерны взаимодействия и корректирует параметры Tuning.json — например, снижает `drive` при частых отказах от диалога, повышает `verbosity` при длинных сессиях.
 
 **Ключевые вопросы до планирования:**
+
 - Какие параметры Tuning.json поддаются автокоррекции (не все)?
 - Как предотвратить дрейф в нежелательную сторону (ограничения на magnitude изменений)?
 - Частота обновления: после каждой сессии или ежедневно через consolidator?
