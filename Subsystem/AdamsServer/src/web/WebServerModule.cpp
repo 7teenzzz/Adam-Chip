@@ -308,6 +308,11 @@ void appendCameraJson(String &json) {
     json += "}";
   }
   json += "]";
+  const CameraModel detectedModel = getDetectedCameraModel();
+  json += ",\"camera_model\":\"";
+  json += (detectedModel == CameraModel::OV7670) ? "OV7670" :
+          (detectedModel == CameraModel::OV5640) ? "OV5640" : "unknown";
+  json += "\"";
   json += ",\"capabilities\":{";
   json += "\"framesize\":{\"supported\":true,\"min\":";
   json += String(FRAMESIZE_QQVGA);

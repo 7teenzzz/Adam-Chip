@@ -174,7 +174,11 @@ camera_config_t buildCameraConfig(const CameraControlState &state, CameraModel m
     config.xclk_freq_hz = kXclkFrequencyHz_OV5640;
     config.pixel_format = PIXFORMAT_JPEG;    // OV5640 HW JPEG path
   }
-  config.frame_size = static_cast<framesize_t>(state.framesize);
+  // OV7670 physical maximum is VGA (640×480) — clamp any larger requested framesize.
+  const int effectiveFramesize = (model == CameraModel::OV7670 && state.framesize > static_cast<int>(FRAMESIZE_VGA))
+    ? static_cast<int>(FRAMESIZE_VGA)
+    : state.framesize;
+  config.frame_size = static_cast<framesize_t>(effectiveFramesize);
   config.jpeg_quality = constrain(state.quality, 4, 63);
   config.fb_count = 1;
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
