@@ -170,10 +170,17 @@ class MediaHealth:
     def _alsa_device_available(device_list: str, device: str) -> bool:
         if device.startswith("/"):
             return os.path.exists(device)
-        if device.startswith("hw:"):
-            parts = device[3:].split(",", 1)
+        prefix = None
+        if device.startswith("plughw:"):
+            prefix = "plughw:"
+        elif device.startswith("hw:"):
+            prefix = "hw:"
+        if prefix:
+            parts = device[len(prefix):].split(",", 1)
             if len(parts) != 2:
                 return False
             card, dev = parts[0].strip(), parts[1].strip()
-            return f"card {card}:" in device_list and f"device {dev}:" in device_list
+            # card may be numeric index or name (e.g. "WebCamera")
+            card_match = f"card {card}:" if card.isdigit() else card
+            return card_match in device_list and f"device {dev}:" in device_list
         return device in device_list

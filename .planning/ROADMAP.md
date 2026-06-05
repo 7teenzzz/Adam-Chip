@@ -762,6 +762,53 @@ Plans:
 
 ---
 
+## Phase 21A: Chat EQ Real Spectrum — реальный FFT в виджете эквалайзера
+
+**Branch:** `V-S09.1-Audio_out` (existing)
+
+**Goal:** Заменить «иллюзию спектра» в виджете эквалайзера на странице чата (`wakeMeter.js`) на реальный частотный спектр FFT, посчитанный на сервере поверх того же аудио-потока, который слышат OWW/ASR. Сохранить отображение OWW score (голубая линия) и threshold (оранжевый пунктир) без изменений.
+
+**Requires:**
+
+- Phase 7 (ESP32 Mic Pipeline Refactor — MicReader keep-alive) ✓ — источник синхронизированного аудио-стрима
+- Не требует Phase 15B (Config-First Refactor): новые ключи добавляются сразу в правильный Config-First формат
+
+**Delivers:**
+
+- Серверный FFT на Jetson поверх того же буфера аудио-кадров, которые уже идут в RMS `audio_level`. Источник — `MicReader` или отдельный audio-worker; решение в фазе discuss/plan
+- Новое SSE-событие `audio_spectrum` (или расширение `audio_level` полем `bands[]`) с N log-частотных band-энергий, нормализованных в [0..1]
+- Cadence публикации спектра — отдельный параметр Config.json (целевая частота отрисовки на UI ≈ 20–30 Hz; backend cadence не выше, чтобы не насыщать SSE)
+- Новые ключи в `System/Config.json` + `System/Config.schema.json`: число bands, cadence публикации (Hz), частотный диапазон, шкала (lin/log), нормализация
+- Рефакторинг `System/WebUI/static/js/widgets/wakeMeter.js`:
+  - удалена фиксированная `EQ_SHAPE`-форма и хардкод `audioLevel * 4.0` / `sin(Date.now())`-wobble / decay `0.87`
+  - бары рендерятся напрямую из последнего пришедшего `bands[]` — **без peak-hold, без decay** (решение пользователя: «максимально честно»)
+  - градиент цвета бара по его собственному уровню: зелёный → жёлтый → красный (peak indicator + visual clipping hint)
+  - OWW score (циан) и threshold (оранжевый пунктир) — без изменений в логике
+  - починена потенциальная SSE-утечка: `dispose()` гарантированно отписывает EventSource при перерендере хост-панели
+- Подсказка под виджетом в `chat.js` обновлена: текст объясняет, что зелёные бары — реальный спектр микрофона
+- Обновлён draggable-вариант в `settings.js`: drag-to-tune threshold продолжает работать как раньше
+- Smoke-тест: на чат-панели бары следуют за голосом, при громком пике становятся красными, при тишине плоско; SSE-соединение одно на mount/unmount цикл
+
+**Requirements:** UI-EQ-01 (FFT backend), UI-EQ-02 (новое SSE-событие), UI-EQ-03 (рендер без сглаживания), UI-EQ-04 (градиент цвета по уровню), UI-EQ-05 (fix SSE leak), UI-EQ-06 (Config-First параметры FFT)
+
+**Mode:** standard | **Priority:** P2 | **Effort:** M (3–5 дней) | **Exhibition:** M
+
+**Plans:** 8/8 plans complete
+
+Plans:
+- [x] 21A-01-PLAN.md — Wave 0 test stubs: tests/test_mic_reader_spectrum.py + conftest fixtures (UI-EQ-01/02/06)
+- [x] 21A-02-PLAN.md — Config keys + schema: 8 spectrum_* keys in media.audio (UI-EQ-06)
+- [x] 21A-03-PLAN.md — MicReader FFT pipeline + 25 Hz cadence + hot-reload (UI-EQ-01/02/06)
+- [x] 21A-04-PLAN.md — events.jsonl writing-side sampler (UI-EQ-02; mitigates 417 MB growth)
+- [x] 21A-05-PLAN.md — wakeMeter.js refactor: bands[24] render, color gradient, idempotent dispose (UI-EQ-03/04/05)
+- [x] 21A-06-PLAN.md — chat.js hint + settings.js draggable audit (UI-EQ-03)
+- [x] 21A-07-PLAN.md — Manual smoke test against live Orchestrator → SMOKE-RESULTS.md (verdict: PASS)
+- [x] 21A-08-PLAN.md — Hotfix: MicReader auto-restart watchdog on ESP `:81` deadlock (UI-EQ-RESILIENCE)
+
+**Связь с Phase 21:** Phase 21A — фокусный слайс Phase 21 (UI Rebuild). Закрывает один из её deliverables («Real-time визуализация уровня микрофона»). При запуске Phase 21 этот пункт уже будет закрыт; Phase 21 продолжит с остальными deliverables (перегруппировка UI, silence timeout, volume control).
+
+---
+
 ## Phase 23: Structural Refactor
 
 **Branch:** `refactor` (new — создаётся при старте фазы, требует feature-freeze)
@@ -989,6 +1036,16 @@ Plans:
 - Соблюдение `half_duplex_mute` и rate-limit чтобы не превратиться в шум
 
 **Связь:** дополняет Phase 19 (idle-scheduler) и Phase 23 (дельта-реакция на сцену) — три независимых слоя проактивности. Тематический триггер — наиболее «персонажный» слой: Адам реагирует не на тишину и не на движение, а на смысл разговора вокруг него.
+
+### Phase 29: ESP Audio Output — TTS DSP chain (HPF, compressor, limiter, soxr resample) for loudness and quality on ESP MAX98357A speakers
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 28
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 29 to break down)
 
 ---
 

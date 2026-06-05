@@ -1,10 +1,15 @@
 [Unit]
-# NOTE: Production setup runs WhisperX in Docker via compose.yaml
-# (the canonical path — see `docker compose up -d adam-asr-whisperx`).
-# This native systemd unit is a fallback; it requires the i17jet user to be
-# in `video` and `render` groups so Tegra nvmap permits CUDA initialization
-# (without those groups, faster-whisper crashes with
-# `NvRmMemInitNvmap failed: Operation not permitted`).
+# DEPRECATED — do NOT enable this unit on production Jetson.
+# The pip ctranslate2 wheel for aarch64 is CPU-only; enabling this unit
+# occupies port 8095 and prevents the Docker container (which has the
+# CUDA-compiled ctranslate2 from dustynv/faster-whisper) from binding.
+#
+# Canonical path: docker compose up -d adam-asr-whisperx
+# adam_install_systemd.sh does NOT install or enable this unit.
+#
+# This file is kept as a reference / recovery fallback for environments
+# where Docker is unavailable. To use it: manually copy to /etc/systemd/system/
+# and make sure no Docker ASR container is running on port 8095.
 Description=Adam Chip WhisperX ASR Service (native fallback; prefer Docker)
 After=network.target
 Wants=network.target
@@ -32,9 +37,11 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=adam-asr-whisperx
 
-# GPU access
-DeviceAllow=/dev/nvidia0 rw
-DeviceAllow=/dev/nvidiactl rw
+# GPU access — Jetson Tegra requires nvmap + nvhost-* in addition to nvidia0/nvidiactl.
+# DeviceAllow with any non-empty list blocks ALL unlisted devices (systemd cgroup policy),
+# so we drop the restrictive list and rely on SupplementaryGroups=render video above,
+# which already grants the necessary group-level access to /dev/nvmap and /dev/nvhost-*.
+# DevicePolicy defaults to "auto": all devices accessible when DeviceAllow is empty.
 
 [Install]
 WantedBy=multi-user.target

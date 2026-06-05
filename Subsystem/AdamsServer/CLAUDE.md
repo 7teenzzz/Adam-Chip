@@ -19,8 +19,9 @@ PlatformIO (pio), не Python/pip.
 
 - **Static IP:** 192.168.0.171 (W5500 Ethernet, не Wi-Fi — не менять без прошивки)
 - **Port 80:** HTTP API (`/api/*`) — основной управляющий интерфейс
-- **Port 81:** отдельный HTTP-сервер — speaker (`/speaker`) + MJPEG camera (`/stream`)
-- Не менять разделение 80/81 без синхронизации с `System/Config.json` (`mcu.base_url`, `mcu.speaker_url`)
+- **Port 81:** stream-сервер — MJPEG camera (`/stream`) + mic audio (`/audio`, `/api/audio/clip`)
+- **Port 82:** выделенный speaker-сервер — только `/speaker`. Своя FreeRTOS-задача, чтобы непрерывный mic-стрим (монополизирует задачу `:81`) не блокировал воспроизведение. `stream/restart` его не трогает.
+- Не менять разделение 80/81/82 без синхронизации с `System/Config.json` (`mcu.base_url`, `mcu.speaker_url`) и `AdamsConfig.h` (`kStreamPort`, `kSpeakerServerPort`)
 
 ## Не делать
 

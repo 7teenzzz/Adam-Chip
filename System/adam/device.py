@@ -33,7 +33,7 @@ class DeviceResult:
 class MCUClient:
     def __init__(self, config: dict[str, Any]) -> None:
         self.base_url = str(config.get("base_url", "http://192.168.0.171")).rstrip("/")
-        self.speaker_url = str(config.get("speaker_url", "http://192.168.0.171:81/speaker")).strip()
+        self.speaker_url = str(config.get("speaker_url", "http://192.168.0.171:82/speaker")).strip()
         self.timeout = float(config.get("timeout_sec", 3))
         self.idle_scene = str(config.get("idle_scene", "boot_idle"))
         self.allowed_scenes = set(config.get("allowed_scenes", ["boot_idle"]))

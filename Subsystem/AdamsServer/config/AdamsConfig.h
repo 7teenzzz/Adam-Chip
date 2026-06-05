@@ -63,9 +63,12 @@ inline constexpr uint8_t kApGateway[4] = {192, 168, 4, 1};
 inline constexpr uint8_t kApSubnet[4] = {255, 255, 255, 0};
 
 inline constexpr uint16_t kHttpPort = 80;
-// Audio stream (/audio), WAV clip (/api/audio/clip), and speaker sink (/speaker)
-// are all served on kStreamPort. kSpeakerPort / kAudioPort no longer exist.
+// Audio stream (/audio) + WAV clip (/api/audio/clip) + MJPEG camera (/stream)
+// are served on kStreamPort. The speaker sink (/speaker) moved to its OWN
+// server kSpeakerServerPort so the mic stream — which monopolizes the single
+// :81 httpd task with its continuous loop — can never block speaker playback.
 inline constexpr uint16_t kStreamPort = 81;
+inline constexpr uint16_t kSpeakerServerPort = 82;
 inline constexpr uint32_t kSerialBaudRate = 115200;
 // Keep UART0 diagnostics disabled by default because this pin map uses GPIO43/44 for I2C.
 inline constexpr bool kEnableUart0Diagnostics = false;

@@ -28,6 +28,7 @@ namespace {
 
 httpd_handle_t sControlServer = nullptr;
 httpd_handle_t sStreamServer = nullptr;
+httpd_handle_t sSpeakerServer = nullptr;
 
 constexpr char kStreamContentType[] = "multipart/x-mixed-replace;boundary=123456789000000000000987654321";
 constexpr char kStreamBoundaryChunk[] = "\r\n--123456789000000000000987654321\r\n";
@@ -309,6 +310,19 @@ void appendCameraJson(String &json) {
     json += "}";
   }
   json += "]";
+  const CameraModel detectedModel = getDetectedCameraModel();
+  json += ",\"camera_model\":\"";
+  json += (detectedModel == CameraModel::OV7670) ? "OV7670" :
+          (detectedModel == CameraModel::OV5640) ? "OV5640" : "unknown";
+  json += "\"";
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  const uint32_t lastCamEspErr = gRuntimeState.lastCameraInitEspErr;
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+  char camErrBuf[16];
+  snprintf(camErrBuf, sizeof(camErrBuf), "0x%x", lastCamEspErr);
+  json += ",\"last_cam_esp_err\":\"";
+  json += camErrBuf;
+  json += "\"";
   json += ",\"capabilities\":{";
   json += "\"framesize\":{\"supported\":true,\"min\":";
   json += String(FRAMESIZE_QQVGA);
@@ -1620,7 +1634,7 @@ const char kRootV2Page[] PROGMEM =
   const groups=[
     {name:'UI',items:[['/dashboard','/dashboard'],['/live','/live'],['/ota','/ota']]},
     {name:'Video',items:[['/capture','/capture'],[':81/stream',()=>`http://${location.hostname}:81/stream`],['/api/camera','/api/camera'],['/api/camera/preset/apply','/api/camera/preset/apply']]},
-    {name:'Audio',items:[[':81/audio',()=>`http://${location.hostname}:81/audio`],[':81/speaker',()=>`http://${location.hostname}:81/speaker`],['/api/audio','/api/audio'],['/api/audio/clip?ms=2000','/api/audio/clip?ms=2000']]},
+    {name:'Audio',items:[[':81/audio',()=>`http://${location.hostname}:81/audio`],[':82/speaker',()=>`http://${location.hostname}:82/speaker`],['/api/audio','/api/audio'],['/api/audio/clip?ms=2000','/api/audio/clip?ms=2000']]},
     {name:'System',items:[['/api/status','/api/status'],['/api/dashboard','/api/dashboard'],['/api/sensors','/api/sensors'],['/api/pca9685','/api/pca9685'],['/api/ota','/api/ota'],['/ws','/ws']]}
   ];
   const state={health:{}};
@@ -1630,7 +1644,7 @@ const char kRootV2Page[] PROGMEM =
   async function check(label,url){
     if(label.includes(':81/stream')) return true;
     if(label.includes(':81/audio')) return true;
-    if(label.includes(':81/speaker')) return true;
+    if(label.includes(':82/speaker')) return true;
     if(label==='/ws') return true;
     const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(),900);
     try{ const r=await fetch(url,{cache:'no-store',signal:ctl.signal}); clearTimeout(t); return r.ok; }catch(_e){ clearTimeout(t); return false; }
@@ -2054,6 +2068,24 @@ esp_err_t audioClipHandler(httpd_req_t *req) {
 
   free(clipBuffer);
   return result;
+}
+
+esp_err_t cameraScanHandler(httpd_req_t *req) {
+  const CameraI2cScanResult scan = scanCameraI2cBus();
+  String json;
+  json.reserve(256);
+  json = "{\"devices_found\":";
+  json += String(scan.count);
+  json += ",\"devices\":[";
+  for (uint8_t i = 0; i < scan.count; i++) {
+    if (i > 0) json += ",";
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"addr\":\"0x%02x\",\"pid_0x0A\":\"0x%02x\",\"ver_0x0B\":\"0x%02x\"}",
+             scan.addrs[i], scan.pidAtAddr[i], scan.verAtAddr[i]);
+    json += buf;
+  }
+  json += "]}";
+  return sendJson(req, json);
 }
 
 esp_err_t cameraStatusHandler(httpd_req_t *req) {
@@ -2584,13 +2616,29 @@ esp_err_t speakerHandler(httpd_req_t *req) {
       // speakerPlaybackTask can drain it rather than silently dropping data.
       // Ring drains at kSpeakerSampleRate × 2 B/s ≈ 88 KB/s; a 4 ms yield
       // frees ~353 bytes, so a 1024 B chunk needs at most ~3 retries.
+      //
+      // Fix A (zombie/wedge): bound the wait. If the ring stops draining for
+      // kSpeakerDrainStallTimeoutMs (I2S playback task stalled / TX disabled
+      // after boot-sound), abort instead of spinning forever — an unbounded
+      // loop here holds the speaker slot AND blocks recv, wedging /speaker.
+      static constexpr int kSpeakerDrainStallTimeoutMs = 2000;
       size_t offset = 0;
+      int stallMs = 0;
       while (offset < payloadLen) {
-        offset += writeSpeakerData(payload + offset, payloadLen - offset);
+        const size_t written = writeSpeakerData(payload + offset, payloadLen - offset);
+        offset += written;
         if (offset < payloadLen) {
+          stallMs = (written == 0) ? (stallMs + 4) : 0;
+          if (stallMs >= kSpeakerDrainStallTimeoutMs) {
+            result = ESP_FAIL;
+            break;
+          }
           vTaskDelay(pdMS_TO_TICKS(4));
         }
       }
+    }
+    if (result != ESP_OK) {
+      break;  // drain stalled — exit the recv loop and clean up the slot
     }
   }
 
@@ -2605,10 +2653,6 @@ esp_err_t speakerHandler(httpd_req_t *req) {
 
 esp_err_t audioMovedHandler(httpd_req_t *req) {
   return sendMovedEndpoint(req, kStreamPort, "/audio");
-}
-
-esp_err_t speakerMovedHandler(httpd_req_t *req) {
-  return sendMovedEndpoint(req, kStreamPort, "/speaker");
 }
 
 esp_err_t pcaChannelHandler(httpd_req_t *req) {
@@ -2929,10 +2973,10 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_uri_t cameraPresetSaveUri = makeHttpUri("/api/camera/preset/save", HTTP_POST, cameraPresetSaveHandler);
   httpd_uri_t cameraPresetDeleteUri = makeHttpUri("/api/camera/preset/delete", HTTP_POST, cameraPresetDeleteHandler);
   httpd_uri_t cameraPresetResetDefaultsUri = makeHttpUri("/api/camera/preset/resetdefaults", HTTP_POST, cameraPresetResetDefaultsHandler);
+  httpd_uri_t cameraScanUri = makeHttpUri("/api/camera/scan", HTTP_GET, cameraScanHandler);
   httpd_uri_t captureUri = makeHttpUri("/capture", HTTP_GET, captureHandler);
   httpd_uri_t wsUri = makeWebSocketUri("/ws", wsHandler);
   httpd_uri_t audioMovedUri = makeHttpUri("/audio", HTTP_GET, audioMovedHandler);
-  httpd_uri_t speakerMovedUri = makeHttpUri("/speaker", HTTP_POST, speakerMovedHandler);
 
   httpd_register_uri_handler(server, &indexUri);
   httpd_register_uri_handler(server, &dashboardPageUri);
@@ -2972,10 +3016,10 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_register_uri_handler(server, &cameraPresetSaveUri);
   httpd_register_uri_handler(server, &cameraPresetDeleteUri);
   httpd_register_uri_handler(server, &cameraPresetResetDefaultsUri);
+  httpd_register_uri_handler(server, &cameraScanUri);
   httpd_register_uri_handler(server, &captureUri);
   httpd_register_uri_handler(server, &wsUri);
   httpd_register_uri_handler(server, &audioMovedUri);
-  httpd_register_uri_handler(server, &speakerMovedUri);
 }
 
 void registerStreamHandlers(httpd_handle_t server) {
@@ -3011,6 +3055,17 @@ esp_err_t streamServerOpenFn(httpd_handle_t /*hd*/, int sockfd) {
   setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,      sizeof(idle));
   setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl,     sizeof(intvl));
   setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,       sizeof(cnt));
+
+  // W5500 socket-headroom fix (item 2): close with RST instead of FIN so the
+  // socket is freed IMMEDIATELY and never sits in TIME_WAIT. The W5500 has
+  // only 8 hardware sockets total; TIME_WAIT accumulation from connection
+  // churn (per-clip /speaker POSTs, /api/* polling, camera reconnects)
+  // exhausts the pool and hangs BOTH servers while the MCU keeps running.
+  // RST-close removes that accumulation. Used by control + stream servers.
+  struct linger so_linger;
+  so_linger.l_onoff  = 1;
+  so_linger.l_linger = 0;
+  setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
   return ESP_OK;
 }
 
@@ -3049,7 +3104,7 @@ esp_err_t systemStreamRestartHandler(httpd_req_t *req) {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port   = kHttpPort + 1 + 1;  // avoid collision with control ctrl_port
   streamConfig.max_uri_handlers  = 6;
-  streamConfig.max_open_sockets  = 4;  // T17 GSD: revert from 6 — peek-probe handles zombies, +16 KB stack risked OOM on Wi-Fi boot
+  streamConfig.max_open_sockets  = 3;  // speaker moved to its own server; mic + camera + transient fit in 3
   streamConfig.lru_purge_enable  = true;
   streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size        = 8192;
@@ -3059,7 +3114,9 @@ esp_err_t systemStreamRestartHandler(httpd_req_t *req) {
   if (ok) {
     registerStreamHandlers(sStreamServer);
     registerAudioHandlers(sStreamServer);
-    registerSpeakerHandlers(sStreamServer);
+    // NOTE: /speaker is NOT registered here — it lives on its own server
+    // (sSpeakerServer / kSpeakerServerPort). A mic-watchdog stream/restart
+    // therefore no longer disrupts speaker playback.
   }
   char buf[64];
   snprintf(buf, sizeof(buf), "{\"ok\":%s,\"stream_port\":%u}", ok ? "true" : "false", kStreamPort);
@@ -3094,7 +3151,7 @@ void registerSystemHandlers(httpd_handle_t server) {
 }  // namespace
 
 bool startWebServer() {
-  if (sControlServer != nullptr && sStreamServer != nullptr) {
+  if (sControlServer != nullptr && sStreamServer != nullptr && sSpeakerServer != nullptr) {
     return true;
   }
 
@@ -3106,6 +3163,10 @@ bool startWebServer() {
     httpd_stop(sStreamServer);
     sStreamServer = nullptr;
   }
+  if (sSpeakerServer != nullptr) {
+    httpd_stop(sSpeakerServer);
+    sSpeakerServer = nullptr;
+  }
 
   portENTER_CRITICAL(&gRuntimeStateMux);
   gRuntimeState.webReady = false;
@@ -3114,9 +3175,15 @@ bool startWebServer() {
   httpd_config_t controlConfig = HTTPD_DEFAULT_CONFIG();
   controlConfig.server_port = kHttpPort;
   controlConfig.max_uri_handlers = 48;
-  controlConfig.max_open_sockets = 4;
+  // Item 3 (W5500 headroom): 3 (was 4). With RST-close (open_fn) the control
+  // server no longer leaks sockets to TIME_WAIT, so 3 covers WS telemetry +
+  // transient /api/* calls, freeing 1 of the 8 W5500 sockets as global slack.
+  controlConfig.max_open_sockets = 3;
   controlConfig.lru_purge_enable = true;
   controlConfig.stack_size = 8192;
+  // Item 2: same keepalive + RST-close open_fn as the stream server, so :80
+  // API-poll churn does not accumulate TIME_WAIT and exhaust the socket pool.
+  controlConfig.open_fn = streamServerOpenFn;
 
   if (httpd_start(&sControlServer, &controlConfig) != ESP_OK) {
     bootLog("web", "failed to start control HTTP server");
@@ -3129,7 +3196,7 @@ bool startWebServer() {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port = controlConfig.ctrl_port + 1;
   streamConfig.max_uri_handlers = 6;
-  streamConfig.max_open_sockets = 4;  // T17 GSD: revert from 6 — peek-probe handles zombies, +16 KB stack risked OOM on Wi-Fi boot
+  streamConfig.max_open_sockets = 3;  // mic stream + camera + transient; speaker moved to its own server. Leaves room for the dedicated speaker server within the lwIP socket pool.
   streamConfig.lru_purge_enable = true;
   streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size = 8192;
@@ -3143,12 +3210,35 @@ bool startWebServer() {
   }
   registerStreamHandlers(sStreamServer);
   registerAudioHandlers(sStreamServer);
-  registerSpeakerHandlers(sStreamServer);
+
+  // Durable fix: /speaker lives on its OWN httpd server (own FreeRTOS task) so
+  // it is NEVER blocked by the mic stream handler. ESP-IDF httpd runs one task
+  // per server and a streaming handler (the continuous mic /audio loop)
+  // monopolises that task — proven: GET :81 times out while mic streams, GET
+  // :80 is instant. With the speaker on its own task, playback is independent
+  // of the mic, and a stream/restart (mic watchdog) no longer kills it.
+  httpd_config_t speakerConfig = HTTPD_DEFAULT_CONFIG();
+  speakerConfig.server_port      = kSpeakerServerPort;
+  speakerConfig.ctrl_port        = controlConfig.ctrl_port + 2;  // unique internal ctrl socket
+  speakerConfig.max_uri_handlers = 2;
+  speakerConfig.max_open_sockets = 2;
+  speakerConfig.lru_purge_enable = true;
+  speakerConfig.send_wait_timeout = 5;
+  speakerConfig.stack_size       = 8192;
+  speakerConfig.open_fn          = streamServerOpenFn;  // keepalive + RST-close
+
+  if (httpd_start(&sSpeakerServer, &speakerConfig) != ESP_OK) {
+    bootLog("web", "failed to start speaker HTTP server");
+    httpd_stop(sStreamServer);  sStreamServer = nullptr;
+    httpd_stop(sControlServer); sControlServer = nullptr;
+    return false;
+  }
+  registerSpeakerHandlers(sSpeakerServer);
 
   portENTER_CRITICAL(&gRuntimeStateMux);
   gRuntimeState.webReady = true;
   portEXIT_CRITICAL(&gRuntimeStateMux);
-  bootLogf("web", "ready on ports control=%u streams=%u (video+audio+speaker)", kHttpPort, kStreamPort);
+  bootLogf("web", "ready on ports control=%u stream=%u speaker=%u", kHttpPort, kStreamPort, kSpeakerServerPort);
 
   return true;
 }

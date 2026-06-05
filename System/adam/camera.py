@@ -8,8 +8,11 @@ import urllib.error
 import urllib.request
 from collections import deque
 from typing import Any, Callable
+from urllib.request import build_opener, ProxyHandler
 
 _MJPEG_JPEG_SOI = b"\xff\xd8"  # JPEG start marker — used to validate /capture response
+# Bypass v2ray system proxy for all ESP32 requests (same pattern as device.py / inference.py).
+_NO_PROXY_OPENER = build_opener(ProxyHandler({}))
 
 
 class CameraReader:
@@ -181,7 +184,7 @@ class CameraReader:
 
     def _esp_probe(self) -> bool:
         try:
-            with urllib.request.urlopen(self.esp_snapshot_url or self.esp_mjpeg_url, timeout=2):
+            with _NO_PROXY_OPENER.open(self.esp_snapshot_url or self.esp_mjpeg_url, timeout=2):
                 return True
         except Exception:
             return False
@@ -193,7 +196,7 @@ class CameraReader:
         audio/speaker streams. The /capture endpoint returns plain image/jpeg.
         """
         req = urllib.request.Request(self.esp_snapshot_url)
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with _NO_PROXY_OPENER.open(req, timeout=3) as resp:
             data = resp.read()
         if not data or data[:2] != _MJPEG_JPEG_SOI:
             raise RuntimeError(f"ESP32 /capture: invalid JPEG ({len(data)} bytes)")

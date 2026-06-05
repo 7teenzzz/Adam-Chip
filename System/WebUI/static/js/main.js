@@ -256,6 +256,10 @@ function paintEspModules(uiData) {
 
   function micTitle() {
     if (!mod.mic) return "E-Mic: аппаратная ошибка";
+    if (vl.mic_source === "local") {
+      const dev = vl.audio_device || vl.capture_device || "local";
+      return `Mic: локальный (${dev})`;
+    }
     if (vl.esp_mic_fallback) return "E-Mic: ESP32 недоступен, используется pulse";
     if (vl.mic_stream_state === "connecting") return "E-Mic: ESP32 подключается…";
     if (vl.mic_stream_state === "failed") return "E-Mic: ESP32 stream упал, переподключаемся";
