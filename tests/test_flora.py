@@ -80,16 +80,93 @@ def test_flora_config() -> None:
     assert "attentive" in flora["vibro"]["silent_states"]
 
 
-@pytest.mark.skip(reason="filled in plan 03 (FLORA-03 event->state mapping)")
+class _FakeMCU:
+    """Records set_flora_state calls without touching the network."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def set_flora_state(self, state: str, params: dict | None = None):
+        self.calls.append((state, dict(params or {})))
+        return None
+
+
+def _make_controller(mcu) -> "object":
+    """Build a FloraController with the real flora config section + fake MCU.
+
+    event_log is None because these tests drive _handle directly (no subscribe
+    loop / no asyncio queue) — the event->state mapping is the unit under test.
+    """
+    from adam.flora import FloraController
+
+    flora_cfg = Settings.load().section("flora")
+    return FloraController(flora_cfg, mcu, event_log=None)
+
+
+def _states(mcu: "_FakeMCU") -> list[str]:
+    return [state for state, _params in mcu.calls]
+
+
 def test_event_mapping() -> None:
     """FLORA-03: voice pipeline event -> flora preset mapping."""
-    raise NotImplementedError
+    import asyncio
+
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+
+    async def drive() -> None:
+        await ctrl._handle({"type": "wake_word_detected"})
+        # First boot-exit is consumed by wake_bloom; mark booted so the plain
+        # listening/standby mapping is exercised here.
+        ctrl._booted = True
+        await ctrl._handle({"type": "voice_state_change", "payload": {"to": "listening"}})
+        await ctrl._handle({"type": "voice_state_change", "payload": {"to": "standby"}})
+        await ctrl._handle({"type": "llm_thinking_started"})
+
+    asyncio.run(drive())
+
+    assert _states(mcu) == ["accent", "attentive", "breathe", "think_pulse"]
 
 
-@pytest.mark.skip(reason="filled in plan 03 (FLORA-06 vibro silent in listening)")
+def test_wake_bloom_on_boot_exit() -> None:
+    """FLORA-03: first voice_state_change out of boot_warmup -> wake_bloom (once)."""
+    import asyncio
+
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+
+    async def drive() -> None:
+        # First transition OUT of boot_warmup = system coming alive.
+        await ctrl._handle(
+            {"type": "voice_state_change", "payload": {"from": "boot_warmup", "to": "standby"}}
+        )
+        # A LATER standby transition whose `from` is NOT boot_warmup -> breathe.
+        await ctrl._handle(
+            {"type": "voice_state_change", "payload": {"from": "reply", "to": "standby"}}
+        )
+
+    asyncio.run(drive())
+
+    assert _states(mcu) == ["wake_bloom", "breathe"]
+
+
 def test_vibro_silent_listening() -> None:
     """FLORA-06: vibro channels muted while in attentive (listening) state."""
-    raise NotImplementedError
+    import asyncio
+
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+
+    async def drive() -> None:
+        ctrl._booted = True
+        await ctrl._handle({"type": "voice_state_change", "payload": {"to": "listening"}})
+
+    asyncio.run(drive())
+
+    assert len(mcu.calls) == 1
+    state, params = mcu.calls[0]
+    assert state == "attentive"
+    assert params.get("vibro_enabled") is False
 
 
 @pytest.mark.skip(reason="filled in plan 04 (FLORA-04 WAV->RMS envelope)")
