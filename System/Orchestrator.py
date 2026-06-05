@@ -536,7 +536,7 @@ class VoiceLoopController:
         # default to a stable "n/a" / "local".
         mic_stream_state = "n/a"
         mic_active_source = "local"
-        if self.mic_reader is not None:
+        if self.mic_source == "esp32" and self.mic_reader is not None:
             mr_status = self.mic_reader.status()
             mic_stream_state = mr_status.get("stream_state", "n/a")
             mic_active_source = mr_status.get("active_source", "connecting")

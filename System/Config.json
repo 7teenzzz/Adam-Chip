@@ -34,7 +34,7 @@
       "camera_capture_interval_sec": 0.5
     },
     "audio": {
-      "input_device": "pulse",
+      "input_device": "plughw:WebCamera,0",
       "output_device": "default",
       "sample_rate": 16000,
       "channels": 1,
