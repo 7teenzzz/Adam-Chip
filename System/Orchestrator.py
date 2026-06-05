@@ -42,6 +42,7 @@ from adam.device import MCUClient
 from adam.echoes_gate import EchoGate
 from adam.episodic import SessionAccumulator, should_record
 from adam.events import EventLog, utc_now
+from adam.flora import FloraController
 from adam.camera import CameraReader, SceneDescriptionBuffer
 from adam.inference import WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
 from adam.mic_reader import MicReader
@@ -1311,6 +1312,10 @@ voice_loop.mic_reader = mic_reader
 # does not need an Orchestrator import (would be a cycle).
 mic_reader.set_stereo_reader_factory(_make_stereo_reader)
 scene_worker = SceneWorker(settings.section("media"), vlm, camera_reader, scene_buffer)
+# Technoflora reactive layer (Phase 29, FLORA-03/06): consumes pipeline events
+# and POSTs flora preset transitions to the ESP via the shared MCUClient
+# (_NO_PROXY_OPENER). Shares the same `mcu` + `event_log` singletons.
+flora_controller = FloraController(settings.section("flora"), mcu, event_log)
 
 
 class SessionWatcher:
@@ -1786,6 +1791,9 @@ async def lifespan(_: FastAPI):
     # warmup begins. MicReader is the single emitter of `audio_level` events
     # (D-10), so the legacy _audio_level_monitor was deleted in 07-03 Task 1.
     await mic_reader.start()
+    # Technoflora event consumer (Phase 29): subscribes to the event log and
+    # drives ESP flora presets. Pure consumer — no pipeline behavior depends on it.
+    await flora_controller.start()
     services_confirmed = False
     if runtime_state["mode"] == "exhibition" and settings.section("power").get("enforce_in_exhibition", True):
         status_payload = await _status_payload()
@@ -1805,6 +1813,7 @@ async def lifespan(_: FastAPI):
         # before MicReader cancels — otherwise the queue.get() consumer raises
         # CancelledError back at voice_loop after it's already stopped.
         await mic_reader.stop()
+        await flora_controller.stop()
         await esp_audio_health.stop()
         await session_watcher.stop()
         # финальный коммит, если сессия осталась открытой
