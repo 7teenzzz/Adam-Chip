@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import audioop
 import hashlib
+import math
+import struct
 import json
 import os
 import random
@@ -489,6 +491,17 @@ class VoiceLoopController:
         # (Orchestrator.py top-level). For mic_source != "esp32" (maintenance
         # mode without ESP), _run_local still feeds audio via arecord.
         self.mic_reader: Any | None = None
+        # Pre-VAD 1-pole high-pass filter — cuts low-frequency hum before RMS,
+        # WebRTC VAD, OWW, and ASR see the audio. Set vad_hpf_hz=0 to disable.
+        _hpf_fc = float(audio_config.get("vad_hpf_hz", 0.0))
+        if _hpf_fc > 0.0:
+            _T = 1.0 / self.sample_rate
+            _RC = 1.0 / (2.0 * math.pi * _hpf_fc)
+            self._vad_hpf_alpha: float = _RC / (_RC + _T)
+        else:
+            self._vad_hpf_alpha = 0.0
+        self._vad_hpf_x_prev: float = 0.0
+        self._vad_hpf_y_prev: float = 0.0
 
     def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
         """Apply audio config changes live. Returns list of fields that require loop restart."""
@@ -523,7 +536,36 @@ class VoiceLoopController:
         new_agg = int(audio_cfg.get("webrtc_vad_aggressiveness", self._webrtc_vad.aggressiveness))
         if new_agg != self._webrtc_vad.aggressiveness:
             self._webrtc_vad.aggressiveness = new_agg
+        new_fc = float(audio_cfg.get("vad_hpf_hz", -1.0))
+        if new_fc >= 0.0:
+            if new_fc > 0.0:
+                _T = 1.0 / self.sample_rate
+                _RC = 1.0 / (2.0 * math.pi * new_fc)
+                self._vad_hpf_alpha = _RC / (_RC + _T)
+            else:
+                self._vad_hpf_alpha = 0.0
+            self._vad_hpf_x_prev = 0.0
+            self._vad_hpf_y_prev = 0.0
         return needs_restart
+
+    def _apply_vad_hpf(self, chunk: bytes) -> bytes:
+        """1-pole HPF applied before RMS/VAD/OWW/ASR. Cuts sub-fc hum without audible effect on speech."""
+        α = self._vad_hpf_alpha
+        if α == 0.0 or not chunk:
+            return chunk
+        n = len(chunk) // 2
+        samples = struct.unpack(f'<{n}h', chunk[:n * 2])
+        out: list[int] = []
+        x_prev = self._vad_hpf_x_prev
+        y_prev = self._vad_hpf_y_prev
+        for x in samples:
+            y = α * (y_prev + x - x_prev)
+            x_prev = x
+            y_prev = y
+            out.append(max(-32768, min(32767, int(y))))
+        self._vad_hpf_x_prev = x_prev
+        self._vad_hpf_y_prev = y_prev
+        return struct.pack(f'<{n}h', *out)
 
     @property
     def device_in_use(self) -> bool:
@@ -782,6 +824,7 @@ class VoiceLoopController:
                     await asyncio.sleep(0.005)
                     continue
                 _empty_streak = 0
+                chunk = self._apply_vad_hpf(chunk)
 
                 _rms = audioop.rms(chunk, 2)
                 vad_voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
@@ -822,9 +865,9 @@ class VoiceLoopController:
                     self.vad_state = "boot_warmup"
                     continue
 
-                # ── STANDBY: only OWW scanning, no VAD accumulation ─────────────
+                # ── STANDBY: OWW scanning (wake_word_required) or VAD-direct ──────
                 if self._voice_state == "standby":
-                    if self._wake_engine is not None:
+                    if self._wake_engine is not None and self.wake_word_required:
                         # Guard window after reply→standby: skip OWW for _STANDBY_GUARD_SEC
                         # so any in-flight ALSA drain or room transients don't trigger a false wake.
                         if time.perf_counter() - self._standby_entry_time < self._STANDBY_GUARD_SEC:
@@ -855,6 +898,22 @@ class VoiceLoopController:
                                 speech_frames.clear()
                                 speech_ms = 0
                                 silence_ms = 0
+                    elif not self.wake_word_required and voiced:
+                        # No wake word required (maintenance / local-dev mode).
+                        # VAD-based entry: any voiced frame after the guard period opens listening.
+                        # Guard prevents re-trigger immediately after returning from reply/listening.
+                        if time.perf_counter() - self._standby_entry_time >= self._STANDBY_GUARD_SEC:
+                            self._utterance_id = str(uuid4())[:8]
+                            event_log.append("vad_voice_entry", {
+                                "rms": _rms,
+                                "utterance_id": self._utterance_id,
+                            })
+                            self._set_voice_state("listening", "vad_no_wake")
+                            self._webrtc_vad.reset_states()
+                            self._wake_detected_at = time.perf_counter()
+                            speech_frames.clear()
+                            speech_ms = 0
+                            silence_ms = 0
                     self.vad_state = "standby"
                     continue
 
@@ -3376,6 +3435,15 @@ def _rebuild_clients(section_path: str) -> list[str]:
         )
         voice_loop._post_tts_discard_window_ms = int(
             asr_cfg_new.get("post_tts_discard_window_ms", voice_loop._post_tts_discard_window_ms)
+        )
+        voice_loop._silence_rms_threshold = int(
+            asr_cfg_new.get("silence_rms_threshold", voice_loop._silence_rms_threshold)
+        )
+        voice_loop._silence_after_speech_ms = int(
+            asr_cfg_new.get("silence_after_speech_ms", voice_loop._silence_after_speech_ms)
+        )
+        voice_loop.wake_word_required = bool(
+            asr_cfg_new.get("wake_word_required", voice_loop.wake_word_required)
         )
         restarted.append("asr")
         # Phase 7: propagate ASR config into MicReader (open_timeout, probe,
