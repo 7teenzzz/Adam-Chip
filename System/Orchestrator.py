@@ -2884,6 +2884,12 @@ async def _stream_llm_and_speak(
                     if filler_playing[0]:
                         await filler_done_event.wait()
                     _mark_speaking_started()
+                    # Feed WAV to flora RMS streamer at playback dispatch (FLORA-04).
+                    # Best-effort: flora failure must never break TTS (Action-failure-≠-silence).
+                    try:
+                        flora_controller.feed_speech_wav(pending_wav)
+                    except Exception as _flora_exc:
+                        event_log.append("flora_feed_error", {"error": str(_flora_exc)})
                     result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                     tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
                 runtime_state["interrupt_tts"] = False
@@ -2909,6 +2915,12 @@ async def _stream_llm_and_speak(
                     if filler_playing[0]:
                         await filler_done_event.wait()
                     _mark_speaking_started()
+                    # Feed WAV to flora RMS streamer at playback dispatch (FLORA-04).
+                    # Best-effort: flora failure must never break TTS (Action-failure-≠-silence).
+                    try:
+                        flora_controller.feed_speech_wav(pending_wav)
+                    except Exception as _flora_exc:
+                        event_log.append("flora_feed_error", {"error": str(_flora_exc)})
                     result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                     tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
                     pending_wav = None
@@ -2937,6 +2949,12 @@ async def _stream_llm_and_speak(
                 if filler_playing[0]:
                     await filler_done_event.wait()
                 _mark_speaking_started()
+                # Feed WAV to flora RMS streamer at playback dispatch (FLORA-04).
+                # Best-effort: flora failure must never break TTS (Action-failure-≠-silence).
+                try:
+                    flora_controller.feed_speech_wav(pending_wav)
+                except Exception as _flora_exc:
+                    event_log.append("flora_feed_error", {"error": str(_flora_exc)})
                 result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                 tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
 
