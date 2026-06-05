@@ -342,7 +342,7 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         echoes_pool: int = 0
         from .echoes_gate import EchoGate
         # count echoes pool size via gate file path if available
-        echoes_path = em.root.parent.parent / "Agent Adam Chip" / "Echoes.txt"
+        echoes_path = em.root.parent.parent / "Agent-Adam-Chip" / "Echoes.txt"
         if not echoes_path.exists():
             echoes_path = em.root.parent / "echoes.txt"
         if echoes_path.exists():

@@ -35,10 +35,10 @@
           "items": { "type": "string" },
           "description": "Relative paths to persona markdown files loaded into system prompt in order. Changing order affects prompt structure. Adding/removing files changes character depth.",
           "default": [
-            "Agent Adam Chip/About/System.md",
-            "Agent Adam Chip/About/Identity.md",
-            "Agent Adam Chip/About/Lore.md",
-            "Agent Adam Chip/About/Abilities.md"
+            "Agent-Adam-Chip/About/System.md",
+            "Agent-Adam-Chip/About/Identity.md",
+            "Agent-Adam-Chip/About/Lore.md",
+            "Agent-Adam-Chip/About/Abilities.md"
           ]
         },
         "prompt_trace_max": {

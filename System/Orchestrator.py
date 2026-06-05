@@ -105,7 +105,7 @@ prompt_builder = PromptBuilder(
 )
 action_layer = ActionLayer(settings.section("mcu"), settings.section("safety"))
 
-_about_dir = PROJECT_ROOT / "Agent Adam Chip" / "About"
+_about_dir = PROJECT_ROOT / "Agent-Adam-Chip" / "About"
 echoes_gate = EchoGate(
     pool_path=_about_dir / "Echoes.md",
     memory=episodic_memory,
