@@ -25,7 +25,9 @@ import asyncio
 import audioop
 import io
 import logging
+import random
 import wave
+from time import perf_counter
 from typing import Any
 
 logger = logging.getLogger("adam.flora")
@@ -80,6 +82,15 @@ class FloraController:
         self._booted: bool = False
         self._enabled: bool = bool(self._cfg.get("enabled", True))
 
+        # Answer-state (RMS speech sync, FLORA-04). Active between tts_started and
+        # tts_finished. While active, feed_speech_wav drives the light stream from
+        # the GUARANTEED per-chunk WAV pushed by the Orchestrator consumer.
+        self._answer_active: bool = False
+        # Whether any WAV chunk was fed during the current answer — distinguishes
+        # the streaming path (real RMS sync) from the /speak no-WAV degraded path.
+        self._fed_wav_this_answer: bool = False
+        self._rms_task: asyncio.Task[None] | None = None
+
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -97,6 +108,9 @@ class FloraController:
 
     async def stop(self) -> None:
         """Cancel the consumer task, await it, and unsubscribe from the event log."""
+        # Kill any live RMS streamer first so it cannot keep POSTing frames.
+        await self._cancel_rms_task()
+        self._answer_active = False
         task = self._task
         if task is not None and not task.done():
             task.cancel()
