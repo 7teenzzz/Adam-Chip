@@ -146,6 +146,11 @@ class FloraController:
     async def _handle(self, event: dict[str, Any]) -> None:
         etype = event.get("type")
         if etype == "wake_word_detected":
+            # Barge-in (D-09): snap light to accent and kill any live RMS stream.
+            if self._answer_active or self._rms_task is not None:
+                await self._cancel_rms_task()
+                self._answer_active = False
+                self._fed_wav_this_answer = False
             await self._set_state("accent")  # детекция
         elif etype == "voice_state_change":
             payload = event.get("payload", {}) or {}
@@ -157,8 +162,18 @@ class FloraController:
             self._booted = True
             to = payload.get("to")
             if to == "listening":
+                # Barge-in (D-09): cancel RMS stream so light snaps to attentive.
+                if self._answer_active or self._rms_task is not None:
+                    await self._cancel_rms_task()
+                    self._answer_active = False
+                    self._fed_wav_this_answer = False
                 await self._set_state("attentive")  # слушание — вибро OFF (D-11)
             elif to == "standby":
+                # Barge-in guard: also cancel on standby transition (e.g. no-reply).
+                if self._answer_active or self._rms_task is not None:
+                    await self._cancel_rms_task()
+                    self._answer_active = False
+                    self._fed_wav_this_answer = False
                 await self._set_state("breathe")  # покой
         elif etype == "llm_thinking_started":
             await self._set_state("think_pulse")  # раздумье
@@ -167,18 +182,30 @@ class FloraController:
         elif etype == "tts_finished":
             await self._on_answer_end()
 
-    # ── Answer boundary (RMS streamer is plan 04) ──────────────────────
+    # ── Answer boundary + RMS streamer (FLORA-04) ─────────────────────
 
     async def _on_answer_start(self, event: dict[str, Any]) -> None:
-        """STUB for plan 04: generic answer pulse while Adam speaks.
+        """Mark the start of an answer.  The RMS stream is driven by the
+        Orchestrator consumer via feed_speech_wav (per-chunk WAV, D-07).
 
-        Plan 04 replaces this with the feed_speech_wav-driven RMS streamer that
-        modulates light channels in time with TTS playback.
+        If no WAV arrives (non-streaming /speak path — Silero plays
+        internally and never exposes the WAV bytes), we fall through to the
+        generic 'attentive' plateau so the lights at least react with a
+        steady brightness rather than going dark.  That is the ONLY degraded
+        path (RESEARCH Open Q2 RESOLVED); document it here so future
+        reviewers understand the architectural constraint.
         """
-        await self._set_state("accent")
+        self._answer_active = True
+        self._fed_wav_this_answer = False
+        # Transition to a slightly brighter plateau while awaiting the first
+        # WAV chunk; the real RMS modulation will replace this shortly.
+        await self._set_state("attentive")
 
     async def _on_answer_end(self) -> None:
-        """Answer finished — settle back to the calm idle preset."""
+        """Answer finished — stop the RMS streamer and settle to calm idle."""
+        await self._stop_rms_stream()
+        self._answer_active = False
+        self._fed_wav_this_answer = False
         await self._set_state("breathe")
 
     # ── State push ─────────────────────────────────────────────────────
@@ -295,3 +322,139 @@ class FloraController:
             clamped = 0.0 if level < 0.0 else (1.0 if level > 1.0 else level)
             duties.append(lo + int(round(span * clamped)))
         return duties
+
+    # ── Guaranteed-WAV public entry point (FLORA-04, D-07) ────────────
+
+    def feed_speech_wav(self, wav_bytes: bytes) -> None:
+        """Feed a synthesized WAV chunk to the RMS light streamer.
+
+        This is the GUARANTEED per-chunk WAV entry point called by the
+        Orchestrator _consumer at the SAME instant it dispatches each chunk
+        to to_thread(_play_wav_bytes_sync) — so the timer starts together
+        with playback (D-07 single-timer per-chunk sync).
+
+        Design notes:
+        - One asyncio task per chunk.  If a previous chunk's task is still
+          running (i.e. its envelope is longer than the chunk's audio — not
+          typical but possible during slow I2C bursts), it is cancelled
+          before the new one starts.  This keeps each chunk's visual sync
+          independent and avoids envelope drift across chunks.
+        - Guard: if the controller is not in answer state or is disabled,
+          the call is a fast no-op (filler "Хм..." chunks are fine to react
+          to but are outside _answer_active because they fire before
+          tts_started is emitted — a minor known gap, acceptable).
+        - Synchronous fast (never blocks): asyncio.create_task() is ~µs;
+          the actual HTTP POSTs run in the spawned task.
+
+        Degraded path (non-streaming /speak): Silero's internal /speak
+        endpoint plays audio natively without exposing WAV bytes, so this
+        method is NEVER called for that path.  _on_answer_start already
+        put the lights on the 'attentive' plateau as a fallback — that
+        stays until tts_finished arrives.  This is the ONLY degraded path
+        (RESEARCH Open Q2 RESOLVED).
+        """
+        if not self._enabled or not self._answer_active:
+            return
+        levels = self._rms_envelope(wav_bytes)
+        if not levels:
+            return
+        duties = self._envelope_to_duties(levels)
+        self._start_rms_stream(duties)
+        self._fed_wav_this_answer = True
+
+    def _start_rms_stream(self, duties: list[int]) -> None:
+        """Create (or restart) the asyncio RMS streamer task for this chunk."""
+        # Cancel any prior chunk's task first (edge-case: slow I2C / missed finish).
+        if self._rms_task is not None and not self._rms_task.done():
+            self._rms_task.cancel()
+        self._rms_task = asyncio.create_task(
+            self._rms_stream(duties), name="flora_rms"
+        )
+
+    async def _rms_stream(self, duties: list[int]) -> None:
+        """Stream brightness frames to light channels 0-10 in lockstep with playback.
+
+        Algorithm (D-07):
+          t0 = perf_counter() at task-start (≈ same instant playback dispatched)
+          For frame i: sleep until t0 + hdmi_latency_offset_ms/1000 + i*interval/1000
+          Then POST set_channels to all light channels with this frame's duty.
+
+        Sparks (D-08): on frames where the duty is near peak, with
+        spark_probability boost a random channel subset to full peak for one frame.
+        This adds subtle texture — cluster-friendly (random, no spatial centre, D-01).
+
+        Vibro (channels 11-14): driven from the same phase as lights at the
+        configured intensity_pct ceiling (D-11); NOT forced silent here —
+        only 'attentive' state silences vibro.  The RMS modulation shares the
+        lamp duty scaled to vibro_intensity_pct so the motors throb subtly with
+        the voice without overwhelming (D-12 restrained default 30%).
+
+        Frame rate ceiling: frame_interval_ms from config defaults to 80 ms
+        (~12.5 fps) — well within the ESP LWIP socket budget (T-29-10).
+        """
+        t0 = perf_counter()
+        offset_s: float = self._hdmi_offset_ms / 1000.0
+        interval_s: float = self._frame_interval_ms / 1000.0
+
+        peak_duty = int(round(self._value_max * self._peak_duty_pct / 100.0))
+        vibro_scale: float = self._vibro_intensity_pct / 100.0
+
+        try:
+            for i, duty in enumerate(duties):
+                target_t = t0 + offset_s + i * interval_s
+                delay = target_t - perf_counter()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+                # Build the batch update: all light channels at this frame's duty.
+                updates: list[dict] = [
+                    {"channel": ch, "value": duty} for ch in self._light_channels
+                ]
+
+                # Sparks (D-08): near-peak frames — randomly boost a subset.
+                if (
+                    self._spark_probability > 0.0
+                    and duty >= int(peak_duty * 0.75)
+                    and random.random() < self._spark_probability
+                ):
+                    # Pick a random non-empty subset of light channels (cluster-friendly).
+                    n_sparks = max(1, random.randint(1, len(self._light_channels) // 2))
+                    spark_chs = random.sample(self._light_channels, n_sparks)
+                    spark_set = set(spark_chs)
+                    updates = [
+                        {"channel": ch, "value": peak_duty if ch in spark_set else duty}
+                        for ch in self._light_channels
+                    ]
+
+                # Vibro: scaled RMS duty — throbs subtly with voice (D-12).
+                vibro_duty = int(round(duty * vibro_scale))
+                updates.extend(
+                    {"channel": ch, "value": vibro_duty}
+                    for ch in self._vibro_channels
+                )
+
+                try:
+                    await self._mcu.set_channels(updates)
+                except Exception:
+                    logger.debug("flora rms: set_channels failed at frame %d", i, exc_info=True)
+        except asyncio.CancelledError:
+            raise  # let asyncio manage the task lifecycle
+        except Exception:
+            logger.exception("flora _rms_stream unexpected error")
+
+    async def _stop_rms_stream(self) -> None:
+        """Cancel the RMS task and await its completion (tts_finished path)."""
+        await self._cancel_rms_task()
+
+    async def _cancel_rms_task(self) -> None:
+        """Cancel _rms_task if live, swallowing CancelledError."""
+        task = self._rms_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        self._rms_task = None
