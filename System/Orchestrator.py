@@ -2430,6 +2430,38 @@ async def mcu_info() -> dict[str, Any]:
     return {"ok": result.ok, "data": result.data}
 
 
+@app.post("/api/flora/state")
+async def flora_state_push(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Push a flora preset immediately using current Config.json values.
+
+    Useful for live tuning: edit Config.json, then POST here to see the change
+    on hardware without waiting for a pipeline event.
+
+    Body: {"state": "breathe"}   # or any preset name
+    """
+    state = str(payload.get("state", "")).strip()
+    if not state:
+        raise HTTPException(status_code=400, detail="state is required")
+    ok = await flora_controller.push_preset(state)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"unknown_flora_state: {state!r}")
+    event_log.append("flora_manual_push", {"state": state})
+    return {"ok": True, "state": state}
+
+
+@app.get("/api/flora/config")
+async def flora_config_preview() -> dict[str, Any]:
+    """Return effective preset params as they would be sent to the ESP.
+
+    Reflects current Config.json values — useful for verifying a config edit
+    before pushing to hardware with POST /api/flora/state.
+    """
+    flora_cfg = settings.section("flora")
+    state_names = list((flora_cfg.get("states") or {}).keys())
+    preview = {s: flora_controller._build_params(s) for s in state_names}
+    return {"ok": True, "presets": preview}
+
+
 @app.post("/api/agent/turn")
 async def dialogue_turn(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     transcript = str(payload.get("transcript", "")).strip()

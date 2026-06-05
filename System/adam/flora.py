@@ -210,6 +210,33 @@ class FloraController:
 
     # ── State push ─────────────────────────────────────────────────────
 
+    def _live_flora_cfg(self) -> dict[str, Any]:
+        """Return current flora config section — re-read from disk for hot-reload.
+
+        Falls back to the snapshot taken at __init__ if Settings.load() fails
+        (e.g. malformed JSON mid-edit). This ensures every _set_state call picks
+        up Config.json edits without an orchestrator restart (Config-First D-13).
+        """
+        try:
+            from adam.config import Settings
+            return Settings.load().section("flora") or self._cfg
+        except Exception:
+            return self._cfg
+
+    async def push_preset(self, state: str) -> bool:
+        """Manually push a flora preset with current Config.json values.
+
+        Public entry point for the /api/flora/state Orchestrator endpoint and
+        manual testing. Returns False for unknown preset names.
+        """
+        flora = self._live_flora_cfg()
+        known = set((flora.get("states") or {}).keys())
+        known.update({"idle", "breathe", "accent", "attentive", "think_pulse", "wake_bloom"})
+        if state not in known:
+            return False
+        await self._set_state(state)
+        return True
+
     async def _set_state(self, state: str, **overrides: Any) -> None:
         """Build per-state params from the flora config and POST the transition.
 
@@ -219,6 +246,7 @@ class FloraController:
         """
         params = self._build_params(state)
         params.update(overrides)
+        # Belt-and-suspenders using cached set (D-11 invariant must survive hot-reload errors).
         if state in self._silent_states:
             params["vibro_enabled"] = False
         await self._mcu.set_flora_state(state, params)
@@ -231,22 +259,28 @@ class FloraController:
     def _build_params(self, state: str) -> dict[str, Any]:
         """Translate a config preset into the flat param dict the firmware expects.
 
-        Keys mirror the Config.schema.json `flora.states.*` shape. Vibro intensity
-        ceiling rides along so the firmware can clamp (defence-in-depth, T-29-05).
+        Re-reads flora config from disk on every call (hot-reload, Config-First D-13)
+        so Config.json edits take effect on the next state transition without an
+        orchestrator restart. Falls back to __init__ snapshot on load error.
 
-        *_pct keys are translated to firmware-native base_duty / peak_duty (0-4095)
-        here so the firmware only receives the canonical keys it reads. Keys the
-        firmware ignores entirely (attack_ms, flash_ms, from_dark, settle_to,
+        *_pct keys are translated to firmware-native base_duty / peak_duty (0-4095).
+        Keys the firmware ignores (attack_ms, from_dark, settle_to,
         vibro_pulse_ms) are dropped to keep the payload compact.
+        flash_ms maps to period_ms (think_pulse flash interval).
         """
-        # Firmware-unknown keys — drop silently (firmware flat-key parser ignores
-        # unknown fields, but no need to send them at all).
-        _SKIP = frozenset({"attack_ms", "vibro_pulse_ms", "flash_ms", "from_dark", "settle_to"})
+        _SKIP = frozenset({"attack_ms", "vibro_pulse_ms", "from_dark", "settle_to"})
 
-        preset: dict[str, Any] = self._states_cfg.get(state, {}) or {}
+        flora = self._live_flora_cfg()
+        states_cfg: dict[str, Any] = flora.get("states", {}) or {}
+        vibro_cfg: dict[str, Any] = flora.get("vibro", {}) or {}
+        crossfade_ms = int(flora.get("crossfade_ms", self._crossfade_ms))
+        vibro_intensity_pct = int(vibro_cfg.get("intensity_pct", self._vibro_intensity_pct))
+        silent_states: set[str] = set(vibro_cfg.get("silent_states", list(self._silent_states)))
+
+        preset: dict[str, Any] = states_cfg.get(state, {}) or {}
         params: dict[str, Any] = {
-            "crossfade_ms": self._crossfade_ms,
-            "vibro_intensity_pct": self._vibro_intensity_pct,
+            "crossfade_ms": crossfade_ms,
+            "vibro_intensity_pct": vibro_intensity_pct,
         }
         for key, value in preset.items():
             if key == "vibro":
@@ -256,22 +290,22 @@ class FloraController:
                     params["vibro_enabled"] = True
                     params["vibro_mode"] = value
             elif key in ("base_pct", "peak_pct"):
-                # Translate percentage to 0-4095 duty the firmware reads.
                 duty_key = "base_duty" if key == "base_pct" else "peak_duty"
                 params[duty_key] = int(round(self._value_max * float(value) / 100.0))
             elif key == "plateau_pct":
-                # Steady plateau: base == peak so firmware holds a fixed level.
                 duty = int(round(self._value_max * float(value) / 100.0))
                 params["base_duty"] = duty
                 params["peak_duty"] = duty
-            elif key == "wave_period_ms":
-                # Attentive fast-wave period; firmware reads it as period_ms.
+            elif key in ("wave_period_ms", "flash_ms"):
+                # wave_period_ms: attentive fast-wave period.
+                # flash_ms: think_pulse flash interval.
+                # Both map to firmware's period_ms.
                 params["period_ms"] = int(value)
             elif key in _SKIP:
                 pass
             else:
                 params[key] = value
-        if state in self._silent_states:
+        if state in silent_states:
             params["vibro_enabled"] = False
         return params
 

@@ -186,7 +186,9 @@
         "vibro": false
       },
       "accent": {
+        "base_pct": 10,
         "peak_pct": 71,
+        "period_ms": 1400,
         "attack_ms": 250,
         "vibro": true,
         "vibro_pulse_ms": 120
@@ -199,11 +201,14 @@
       },
       "think_pulse": {
         "base_pct": 20,
+        "peak_pct": 63,
         "flash_ms": 1750,
         "vibro": "double_pulse"
       },
       "wake_bloom": {
+        "base_pct": 0,
         "peak_pct": 71,
+        "period_ms": 3000,
         "from_dark": true,
         "settle_to": "breathe",
         "vibro": true
