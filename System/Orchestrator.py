@@ -762,7 +762,7 @@ class VoiceLoopController:
         # been removed — see _heartbeat_loop below.
         try:
             while self.running:
-                if self.mic_reader is not None:
+                if self.mic_source == "esp32" and self.mic_reader is not None:
                     chunk = await self.mic_reader.get_chunk(timeout=1.0)
                     if chunk is None:
                         # Queue starvation — could mean MicReader is in retry.
@@ -792,8 +792,27 @@ class VoiceLoopController:
                     self._silence_rms_threshold <= 0 or _rms >= self._silence_rms_threshold
                 )
 
-                # D-10: audio_level emission is now owned by MicReader (single
-                # emitter). _vad_loop no longer fires audio_level events here.
+                # D-10: MicReader owns audio_level for esp32 path.
+                # For mic_source=="local" (no MicReader running), emit here so
+                # the chat VU-meter and spectrum stay live on the local ALSA path.
+                if self.mic_source == "local":
+                    _local_level_tick = getattr(self, "_local_level_tick", 0) + 1
+                    self._local_level_tick = _local_level_tick
+                    _emit_every = mic_reader._audio_level_emit_every_n
+                    if _local_level_tick >= _emit_every:
+                        self._local_level_tick = 0
+                        _normalize = mic_reader._normalize_factor
+                        _norm = round(min(1.0, (_rms / _normalize) ** 0.5), 3)
+                        _level_payload: dict[str, Any] = {
+                            "level": _norm,
+                            "state": self._voice_state or "boot_warmup",
+                            "source": "local",
+                            "channels": 1,
+                        }
+                        _bands = mic_reader._compute_bands(chunk)
+                        if _bands is not None:
+                            _level_payload["bands"] = _bands
+                        event_log.append("audio_level", _level_payload)
 
                 # D-13/D-14: boot_warmup is a drain-only state. We keep
                 # get_chunk()/read_fn() pumping so MicReader's queue doesn't
