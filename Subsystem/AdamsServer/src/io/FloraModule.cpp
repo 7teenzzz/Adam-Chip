@@ -44,14 +44,17 @@ struct PresetDefaults {
 // In-code preset defaults (Jetson params override per-call). Duties are 0-4095
 // pre-gamma "levels" expressed directly in 12-bit space for the base/peak
 // anchors; the gamma LUT shapes the interpolation between them.
+// Brightness ceiling: 71% of 4095 = 2908. No preset peak exceeds this.
+constexpr uint16_t kFlora71PctDuty = 2908u;
+
 constexpr PresetDefaults kPresetDefaults[] = {
-  // name           base  peak  periodMs  vibro
-  {"idle",          120,   900,  9000,    false},
-  {"breathe",       120,  1100,  7000,    false},
-  {"accent",        400,  3000,  1400,    true },
-  {"attentive",     0,    1600,  4000,    false},   // vibro forced off regardless
-  {"think_pulse",   600,  2600,  1750,    true },
-  {"wake_bloom",    0,    3200,  3000,    true },
+  // name           base  peak          periodMs  vibro
+  {"idle",          120,   900,          9000,    false},
+  {"breathe",       696,  1228,          7000,    false},  // base=17%, peak=30%
+  {"accent",        400,  kFlora71PctDuty, 1400,  true },  // peak capped at 71%
+  {"attentive",    1228,  kFlora71PctDuty,  450,  false},  // base=30%, peak=71%, wave period 450ms
+  {"think_pulse",   819,  2600,          1750,    true },  // base=20%
+  {"wake_bloom",    0,    kFlora71PctDuty, 3000,  true },  // peak capped at 71%
 };
 constexpr size_t kPresetCount = sizeof(kPresetDefaults) / sizeof(kPresetDefaults[0]);
 
@@ -147,8 +150,9 @@ uint16_t computeLightLevel(FloraPreset preset, uint16_t base, uint16_t peak,
       return static_cast<uint16_t>(base + span * s);
     }
     case FloraPreset::Attentive: {
-      // Bright steady plateau (no breathing) so the listener reads "I'm hearing you".
-      return peak;
+      // Per-channel fast waves; collective level is computed per-channel in floraTick.
+      // Return base as the floor reference only.
+      return base;
     }
     case FloraPreset::ThinkPulse: {
       // Low collective base; per-channel wandering flashes added in the frame loop.
@@ -184,7 +188,21 @@ void floraTick(uint32_t nowMs) {
   // --- Light channels 0-10 (D-02) ---
   for (uint8_t ch = kFloraLightChannelLo; ch <= kFloraLightChannelHi; ++ch) {
     uint16_t d = lightDuty;
-    if (t.preset == FloraPreset::ThinkPulse) {
+    if (t.preset == FloraPreset::Attentive) {
+      // Fast independent per-channel sine waves (user req: быстрые волны на
+      // случайных каналах). Each channel runs at a phase offset = ch * 173
+      // (prime) so all 11 lamps oscillate visibly out of sync — reads as organic
+      // shimmer, not collective breathing. Wave period comes from t.periodMs
+      // (Jetson sends wave_period_ms -> period_ms, default 450 ms ≈ 2.2 Hz).
+      const uint32_t wavePeriod = (t.periodMs > 0) ? t.periodMs : 450u;
+      const uint32_t phaseOff   = static_cast<uint32_t>(ch) * 173u;
+      const float cp = static_cast<float>((sinceApplied + phaseOff) % wavePeriod)
+                       / static_cast<float>(wavePeriod);
+      const float s = 0.5f * (1.0f - cosf(cp * 2.0f * static_cast<float>(M_PI)));
+      d = gammaApply(static_cast<uint16_t>(
+          static_cast<float>(t.baseDuty) +
+          static_cast<float>(t.peakDuty - t.baseDuty) * s));
+    } else if (t.preset == FloraPreset::ThinkPulse) {
       // D-01: wandering random-subset flashes (no spatial order). Each tick a
       // small random subset of channels gets boosted toward peak.
       if ((nextRand() & 0x1F) == 0) {  // ~1/32 channels flare per tick

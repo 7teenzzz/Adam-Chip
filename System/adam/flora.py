@@ -233,7 +233,16 @@ class FloraController:
 
         Keys mirror the Config.schema.json `flora.states.*` shape. Vibro intensity
         ceiling rides along so the firmware can clamp (defence-in-depth, T-29-05).
+
+        *_pct keys are translated to firmware-native base_duty / peak_duty (0-4095)
+        here so the firmware only receives the canonical keys it reads. Keys the
+        firmware ignores entirely (attack_ms, flash_ms, from_dark, settle_to,
+        vibro_pulse_ms) are dropped to keep the payload compact.
         """
+        # Firmware-unknown keys — drop silently (firmware flat-key parser ignores
+        # unknown fields, but no need to send them at all).
+        _SKIP = frozenset({"attack_ms", "vibro_pulse_ms", "flash_ms", "from_dark", "settle_to"})
+
         preset: dict[str, Any] = self._states_cfg.get(state, {}) or {}
         params: dict[str, Any] = {
             "crossfade_ms": self._crossfade_ms,
@@ -241,15 +250,27 @@ class FloraController:
         }
         for key, value in preset.items():
             if key == "vibro":
-                # config encodes vibro participation as bool or rhythm-mode string
                 if isinstance(value, bool):
                     params["vibro_enabled"] = value
                 else:
                     params["vibro_enabled"] = True
                     params["vibro_mode"] = value
+            elif key in ("base_pct", "peak_pct"):
+                # Translate percentage to 0-4095 duty the firmware reads.
+                duty_key = "base_duty" if key == "base_pct" else "peak_duty"
+                params[duty_key] = int(round(self._value_max * float(value) / 100.0))
+            elif key == "plateau_pct":
+                # Steady plateau: base == peak so firmware holds a fixed level.
+                duty = int(round(self._value_max * float(value) / 100.0))
+                params["base_duty"] = duty
+                params["peak_duty"] = duty
+            elif key == "wave_period_ms":
+                # Attentive fast-wave period; firmware reads it as period_ms.
+                params["period_ms"] = int(value)
+            elif key in _SKIP:
+                pass
             else:
                 params[key] = value
-        # Honour the silent-states policy regardless of preset config (D-11).
         if state in self._silent_states:
             params["vibro_enabled"] = False
         return params

@@ -74,7 +74,7 @@ def test_flora_config() -> None:
     # Speech RMS params (D-07 / D-08).
     speech = flora["speech"]
     assert speech["base_duty_pct"] == 25
-    assert speech["peak_duty_pct"] == 90
+    assert speech["peak_duty_pct"] <= 71, "peak_duty_pct must not exceed 71% brightness cap"
 
     # Vibro policy (D-11): silent in listening/attentive.
     assert "attentive" in flora["vibro"]["silent_states"]

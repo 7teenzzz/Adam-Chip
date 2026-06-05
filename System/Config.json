@@ -171,7 +171,7 @@
       "frame_interval_ms": 80,
       "hdmi_latency_offset_ms": 150,
       "base_duty_pct": 25,
-      "peak_duty_pct": 90,
+      "peak_duty_pct": 71,
       "spark_probability": 0.15
     },
     "vibro": {
@@ -180,19 +180,21 @@
     },
     "states": {
       "breathe": {
-        "base_pct": 8,
+        "base_pct": 17,
         "peak_pct": 30,
         "period_ms": 7000,
         "vibro": false
       },
       "accent": {
-        "peak_pct": 75,
+        "peak_pct": 71,
         "attack_ms": 250,
         "vibro": true,
         "vibro_pulse_ms": 120
       },
       "attentive": {
-        "plateau_pct": 40,
+        "base_pct": 30,
+        "peak_pct": 71,
+        "wave_period_ms": 450,
         "vibro": false
       },
       "think_pulse": {
@@ -201,6 +203,7 @@
         "vibro": "double_pulse"
       },
       "wake_bloom": {
+        "peak_pct": 71,
         "from_dark": true,
         "settle_to": "breathe",
         "vibro": true
