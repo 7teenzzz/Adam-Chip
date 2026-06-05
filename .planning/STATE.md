@@ -2,26 +2,26 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-18T00:00:00.000Z"
+status: ready_to_plan
+last_updated: "2026-05-18T08:14:02.295Z"
 progress:
-  total_phases: 31
-  completed_phases: 15
-  total_plans: 24
-  completed_plans: 17
-  percent: 48
+  total_phases: 32
+  completed_phases: 3
+  total_plans: 30
+  completed_plans: 16
+  percent: 9
 ---
 
 # Adam-Chip — Project State
 
 **Last Updated:** 2026-05-18
-**Status:** Executing Phase 11 (Voice Pipeline Refactor)
+**Status:** Ready to plan
 
 ## Active Phase
 
 **Phase 11: Voice Pipeline Refactor — соответствие эталонной логике** — plan ready, executing
 Branch: `V-S08.1-code_rev_ref_opt` (мёрж в `main` в процессе)
-Plan: [phases/11-voice-pipeline-refactor/11-PLAN.md](phases/11-voice-pipeline-refactor/11-PLAN.md)
+Plan: Not started
 Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-refactor/REVIEW.md)
 
 → [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
@@ -161,6 +161,7 @@ Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-r
 
 ## History
 
+- 2026-06-01: Phase 29 (ESP Audio Output — TTS DSP chain) — аудио-часть готова (commits `2b27ac3`, `e99ced0`, `0b7361a`). DSP-цепочка (HPF/comp/presence/limiter/soxr) + paced-подача без щелчков; профиль hpf240/makeup4/comp2.0. Итоги: `29-SUMMARY.md`. Deferred: хрип = аналог (GAIN +15дБ / 5В), firmware backpressure, самоэхо. Урок сессии: обрывы громкого звука были от USB-питания, не от кода.
 - 2026-05-18: Merge ветки `V-S08.1-code_rev_ref_opt` → `main`. ROADMAP перенумерован: voice-фазы получили номера 7-11, diploma+planning фазы сдвинуты на +5 (Phase 7→12, …, Phase 23→28). Phase 11 (Voice Pipeline Refactor) — active.
 - 2026-05-17: Phase 14 (Next-Phases Planning) завершена. 12 фаз спроектированы.
 - 2026-05-17: Phase 13 (Theory-Code Verification) завершена. 48 терминов через 3 графа.

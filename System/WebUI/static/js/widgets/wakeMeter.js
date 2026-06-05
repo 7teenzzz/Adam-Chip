@@ -16,14 +16,39 @@
 
 import { subscribeEvents } from "../api.js";
 
-const BAR_N = 28;
+// Phase 21A Plan 05 (UI-EQ-03/04): real per-frame spectrum. The widget consumes
+// the `bands[24]` array now emitted by the backend (Plan 03 — _compute_bands in
+// mic_reader.py) directly from audio_level SSE events. No peak-hold, no decay,
+// no wobble, no synthetic shape — each bar is the latest band level.
+const N_BANDS = 24;
 
-const EQ_SHAPE = Float32Array.from({ length: BAR_N }, (_, i) => {
-  const x = i / (BAR_N - 1);
-  const peak = Math.exp(-((x - 0.28) ** 2) / 0.06);
-  const low = Math.exp(-((x - 0.0) ** 2) / 0.015) * 0.4;
-  return Math.max(0.06, Math.min(1.0, peak + low));
-});
+// Spectrum colour ramp — green at 0, yellow at colorYellowAt, solid red at colorRedAt.
+// Defaults mirror Config.json (media.audio.spectrum_color_yellow_at / _red_at);
+// the widget fetches /api/config once at mount and overrides these per-instance.
+const GREEN = [67, 209, 122];
+const YELLOW = [234, 200, 80];
+const RED = [220, 80, 80];
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function rgbBlend(c1, c2, t) {
+  return [lerp(c1[0], c2[0], t), lerp(c1[1], c2[1], t), lerp(c1[2], c2[2], t)];
+}
+
+function colorForLevel(v, yAt, rAt) {
+  let rgb;
+  if (v <= yAt) {
+    rgb = rgbBlend(GREEN, YELLOW, v / Math.max(0.001, yAt));
+  } else if (v >= rAt) {
+    rgb = RED;
+  } else {
+    rgb = rgbBlend(YELLOW, RED, (v - yAt) / Math.max(0.001, rAt - yAt));
+  }
+  const a = 0.35 + v * 0.65;
+  return `rgba(${rgb[0] | 0},${rgb[1] | 0},${rgb[2] | 0},${a.toFixed(2)})`;
+}
 
 function thresholdFromEvent(canvas, ev) {
   const rect = canvas.getBoundingClientRect();
@@ -38,7 +63,10 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
     `width:100%; height:${height}px; border-radius:4px; display:block; ` +
     `background:var(--bg-2); ${draggable ? "cursor:ns-resize;" : ""} touch-action:none`;
 
-  const peaks = new Float32Array(BAR_N);
+  // Latest spectrum snapshot — updated in place on each audio_level event
+  // that carries a valid bands[N_BANDS] array. Missing/short arrays leave
+  // the previous snapshot intact (no flash-to-zero on synthetic backfill).
+  const bands = new Float32Array(N_BANDS);
   const state = {
     audioLevel: 0,
     threshold: 0.25,
@@ -48,12 +76,33 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
     scorePeakTs: 0,
     dragging: false,
     engineReady: false,
+    // Colour-ramp thresholds — overridden at mount from Config.json
+    // (media.audio.spectrum_color_yellow_at / spectrum_color_red_at).
+    colorYellowAt: 0.6,
+    colorRedAt: 0.85,
     // pipelineReady stays false until the voice loop produces a real
     // standby/listening/reply audio_level frame. While false the meter
     // renders an "Инициализация" placeholder instead of live bars so the
     // operator does not see the equaliser reacting to its own warmup TTS.
     pipelineReady: false,
   };
+
+  // Mount-time colour-threshold load — non-blocking, defaults remain usable
+  // until the fetch resolves. Hot-reload of these thresholds is out of scope
+  // (RESEARCH §7); a page refresh picks up new Config.json values.
+  fetch("/api/config")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((cfg) => {
+      if (!cfg) return;
+      const a = (cfg.media && cfg.media.audio) || {};
+      if (typeof a.spectrum_color_yellow_at === "number") {
+        state.colorYellowAt = a.spectrum_color_yellow_at;
+      }
+      if (typeof a.spectrum_color_red_at === "number") {
+        state.colorRedAt = a.spectrum_color_red_at;
+      }
+    })
+    .catch(() => {});
 
   // Initial load + listen for external updates (e.g. settings page changes
   // threshold while chat page is open).
@@ -79,8 +128,13 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
   }
 
   let rafId = null;
+  // Phase 21A Plan 05 (UI-EQ-05): idempotent dispose. The flag both gates
+  // double-dispose and stops any mid-flight RAF callback from re-scheduling
+  // after the EventSource has already been unsubscribed (race on panel swap).
+  let disposed = false;
 
   function draw() {
+    if (disposed) return;
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     if (rect.width > 0) {
@@ -109,25 +163,22 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
         return;
       }
 
+      // Phase 21A: render real bands[] directly — no smoothing, no peak-hold.
       const gap = 2;
-      const barW = (w - (BAR_N - 1) * gap) / BAR_N;
-      const t = Date.now() * 0.0015;
-      const displayLevel = Math.min(1.0, state.audioLevel * 4.0);
-      for (let i = 0; i < BAR_N; i++) {
-        const wobble = 1 + 0.12 * Math.sin(t + i * 0.85);
-        const target = displayLevel * EQ_SHAPE[i] * wobble;
-        peaks[i] = Math.max(target, peaks[i] * 0.87);
-      }
+      const barW = (w - (N_BANDS - 1) * gap) / N_BANDS;
 
+      // Thin floor strip so the operator can see where bars sit at silence.
       ctx.fillStyle = "rgba(67,209,122,0.10)";
-      for (let i = 0; i < BAR_N; i++) {
+      for (let i = 0; i < N_BANDS; i++) {
         ctx.fillRect(Math.round(i * (barW + gap)), h - 2, Math.max(1, Math.round(barW)), 2);
       }
-      for (let i = 0; i < BAR_N; i++) {
-        const v = peaks[i];
-        if (v < 0.008) continue;
+
+      // Per-bar gradient by level (green → yellow → red).
+      for (let i = 0; i < N_BANDS; i++) {
+        const v = bands[i];
+        if (v < 0.01) continue;
         const bh = v * (h - 3);
-        ctx.fillStyle = `rgba(67,209,122,${0.35 + v * 0.65})`;
+        ctx.fillStyle = colorForLevel(v, state.colorYellowAt, state.colorRedAt);
         ctx.fillRect(
           Math.round(i * (barW + gap)),
           Math.round(h - 2 - bh),
@@ -213,11 +264,18 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
   // (subscribeEvents is just an EventSource wrapper).
   const unsub = subscribeEvents((ev) => {
     if (ev.type === "audio_level") {
-      const lvl = ev.payload && ev.payload.level;
+      const p = ev.payload || {};
+      const lvl = p.level;
       state.audioLevel = typeof lvl === "number" ? lvl : 0;
+      // Phase 21A: consume real spectrum if present. Missing or wrong-length
+      // bands[] (e.g. synthetic _level_emit_loop heartbeat, network glitch)
+      // leaves the previous snapshot intact — bars never flash to zero.
+      if (Array.isArray(p.bands) && p.bands.length === N_BANDS) {
+        for (let i = 0; i < N_BANDS; i++) bands[i] = +p.bands[i] || 0;
+      }
       // First frame from the real voice loop (state is standby/listening/reply)
       // means warmup has finished — flip out of the placeholder.
-      const vs = ev.payload && ev.payload.state;
+      const vs = p.state;
       if (vs === "standby" || vs === "listening" || vs === "reply") {
         state.pipelineReady = true;
       } else if (vs === "boot_warmup") {
@@ -239,7 +297,7 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
     } else if (ev.type === "voice_loop_stopped") {
       state.pipelineReady = false;
       state.audioLevel = 0;
-      for (let i = 0; i < BAR_N; i++) peaks[i] = 0;
+      bands.fill(0);
     } else if (ev.type === "oww_score") {
       const p = ev.payload || {};
       if (typeof p.score === "number") state.score = p.score;
@@ -256,9 +314,15 @@ export function createWakeMeter({ draggable = false, height = 96 } = {}) {
   }, () => {});
 
   function dispose() {
+    if (disposed) return;
+    disposed = true;
     if (rafId) cancelAnimationFrame(rafId);
     rafId = null;
-    if (typeof unsub === "function") unsub();
+    if (typeof unsub === "function") {
+      try {
+        unsub();
+      } catch (_) {}
+    }
   }
 
   return { canvas, dispose, state };

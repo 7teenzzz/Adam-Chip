@@ -35,15 +35,19 @@
 #define I2S_MIC_SD     21   // SD / DATA   — shared, time-multiplexed
 
 
-/*********************** I2S DAC MAX98357A x2 ***************************/
-// Оба модуля разделяют одни пины — канал выбирается через SD:
+/*********************** I2S DAC MAX98357A x2 (stereo) *****************/
+// Replaced PCM5102A with two MAX98357A modules for stereo. Both modules
+// share the same I2S bus (pins below); channel is picked per-module via SD:
 //   LEFT  module: SD → floating       (left channel)
-//   RIGHT module: SD → VIN (3.3V)     (right channel)
+//   RIGHT module: SD → VIN            (right channel)
 //   GAIN  both  : floating            (+15 dB)
+// Pins are identical to the former PCM5102A wiring — no firmware logic change.
+// MAX98357A needs no MCLK; the speaker TX channel already runs stereo 16-bit.
 
 #define I2S_DAC_BCLK   38   // BCLK — shared left + right
 #define I2S_DAC_LRCK   39   // LRC  — shared left + right
 #define I2S_DAC_DATA   40   // DIN  — shared left + right
+// MCLK → not used (MAX98357A derives clock from BCLK)
 
 
 /*********************** ДАТЧИКИ ****************************************/

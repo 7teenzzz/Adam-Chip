@@ -697,6 +697,7 @@ function buildWakeWordExtras() {
   // T17-deploy GSD fix — expose a dispose hook so the panel teardown can
   // unsubscribe the SSE listener + dispose the wake-meter widget. Without
   // this every settings-then-leave navigation leaked one EventSource.
+  // Phase 21A: idempotent dispose enforced in wakeMeter.js — safe to call multiple times.
   wrapper._dispose = () => {
     try { if (_profileUnsub) _profileUnsub(); } catch (_) {}
     if (meter && typeof meter.dispose === "function") {

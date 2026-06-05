@@ -35,6 +35,7 @@ except ImportError as exc:  # pragma: no cover - exercised only on missing runti
         "python3 -m pip install -r System/requirements.txt"
     ) from exc
 
+from adam import audio_dsp
 from adam.action import ActionLayer
 from adam.api_runtime import RuntimeDeps, build_router, _load_calibration_profile
 from adam.config import Settings
@@ -63,7 +64,10 @@ from adam.webrtc_vad import WebRtcVadWrapper
 
 
 settings = Settings.load()
-event_log = EventLog(settings.data_dir)
+event_log = EventLog(
+    settings.data_dir,
+    audio_cfg=settings.section("media").get("audio", {}),
+)
 metrics_log = MetricsLog(settings.data_dir)
 sessions_log = SessionsLog(settings.data_dir)
 memory = MemoryStore(settings.data_dir)
@@ -2734,6 +2738,44 @@ async def _stream_llm_and_speak(
         except Exception:
             return 1.0
 
+    def _apply_tts_post(wav: bytes | None) -> bytes | None:
+        """Apply volume + Phase 29 DSP chain to a synthesized chunk.
+
+        Speed is applied separately (header trick) before this. Reads tuning
+        per-call so Config/UI changes take effect within the current reply.
+        When dsp.enabled is false, falls back to the legacy volume-only path
+        (hard-clip) — the DSP limiter is the no-clip guarantee, so disabling
+        it intentionally re-exposes legacy behaviour.
+        """
+        if wav is None:
+            return None
+        try:
+            voice = tuning_store.current().voice
+            vol = float(voice.volume)
+            dsp = voice.dsp
+        except Exception:
+            return _apply_wav_volume(wav, _current_volume())
+        if getattr(dsp, "enabled", True):
+            return audio_dsp.process_tts_wav(
+                wav,
+                enabled=True,
+                hpf_hz=float(dsp.hpf_hz),
+                makeup_db=float(dsp.makeup_db),
+                limiter_ceiling_dbfs=float(dsp.limiter_ceiling_dbfs),
+                volume=vol,
+                comp_enabled=bool(getattr(dsp, "comp_enabled", False)),
+                comp_threshold_dbfs=float(getattr(dsp, "comp_threshold_dbfs", -18.0)),
+                comp_ratio=float(getattr(dsp, "comp_ratio", 2.0)),
+                comp_attack_ms=float(getattr(dsp, "comp_attack_ms", 10.0)),
+                comp_release_ms=float(getattr(dsp, "comp_release_ms", 120.0)),
+                comp_knee_db=float(getattr(dsp, "comp_knee_db", 6.0)),
+                presence_enabled=bool(getattr(dsp, "presence_enabled", False)),
+                presence_hz=float(getattr(dsp, "presence_hz", 3000.0)),
+                presence_db=float(getattr(dsp, "presence_db", 2.5)),
+                presence_q=float(getattr(dsp, "presence_q", 0.9)),
+            )
+        return _apply_wav_volume(wav, vol)
+
     async def _producer() -> None:
         buf = ""
         try:
@@ -2837,7 +2879,7 @@ async def _stream_llm_and_speak(
                     # Store for future turns (best-effort, no lock — single-writer loop).
                     _FILLER_WAV_CACHE[cache_key] = wav
             if wav is not None:
-                wav = _apply_wav_volume(wav, _current_volume())
+                wav = _apply_tts_post(wav)
             # Wait until either delay elapses OR real TTS has already started.
             try:
                 await asyncio.wait_for(asyncio.sleep(delay_s), timeout=delay_s + 0.1)
@@ -2888,7 +2930,7 @@ async def _stream_llm_and_speak(
             wav = await asyncio.to_thread(tts._get_wav_bytes_sync, chunk)
             if wav is not None:
                 wav = _apply_wav_speed(wav, _playback_speed)
-                wav = _apply_wav_volume(wav, _current_volume())
+                wav = _apply_tts_post(wav)
 
             if wav is None:
                 # /wav endpoint failed. For jetson_hdmi target, fall back to /speak
