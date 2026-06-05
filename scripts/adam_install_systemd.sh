@@ -83,7 +83,10 @@ ensure_env_line "ADAM_AUDIO_OUTPUT_DEVICE" "default"
 
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-orchestrator.service" /etc/systemd/system/adam-orchestrator.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-tts-silero.service" /etc/systemd/system/adam-tts-silero.service
-install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-asr-whisperx.service" /etc/systemd/system/adam-asr-whisperx.service
+# NOTE: adam-asr-whisperx.service (native) is NOT installed — ASR runs via Docker.
+# The native unit uses pip ctranslate2 (CPU-only on aarch64) and blocks port 8095,
+# preventing the Docker container (dustynv/faster-whisper, CUDA ctranslate2) from binding.
+# Canonical start: docker compose up -d adam-asr-whisperx
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-llm.service" /etc/systemd/system/adam-llm.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-vlm.service" /etc/systemd/system/adam-vlm.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-logviewer.service" /etc/systemd/system/adam-logviewer.service
@@ -92,7 +95,7 @@ install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-exhibition.target" /etc/systemd
 ensure_env_line "ADAM_LOG_VIEWER_PORT" "8083"
 
 systemctl daemon-reload
-systemctl enable adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service adam-vlm.service adam-logviewer.service adam-exhibition.target
+systemctl enable adam-orchestrator.service adam-tts-silero.service adam-llm.service adam-vlm.service adam-logviewer.service adam-exhibition.target
 
 echo "Installed Adam Chip systemd units."
 echo "Edit ${ENV_FILE} for device/service overrides."
@@ -119,7 +122,7 @@ Next commands:
 
   # Start services:
   sudo systemctl start adam-llm.service
-  sudo systemctl start adam-asr-whisperx.service
+  docker compose up -d adam-asr-whisperx   # ASR via Docker (CUDA ctranslate2)
   sudo systemctl start adam-tts-silero.service
   sudo systemctl start adam-orchestrator.service
   ${ROOT_DIR}/scripts/adam_service_status.sh
@@ -132,7 +135,7 @@ Logs:
   ${ROOT_DIR}/scripts/adam_service_logs.sh adam-llm.service
   ${ROOT_DIR}/scripts/adam_service_logs.sh adam-orchestrator.service
   ${ROOT_DIR}/scripts/adam_service_logs.sh adam-tts-silero.service
-  ${ROOT_DIR}/scripts/adam_service_logs.sh adam-asr-whisperx.service
+  docker logs adam-asr-whisperx
 
 Switch model without restart:
   sudo systemctl edit adam-llm
