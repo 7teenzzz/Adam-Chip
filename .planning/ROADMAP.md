@@ -910,7 +910,7 @@ Plans:
 
 **Requirement IDs:** FLORA-01 (ESP-движок), FLORA-02 (эндпоинт state), FLORA-03 (Jetson event-слой), FLORA-04 (RMS-синхронизация), FLORA-05 (Config-First параметры), FLORA-06 (вибро-политика)
 
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -924,7 +924,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 29-04-PLAN.md — RMS speech sync streamer (WAV→envelope→light, barge-in) [FLORA-04]
+- [x] 29-04-PLAN.md — RMS speech sync streamer (WAV→envelope→light, barge-in) [FLORA-04]
 
 ---
 
