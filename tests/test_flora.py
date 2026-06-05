@@ -85,9 +85,15 @@ class _FakeMCU:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
+        self.channel_calls: list[list[dict]] = []
+        self.value_max = 4095
 
     async def set_flora_state(self, state: str, params: dict | None = None):
         self.calls.append((state, dict(params or {})))
+        return None
+
+    async def set_channels(self, updates: list[dict]):
+        self.channel_calls.append([dict(u) for u in updates])
         return None
 
 
@@ -169,7 +175,49 @@ def test_vibro_silent_listening() -> None:
     assert params.get("vibro_enabled") is False
 
 
-@pytest.mark.skip(reason="filled in plan 04 (FLORA-04 WAV->RMS envelope)")
 def test_rms_envelope() -> None:
-    """FLORA-04: WAV -> RMS brightness envelope shape (uses _make_sine_wav)."""
-    raise NotImplementedError
+    """FLORA-04: WAV -> RMS brightness envelope shape (uses _make_sine_wav).
+
+    Drives the real WAV->RMS pipeline on FloraController:
+      - envelope is a list of floats in [0.0, 1.0]
+      - sample count ~= duration_ms / frame_interval_ms (within +-1)
+      - a louder WAV yields a higher mean level than a quieter WAV
+      - duties map into base_duty_pct..peak_duty_pct of value_max
+    """
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+
+    duration_s = 0.5
+    sample_rate = 24000
+    loud = _make_sine_wav(duration_s=duration_s, sample_rate=sample_rate, amplitude=18000)
+    quiet = _make_sine_wav(duration_s=duration_s, sample_rate=sample_rate, amplitude=3000)
+
+    levels = ctrl._rms_envelope(loud)
+
+    # Shape: list of floats normalized 0..1.
+    assert isinstance(levels, list) and levels, "envelope must be a non-empty list"
+    assert all(isinstance(x, float) for x in levels)
+    assert all(0.0 <= x <= 1.0 for x in levels)
+
+    # Count ~= duration / frame_interval (within +-1).
+    flora_cfg = Settings.load().section("flora")
+    frame_interval_ms = int(flora_cfg["speech"]["frame_interval_ms"])
+    expected = int((duration_s * 1000) / frame_interval_ms)
+    assert abs(len(levels) - expected) <= 1, (len(levels), expected)
+
+    # Louder WAV -> higher mean level (monotonic w.r.t. amplitude).
+    loud_mean = sum(levels) / len(levels)
+    quiet_levels = ctrl._rms_envelope(quiet)
+    quiet_mean = sum(quiet_levels) / len(quiet_levels)
+    assert loud_mean > quiet_mean
+
+    # Duty mapping stays within base..peak of value_max.
+    duties = ctrl._envelope_to_duties(levels)
+    assert len(duties) == len(levels)
+    value_max = mcu.value_max
+    base = int(round(value_max * flora_cfg["speech"]["base_duty_pct"] / 100.0))
+    peak = int(round(value_max * flora_cfg["speech"]["peak_duty_pct"] / 100.0))
+    assert all(base <= d <= peak for d in duties), (min(duties), max(duties), base, peak)
+
+    # Empty / short WAV returns [] gracefully.
+    assert ctrl._rms_envelope(b"") == []
