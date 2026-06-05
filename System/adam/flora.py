@@ -22,7 +22,10 @@ duties; the firmware converts via its gamma LUT.
 from __future__ import annotations
 
 import asyncio
+import audioop
+import io
 import logging
+import wave
 from typing import Any
 
 logger = logging.getLogger("adam.flora")
@@ -54,6 +57,21 @@ class FloraController:
         self._silent_states: set[str] = set(self._vibro_cfg.get("silent_states", ["attentive"]))
         self._crossfade_ms: int = int(self._cfg.get("crossfade_ms", 200))
         self._vibro_intensity_pct: int = int(self._vibro_cfg.get("intensity_pct", 30))
+
+        # Light/vibro channel masks (D-02) — all numbers Config-First.
+        self._light_channels: list[int] = list(self._cfg.get("light_channels", list(range(11))))
+        self._vibro_channels: list[int] = list(self._cfg.get("vibro_channels", [11, 12, 13, 14]))
+        # PCA9685 full-scale duty (12-bit). mcu_client clamps anyway, but the
+        # base..peak percent mapping needs the ceiling. Mirror mcu.channels.value_max.
+        self._value_max: int = int(getattr(self._mcu, "value_max", 4095))
+
+        # RMS speech-sync params (D-07/D-08) — flora.speech.* section.
+        self._speech_cfg: dict[str, Any] = self._cfg.get("speech", {}) or {}
+        self._frame_interval_ms: int = int(self._speech_cfg.get("frame_interval_ms", 80))
+        self._hdmi_offset_ms: int = int(self._speech_cfg.get("hdmi_latency_offset_ms", 150))
+        self._base_duty_pct: float = float(self._speech_cfg.get("base_duty_pct", 25))
+        self._peak_duty_pct: float = float(self._speech_cfg.get("peak_duty_pct", 90))
+        self._spark_probability: float = float(self._speech_cfg.get("spark_probability", 0.15))
 
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
         self._task: asyncio.Task[None] | None = None
@@ -194,3 +212,72 @@ class FloraController:
         if state in self._silent_states:
             params["vibro_enabled"] = False
         return params
+
+    # ── RMS speech sync (FLORA-04) ─────────────────────────────────────
+
+    def _rms_envelope(self, wav_bytes: bytes) -> list[float]:
+        """Downsample a TTS WAV into a 0..1 RMS brightness envelope (D-07/D-08).
+
+        Windows the PCM into `frame_interval_ms`-wide chunks (~12.5 fps at 80 ms),
+        takes `audioop.rms` per window, and normalizes by the sample-width FULL
+        SCALE (not the per-WAV peak) so absolute loudness is preserved — a quiet
+        utterance reads dimmer than a loud one, and a steady tone does not get
+        stretched to full brightness. Pure stdlib (`wave`+`audioop`, no numpy) —
+        matches the project idiom (mic_reader.py / inference.py). Empty/short/
+        undecodable WAV returns [] gracefully so the streamer simply does nothing.
+        """
+        if not wav_bytes:
+            return []
+        try:
+            with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
+                sampwidth = wav.getsampwidth()
+                framerate = wav.getframerate()
+                nchannels = wav.getnchannels()
+                nframes = wav.getnframes()
+                pcm = wav.readframes(nframes)
+        except (wave.Error, EOFError, OSError):
+            return []
+        if not pcm or framerate <= 0 or sampwidth <= 0:
+            return []
+        # Collapse to mono so the RMS reflects perceived loudness, not channel count.
+        if nchannels > 1:
+            try:
+                pcm = audioop.tomono(pcm, sampwidth, 0.5, 0.5)
+            except audioop.error:
+                pass
+        bytes_per_frame = sampwidth  # mono after tomono
+        window_frames = max(1, int(framerate * self._frame_interval_ms / 1000))
+        window_bytes = window_frames * bytes_per_frame
+        levels: list[int] = []
+        for start in range(0, len(pcm), window_bytes):
+            window = pcm[start : start + window_bytes]
+            if not window:
+                continue
+            try:
+                levels.append(audioop.rms(window, sampwidth))
+            except audioop.error:
+                levels.append(0)
+        if not levels:
+            return []
+        # Full-scale RMS for this sample width (2**(bits-1) - 1). Normalizing by
+        # this fixed ceiling keeps the envelope proportional to true loudness.
+        full_scale = float((1 << (8 * sampwidth - 1)) - 1)
+        if full_scale <= 0:
+            return [0.0 for _ in levels]
+        return [min(1.0, lvl / full_scale) for lvl in levels]
+
+    def _envelope_to_duties(self, levels: list[float]) -> list[int]:
+        """Map 0..1 envelope levels to PCA9685 duties in base..peak (D-08).
+
+        base_duty_pct (~25%) is the floor so lamps never go dark mid-utterance;
+        peak_duty_pct (~90%) is the crest. Percent duties; gamma is firmware-side.
+        """
+        base = int(round(self._value_max * self._base_duty_pct / 100.0))
+        peak = int(round(self._value_max * self._peak_duty_pct / 100.0))
+        lo, hi = (base, peak) if base <= peak else (peak, base)
+        span = hi - lo
+        duties: list[int] = []
+        for level in levels:
+            clamped = 0.0 if level < 0.0 else (1.0 if level > 1.0 else level)
+            duties.append(lo + int(round(span * clamped)))
+        return duties
