@@ -910,7 +910,7 @@ Plans:
 
 **Requirement IDs:** FLORA-01 (ESP-движок), FLORA-02 (эндпоинт state), FLORA-03 (Jetson event-слой), FLORA-04 (RMS-синхронизация), FLORA-05 (Config-First параметры), FLORA-06 (вибро-политика)
 
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 **Wave 1**
@@ -920,7 +920,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 29-03-PLAN.md — Jetson FloraController event layer + vibro policy + lifespan wiring [FLORA-03, FLORA-06]
+- [x] 29-03-PLAN.md — Jetson FloraController event layer + vibro policy + lifespan wiring [FLORA-03, FLORA-06]
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
