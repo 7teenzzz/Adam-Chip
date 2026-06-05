@@ -1738,12 +1738,10 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
     #   (a) it survives the muted_by_tts window without ESP buffer overflow
     #   (MicReader continuously drains the socket regardless of mute), and
     #   (b) audio_level events flow throughout the boot UI animation.
-    active = await mic_reader.wait_active(timeout=90.0)
-    if not active:
-        # Non-fatal: warmup TTS still proceeds. MicReader keeps retrying in
-        # the background; once it reaches stream_active, audio_level events
-        # start flowing. Mirrors legacy _wait_for_esp_ready 90 s budget.
-        event_log.append("mic_reader_active_timeout", {"timeout_sec": 90.0})
+    if voice_loop.mic_source == "esp32":
+        active = await mic_reader.wait_active(timeout=90.0)
+        if not active:
+            event_log.append("mic_reader_active_timeout", {"timeout_sec": 90.0})
 
     # N6: pre-synthesize filler WAV BEFORE warmup_wakeup. If we ran it after,
     # the streaming pipeline inside _warmup_wakeup would itself trigger
@@ -1785,11 +1783,13 @@ async def lifespan(_: FastAPI):
     await scene_worker.start()
     await session_watcher.start()
     await esp_audio_health.start()
-    # Phase 7 W-3: MicReader starts at lifespan-entry (analog to camera_reader).
-    # _orchestrated_startup will only AWAIT readiness via wait_active() before
-    # warmup begins. MicReader is the single emitter of `audio_level` events
-    # (D-10), so the legacy _audio_level_monitor was deleted in 07-03 Task 1.
-    await mic_reader.start()
+    # Phase 7 W-3: MicReader starts at lifespan-entry only when mic_source=="esp32".
+    # With mic_source=="local" (USB webcam / ALSA) MicReader must NOT start:
+    # it would endlessly retry the ESP32 stream and emit audio_level events with
+    # source="esp32_mono", poisoning the chat UI badge even though audio is
+    # captured via arecord. _run_local/_vad_loop own the local capture path.
+    if voice_loop.mic_source == "esp32":
+        await mic_reader.start()
     services_confirmed = False
     if runtime_state["mode"] == "exhibition" and settings.section("power").get("enforce_in_exhibition", True):
         status_payload = await _status_payload()
@@ -1805,10 +1805,11 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         await voice_loop.stop()
-        # voice_loop must release any in-flight mic_reader.get_chunk() awaits
-        # before MicReader cancels — otherwise the queue.get() consumer raises
-        # CancelledError back at voice_loop after it's already stopped.
-        await mic_reader.stop()
+        if voice_loop.mic_source == "esp32":
+            # voice_loop must release any in-flight mic_reader.get_chunk() awaits
+            # before MicReader cancels — otherwise the queue.get() consumer raises
+            # CancelledError back at voice_loop after it's already stopped.
+            await mic_reader.stop()
         await esp_audio_health.stop()
         await session_watcher.stop()
         # финальный коммит, если сессия осталась открытой
