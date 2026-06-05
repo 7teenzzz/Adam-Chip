@@ -67,7 +67,15 @@ enum class LatestFrameCopyStatus : uint8_t {
   CapacityTooSmall = 4
 };
 
+struct CameraI2cScanResult {
+  uint8_t count;
+  uint8_t addrs[8];
+  uint8_t pidAtAddr[8];   // register 0x0A (PID MSB)
+  uint8_t verAtAddr[8];   // register 0x0B (PID LSB / VER)
+};
+
 CameraModel getDetectedCameraModel();
+CameraI2cScanResult scanCameraI2cBus();
 bool initCamera();
 sensor_t *getCameraSensor();
 camera_fb_t *captureCameraFrame();

@@ -9,6 +9,17 @@
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <img_converters.h>
+#include <Wire.h>
+#include <driver/ledc.h>
+
+// SCCB (camera I2C) functions from esp-camera library — no public header, declared inline.
+extern "C" {
+  int  SCCB_Init(int pin_sda, int pin_scl);
+  void SCCB_Deinit(void);
+  uint8_t SCCB_Probe(void);
+  int  SCCB_Install_Device(uint8_t slv_addr);
+  uint8_t SCCB_Read(uint8_t slv_addr, uint8_t reg);
+}
 
 #include "../../config/AdamsConfig.h"
 #include "../core/BootDiagnostics.h"
@@ -618,16 +629,38 @@ bool reinitializeCamera(const CameraControlState &state, const char *reason) {
         cameraInitedDuringProbe = true;
       }
     } else {
-      // JPEG probe failed — try OV7670 (YUV422, 24 MHz XCLK)
+      // JPEG probe failed. While XCLK is still running, read PID directly via SCCB.
+      // This captures the actual sensor PID before deinit stops the clock.
+      {
+        SCCB_Init(SIOD_GPIO_NUM, SIOC_GPIO_NUM);
+        SCCB_Install_Device(0x21);
+        const uint8_t pidA = SCCB_Read(0x21, 0x0A);
+        const uint8_t pidB = SCCB_Read(0x21, 0x0B);
+        const uint8_t mid1 = SCCB_Read(0x21, 0x1C);  // Manufacturer ID high
+        const uint8_t mid2 = SCCB_Read(0x21, 0x1D);  // Manufacturer ID low
+        bootLogf("camera", "pid_probe 0x21: PID=0x%02x VER=0x%02x MID=0x%02x%02x",
+                 pidA, pidB, mid1, mid2);
+        portENTER_CRITICAL(&gRuntimeStateMux);
+        gRuntimeState.lastCameraInitEspErr = (static_cast<uint32_t>(pidA) << 8) | static_cast<uint32_t>(pidB);
+        portEXIT_CRITICAL(&gRuntimeStateMux);
+        SCCB_Deinit();
+      }
+      // May have partially initialized LEDC/SCCB; clean up before retry.
+      esp_camera_deinit();
+      // Try OV7670 (YUV422, 24 MHz XCLK)
       camera_config_t ov7Cfg = buildCameraConfig(state, CameraModel::OV7670);
-      if (esp_camera_init(&ov7Cfg) == ESP_OK) {
+      const esp_err_t ov7Err = esp_camera_init(&ov7Cfg);
+      portENTER_CRITICAL(&gRuntimeStateMux);
+      gRuntimeState.lastCameraInitEspErr = static_cast<uint32_t>(ov7Err);
+      portEXIT_CRITICAL(&gRuntimeStateMux);
+      if (ov7Err == ESP_OK) {
         sDetectedCameraModel = CameraModel::OV7670;
         cameraInitedDuringProbe = true;
       } else {
         if (sCameraMutex != nullptr) {
           xSemaphoreGive(sCameraMutex);
         }
-        bootLog("camera", "reinit failed: no compatible camera detected");
+        bootLogf("camera", "reinit failed: no compatible camera detected (ov7_err=0x%x)", ov7Err);
         portENTER_CRITICAL(&gRuntimeStateMux);
         gRuntimeState.cameraReady = false;
         portEXIT_CRITICAL(&gRuntimeStateMux);
@@ -641,6 +674,9 @@ bool reinitializeCamera(const CameraControlState &state, const char *reason) {
   if (!cameraInitedDuringProbe) {
     camera_config_t config = buildCameraConfig(state, sDetectedCameraModel);
     const esp_err_t err = esp_camera_init(&config);
+    portENTER_CRITICAL(&gRuntimeStateMux);
+    gRuntimeState.lastCameraInitEspErr = static_cast<uint32_t>(err);
+    portEXIT_CRITICAL(&gRuntimeStateMux);
     if (err != ESP_OK) {
       if (sCameraMutex != nullptr) {
         xSemaphoreGive(sCameraMutex);
@@ -1077,4 +1113,49 @@ void resetBuiltInCameraPresets() {
 
 CameraModel getDetectedCameraModel() {
   return sDetectedCameraModel;
+}
+
+CameraI2cScanResult scanCameraI2cBus() {
+  CameraI2cScanResult result = {};
+  // Use SCCB (esp-camera's own I2C layer) + LEDC XCLK — same path as camera init.
+  // Start XCLK first so the sensor's SCCB interface becomes active.
+  ledc_timer_config_t ledcTimer = {};
+  ledcTimer.speed_mode = LEDC_LOW_SPEED_MODE;
+  ledcTimer.timer_num  = LEDC_TIMER_1;
+  ledcTimer.duty_resolution = LEDC_TIMER_1_BIT;
+  ledcTimer.freq_hz    = 24000000;
+  ledcTimer.clk_cfg    = LEDC_AUTO_CLK;
+  ledc_timer_config(&ledcTimer);
+  ledc_channel_config_t ledcCh = {};
+  ledcCh.speed_mode = LEDC_LOW_SPEED_MODE;
+  ledcCh.channel    = LEDC_CHANNEL_1;
+  ledcCh.timer_sel  = LEDC_TIMER_1;
+  ledcCh.gpio_num   = XCLK_GPIO_NUM;
+  ledcCh.duty       = 1;
+  ledcCh.hpoint     = 0;
+  ledc_channel_config(&ledcCh);
+  delay(50);  // allow sensor PLL to stabilize
+
+  // sccb-ng requires SCCB_Install_Device before SCCB_Read — scan known OV addresses.
+  const uint8_t addrsToProbe[] = {0x21, 0x3C, 0x30, 0x36, 0x3D, 0x42, 0x78};
+  for (uint8_t i = 0; i < sizeof(addrsToProbe) && result.count < 8; i++) {
+    const uint8_t addr = addrsToProbe[i];
+    if (SCCB_Init(SIOD_GPIO_NUM, SIOC_GPIO_NUM) != 0) continue;
+    SCCB_Install_Device(addr);
+    const uint8_t r0a = SCCB_Read(addr, 0x0A);
+    const uint8_t r0b = SCCB_Read(addr, 0x0B);
+    const uint8_t r00 = SCCB_Read(addr, 0x00);
+    bootLogf("camera", "sccb_probe 0x%02x: r0A=0x%02x r0B=0x%02x r00=0x%02x", addr, r0a, r0b, r00);
+    SCCB_Deinit();
+
+    // 0xFF = NACK (no device). Any other value means device responded.
+    if (r0a != 0xFF || r0b != 0xFF || r00 != 0xFF) {
+      result.addrs[result.count] = addr;
+      result.pidAtAddr[result.count] = r0a;
+      result.verAtAddr[result.count] = r0b;
+      result.count++;
+    }
+  }
+  ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+  return result;
 }

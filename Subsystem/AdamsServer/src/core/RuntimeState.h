@@ -93,6 +93,7 @@ struct RuntimeState {
   char activeScene[32] = "";
   char lastCameraReinitReason[32] = "boot";
   char lastStreamError[32] = "none";
+  volatile uint32_t lastCameraInitEspErr = 0;
   char lastSoundName[16] = "";
   char lastSoundResult[16] = "idle";
   char otaLastError[64] = "";

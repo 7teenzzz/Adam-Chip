@@ -313,6 +313,14 @@ void appendCameraJson(String &json) {
   json += (detectedModel == CameraModel::OV7670) ? "OV7670" :
           (detectedModel == CameraModel::OV5640) ? "OV5640" : "unknown";
   json += "\"";
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  const uint32_t lastCamEspErr = gRuntimeState.lastCameraInitEspErr;
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+  char camErrBuf[16];
+  snprintf(camErrBuf, sizeof(camErrBuf), "0x%x", lastCamEspErr);
+  json += ",\"last_cam_esp_err\":\"";
+  json += camErrBuf;
+  json += "\"";
   json += ",\"capabilities\":{";
   json += "\"framesize\":{\"supported\":true,\"min\":";
   json += String(FRAMESIZE_QQVGA);
@@ -2060,6 +2068,24 @@ esp_err_t audioClipHandler(httpd_req_t *req) {
   return result;
 }
 
+esp_err_t cameraScanHandler(httpd_req_t *req) {
+  const CameraI2cScanResult scan = scanCameraI2cBus();
+  String json;
+  json.reserve(256);
+  json = "{\"devices_found\":";
+  json += String(scan.count);
+  json += ",\"devices\":[";
+  for (uint8_t i = 0; i < scan.count; i++) {
+    if (i > 0) json += ",";
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"addr\":\"0x%02x\",\"pid_0x0A\":\"0x%02x\",\"ver_0x0B\":\"0x%02x\"}",
+             scan.addrs[i], scan.pidAtAddr[i], scan.verAtAddr[i]);
+    json += buf;
+  }
+  json += "]}";
+  return sendJson(req, json);
+}
+
 esp_err_t cameraStatusHandler(httpd_req_t *req) {
   String json;
   json.reserve(1024);
@@ -2877,6 +2903,7 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_uri_t cameraPresetSaveUri = makeHttpUri("/api/camera/preset/save", HTTP_POST, cameraPresetSaveHandler);
   httpd_uri_t cameraPresetDeleteUri = makeHttpUri("/api/camera/preset/delete", HTTP_POST, cameraPresetDeleteHandler);
   httpd_uri_t cameraPresetResetDefaultsUri = makeHttpUri("/api/camera/preset/resetdefaults", HTTP_POST, cameraPresetResetDefaultsHandler);
+  httpd_uri_t cameraScanUri = makeHttpUri("/api/camera/scan", HTTP_GET, cameraScanHandler);
   httpd_uri_t captureUri = makeHttpUri("/capture", HTTP_GET, captureHandler);
   httpd_uri_t wsUri = makeWebSocketUri("/ws", wsHandler);
   httpd_uri_t audioMovedUri = makeHttpUri("/audio", HTTP_GET, audioMovedHandler);
@@ -2919,6 +2946,7 @@ void registerControlHandlers(httpd_handle_t server) {
   httpd_register_uri_handler(server, &cameraPresetSaveUri);
   httpd_register_uri_handler(server, &cameraPresetDeleteUri);
   httpd_register_uri_handler(server, &cameraPresetResetDefaultsUri);
+  httpd_register_uri_handler(server, &cameraScanUri);
   httpd_register_uri_handler(server, &captureUri);
   httpd_register_uri_handler(server, &wsUri);
   httpd_register_uri_handler(server, &audioMovedUri);
