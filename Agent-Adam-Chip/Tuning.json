@@ -136,27 +136,32 @@
       "unease": {
         "keywords": ["помнишь", "прошлое", "память", "до", "раньше", "тогда"],
         "conditions": {},
-        "priority": 10
+        "priority": 10,
+        "src": "memory"
       },
       "sharp": {
         "keywords": ["программа", "робот", "притворяешься", "просто код", "не настоящий", "искусственный"],
         "conditions": {},
-        "priority": 10
+        "priority": 10,
+        "src": "challenge"
       },
       "warm": {
         "keywords": [],
         "conditions": {"utterance_words_min": 20, "visitor_tone": ["curious", "sad"]},
-        "priority": 5
+        "priority": 5,
+        "src": "contact"
       },
       "calm": {
         "keywords": [],
         "conditions": {"rare_silence": true, "after_warm": true},
-        "priority": 1
+        "priority": 1,
+        "src": "decay"
       },
       "curious": {
         "keywords": [],
         "conditions": {"no_match": true},
-        "priority": 0
+        "priority": 0,
+        "src": ""
       }
     },
     "intention_triggers": {

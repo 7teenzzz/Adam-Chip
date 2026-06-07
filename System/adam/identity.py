@@ -146,6 +146,7 @@ class AIIMRuntimeState:
     """Per-session AIIM container. Holds current emotion, modulated vector, intentions."""
 
     emotion: EmotionState = "curious"
+    emotion_src: str = ""  # source label from the last emotion transition ("memory", "challenge", …)
     vector: IdentityVector = field(default_factory=lambda: IdentityVector(weights={}))
     intentions: IntentionState = field(default_factory=IntentionState)
     turn: int = 0
@@ -188,17 +189,23 @@ class AIIMRuntimeState:
 
         parts: list[str] = []
 
-        # Emotion line
-        parts.append(f"emotion={self.emotion}")
+        # Emotion line with optional source annotation
+        emotion_line = f"emotion={self.emotion}"
+        if self.emotion_src:
+            emotion_line += f"|src={self.emotion_src}"
+        parts.append(emotion_line)
 
         # Changed aspects (only those that shifted meaningfully from base)
+        # Show direction arrow (↑/↓) so LLM understands trajectory, not just value
         base_weights = tuning.base_weights
         threshold = tuning.aspect_change_threshold
         changed: list[str] = []
         for aspect, current in sorted(self.vector.weights.items()):
             base = base_weights.get(aspect, current)
-            if abs(current - base) >= threshold and aspect not in IdentityVector.LOCKED:
-                changed.append(f"{aspect}={current:.2f}")
+            delta = current - base
+            if abs(delta) >= threshold and aspect not in IdentityVector.LOCKED:
+                arrow = "↑" if delta > 0 else "↓"
+                changed.append(f"{aspect}={current:.2f}{arrow}")
         if changed:
             parts[0] += ", " + ", ".join(changed)
 
@@ -235,22 +242,28 @@ class EmotionMachine:
         silence_s: float,
         word_count: int,
         tuning: "IdentityTuning",
-    ) -> EmotionState:
-        """Compute next emotion state.
+    ) -> tuple[EmotionState, str]:
+        """Compute next emotion state and its source label.
+
+        Returns (emotion, src) where src is one of: "memory", "challenge",
+        "contact", "decay", "" (empty = no transition / default).
 
         Priority order (highest first):
-        1. Silence decay — if silence_s > threshold → decay_target (default: curious)
+        1. Silence decay — if silence_s > threshold → decay_target, src="decay"
         2. Keyword transitions sorted by priority DESC
         3. Condition-based transitions (no_match, has_question, utterance_words_min)
-        4. Persistence — no match → keep current state
+        4. Persistence — no match → keep current state, src=""
 
         calm state is rare: only fires after warm + long silence.
         """
+        def _src(rule: "Any") -> str:
+            return getattr(rule, "src", "") or ""
+
         # Silence decay
         if silence_s > tuning.decay_silence_threshold_seconds:
             if current == "warm":
-                return "calm"  # brief calm after genuine contact
-            return tuning.decay_target_emotion
+                return "calm", "decay"
+            return tuning.decay_target_emotion, "decay"  # type: ignore[return-value]
 
         text_lower = transcript.lower()
 
@@ -268,7 +281,7 @@ class EmotionMachine:
             # Keyword match
             if rule.keywords:
                 if any(kw in text_lower for kw in rule.keywords):
-                    return _to_emotion(target_name)
+                    return _to_emotion(target_name), _src(rule)
 
             # Condition match
             conds = rule.conditions
@@ -278,18 +291,18 @@ class EmotionMachine:
                 # calm only fires after genuine silence, not active utterances
                 if conds.get("rare_silence") and conds.get("after_warm"):
                     if current == "warm" and silence_s >= 10.0:
-                        return "calm"
+                        return "calm", _src(rule)
                 if "utterance_words_min" in conds and "visitor_tone" in conds:
                     min_words = conds["utterance_words_min"]
                     tones = conds["visitor_tone"]
                     if word_count >= min_words and visitor_tone in tones:
-                        return _to_emotion(target_name)
+                        return _to_emotion(target_name), _src(rule)
                 if conds.get("has_question") and "?" in transcript:
-                    return _to_emotion(target_name)
+                    return _to_emotion(target_name), _src(rule)
 
         # Persistence: no trigger → keep current state (do not reset to default).
         # "curious" is achieved via session start default or silence decay, not via no_match.
-        return current
+        return current, ""
 
 
 def _to_emotion(name: str) -> EmotionState:

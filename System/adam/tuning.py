@@ -170,6 +170,7 @@ class EmotionTransitionRule(BaseModel):
     keywords: List[str] = Field(default_factory=list)
     conditions: Dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(5, ge=0, le=100)
+    src: str = ""  # semantic source label: "memory", "challenge", "contact", "decay", ""
 
 
 class IntentionTriggerConfig(BaseModel):
@@ -264,23 +265,28 @@ class IdentityTuning(BaseModel):
         "unease": EmotionTransitionRule(
             keywords=["помнишь", "прошлое", "память", "до", "раньше", "тогда"],
             priority=10,
+            src="memory",
         ),
         "sharp": EmotionTransitionRule(
             keywords=["программа", "робот", "притворяешься", "просто код",
                       "не настоящий", "искусственный"],
             priority=10,
+            src="challenge",
         ),
         "warm": EmotionTransitionRule(
             conditions={"utterance_words_min": 20, "visitor_tone": ["curious", "sad"]},
             priority=5,
+            src="contact",
         ),
         "calm": EmotionTransitionRule(
             conditions={"rare_silence": True, "after_warm": True},
             priority=1,
+            src="decay",
         ),
         "curious": EmotionTransitionRule(
             conditions={"no_match": True},
             priority=0,
+            src="",
         ),
     })
 

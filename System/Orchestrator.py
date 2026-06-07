@@ -2588,10 +2588,13 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             silence_s = max(0.0, now_ts - float(session_state.get("last_turn_at") or now_ts))
             word_count = len(transcript.split())
             visitor_tone = _detect_visitor_tone(transcript, word_count)
-            aiim_state.emotion = _emotion_machine.transition(
+            new_emotion, emotion_src = _emotion_machine.transition(
                 aiim_state.emotion, transcript, visitor_tone,
                 silence_s, word_count, tuning.identity,
             )
+            if new_emotion != aiim_state.emotion or emotion_src:
+                aiim_state.emotion_src = emotion_src
+            aiim_state.emotion = new_emotion
             aiim_state.intentions = _intention_tracker.evaluate(
                 transcript, aiim_state.intentions, aiim_state.emotion,
                 aiim_state.turn, tuning.identity,

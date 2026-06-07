@@ -111,48 +111,53 @@ def test_parser_locked_intact():
 
 
 def test_emotion_unease(emotion_machine, tuning):
-    result = emotion_machine.transition(
+    emotion, src = emotion_machine.transition(
         "curious", "что ты помнишь о прошлом?", "neutral", 0.0, 7, tuning
     )
-    assert result == "unease"
+    assert emotion == "unease"
+    assert src == "memory"
 
 
 def test_emotion_sharp(emotion_machine, tuning):
-    result = emotion_machine.transition(
+    emotion, src = emotion_machine.transition(
         "curious", "ты просто программа, притворяешься", "neutral", 0.0, 5, tuning
     )
-    assert result == "sharp"
+    assert emotion == "sharp"
+    assert src == "challenge"
 
 
 def test_emotion_curious_from_death(emotion_machine, tuning):
-    result = emotion_machine.transition(
+    emotion, _ = emotion_machine.transition(
         "curious", "что ты думаешь о смерти и трансформации?", "neutral", 0.0, 8, tuning
     )
     # Death keywords not in sharp list, no unease keywords — should stay curious
-    assert result in ("curious", "unease")  # "трансформация" not in unease_keywords by default
+    assert emotion in ("curious", "unease")  # "трансформация" not in unease_keywords by default
 
 
 def test_emotion_persistence_no_trigger(emotion_machine, tuning):
     # No keywords → keep current state
     current = "warm"
-    result = emotion_machine.transition(current, "просто привет", "neutral", 0.0, 2, tuning)
-    assert result == "warm"  # persistence: no reset
+    emotion, src = emotion_machine.transition(current, "просто привет", "neutral", 0.0, 2, tuning)
+    assert emotion == "warm"  # persistence: no reset
+    assert src == ""  # no transition, no source
 
 
 def test_emotion_decay_to_curious(emotion_machine, tuning):
     # Long silence → decay to decay_target_emotion (curious by default)
-    result = emotion_machine.transition(
+    emotion, src = emotion_machine.transition(
         "sharp", "", "neutral", 70.0, 0, tuning
     )
-    assert result == tuning.decay_target_emotion  # "curious"
+    assert emotion == tuning.decay_target_emotion  # "curious"
+    assert src == "decay"
 
 
 def test_emotion_decay_warm_to_calm(emotion_machine, tuning):
     # Silence after warm → calm
-    result = emotion_machine.transition(
+    emotion, src = emotion_machine.transition(
         "warm", "", "neutral", 70.0, 0, tuning
     )
-    assert result == "calm"
+    assert emotion == "calm"
+    assert src == "decay"
 
 
 # ---------------------------------------------------------------------------
