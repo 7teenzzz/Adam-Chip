@@ -288,15 +288,6 @@ def _to_emotion(name: str) -> EmotionState:
 # IntentionTracker
 # ---------------------------------------------------------------------------
 
-# Patterns for become_unreadable — context phrases where someone explains Adam to another
-_UNREADABLE_PATTERNS = [
-    re.compile(r"он такой", re.IGNORECASE),
-    re.compile(r"ты хочешь сказать", re.IGNORECASE),
-    re.compile(r"то есть ты", re.IGNORECASE),
-    re.compile(r"это значит что", re.IGNORECASE),
-]
-
-
 class IntentionTracker:
     """Evaluates intention activations from transcript per turn.
 
@@ -332,16 +323,15 @@ class IntentionTracker:
                 cooldown = cfg.get("cooldown_turns", 5) if isinstance(cfg, dict) else getattr(cfg, "cooldown_turns", 5)
                 new_state.set_cooldown(intention_name, cooldown)
 
-        # become_unreadable: multi-word regex patterns
+        # become_unreadable: keyword phrases from tuning (configurable via Tuning.json)
         if not new_state.on_cooldown("become_unreadable"):
             cfg = triggers.get("become_unreadable")
             if cfg is not None:
-                for pat in _UNREADABLE_PATTERNS:
-                    if pat.search(transcript):
-                        new_state.become_unreadable = True
-                        cooldown = cfg.get("cooldown_turns", 15) if isinstance(cfg, dict) else getattr(cfg, "cooldown_turns", 15)
-                        new_state.set_cooldown("become_unreadable", cooldown)
-                        break
+                keywords = cfg.get("keywords", []) if isinstance(cfg, dict) else getattr(cfg, "keywords", [])
+                if any(kw in text_lower for kw in keywords):
+                    new_state.become_unreadable = True
+                    cooldown = cfg.get("cooldown_turns", 15) if isinstance(cfg, dict) else getattr(cfg, "cooldown_turns", 15)
+                    new_state.set_cooldown("become_unreadable", cooldown)
 
         # signal_void: probabilistic, independent of transcript content
         if not new_state.on_cooldown("signal_void"):

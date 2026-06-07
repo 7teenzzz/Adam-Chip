@@ -284,41 +284,41 @@ async def _commit_session_locked(reason: str) -> None:
         session_state["aiim_state"] = None
         return
     tuning = tuning_store.current()
-    # AIIM: apply drift and persist before episode finalize
+    # Finalize episode first so AIIM drift gets real salience (not a stub)
+    episode = acc.finalize(
+        weights=tuning.memory.episodic.weights,
+        duration_normalize_seconds=tuning.memory.episodic.duration_normalize_seconds,
+    )
+    # AIIM: apply drift and persist using real episode salience
     aiim_state: AIIMRuntimeState | None = session_state.get("aiim_state")  # type: ignore[assignment]
     if aiim_state is not None and tuning.identity.enabled:
         try:
             drift_record = session_state.get("_drift_record")
             if drift_record is not None:
                 emotion_dist = aiim_state.emotion_distribution()
-                episode_stub_salience = 0.5  # approximate; real salience computed below
+                real_salience = episode.salience
+                session_type = _drift_accumulator.classify_session(
+                    emotion_dist, real_salience, aiim_state.turn
+                )
                 updated_record = _drift_accumulator.apply_session(
-                    emotion_dist, episode_stub_salience, aiim_state.turn,
+                    emotion_dist, real_salience, aiim_state.turn,
                     drift_record, tuning.identity,
                 )
                 _drift_accumulator.save(
                     updated_record,
                     Path(settings.data_dir),
                     log_entry=_drift_accumulator.build_log_entry(
-                        _drift_accumulator.classify_session(
-                            emotion_dist, episode_stub_salience, aiim_state.turn
-                        ),
-                        episode_stub_salience, aiim_state.turn,
+                        session_type,
+                        real_salience, aiim_state.turn,
                         _drift_accumulator.compute_delta(
-                            _drift_accumulator.classify_session(
-                                emotion_dist, episode_stub_salience, aiim_state.turn
-                            ),
-                            episode_stub_salience, tuning.identity,
+                            session_type,
+                            real_salience, tuning.identity,
                         ),
                     ),
                 )
         except Exception as _exc:
             event_log.append("aiim_drift_error", {"error": str(_exc)})
     session_state["aiim_state"] = None
-    episode = acc.finalize(
-        weights=tuning.memory.episodic.weights,
-        duration_normalize_seconds=tuning.memory.episodic.duration_normalize_seconds,
-    )
     write = should_record(episode, acc, tuning.memory.episodic)
     if write:
         try:
@@ -2475,7 +2475,6 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
                     _cur_vec = _drift_accumulator.apply_to_vector(_base_vec, _drift_rec, _identity_tuning)
                     session_state["aiim_state"] = AIIMRuntimeState(vector=_cur_vec)
                     session_state["_drift_record"] = _drift_rec
-                    session_state["_base_vector"] = _base_vec
                 except Exception as _exc:
                     event_log.append("aiim_init_error", {"error": str(_exc)})
                     session_state["aiim_state"] = None
@@ -2575,9 +2574,8 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
                 transcript, aiim_state.intentions, aiim_state.emotion,
                 aiim_state.turn, tuning.identity,
             )
-            base_vec: IdentityVector = session_state.get("_base_vector") or aiim_state.vector
             aiim_state.vector = _aspect_modulator.modulate(
-                base_vec, aiim_state.emotion, tuning.identity,
+                aiim_state.vector, aiim_state.emotion, tuning.identity,
             )
             identity_block = aiim_state.to_ctx_block(tuning.identity)
             aiim_state.record_turn()
