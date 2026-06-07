@@ -70,7 +70,7 @@ See @README.md for project overview and @System/Config.json + @System/Config.sch
 - `docs/` — protocols, runbooks, branch templates
 - `data/` — runtime state (memory.sqlite3, events.jsonl, sounds)
 - `Engineering/` — consolidation & analysis tools
-- `Agent Adam Chip/` — persona (Identity, Lore, Abilities, Tuning)
+- `Agent-Adam-Chip/` — persona (Identity, Lore, Abilities, Tuning)
 - `tests/` — automated test suites
 - `.planning/` — GSD artifacts (ROADMAP.md, STATE.md, phases/*)
 
@@ -178,15 +178,17 @@ git config core.hooksPath .githooks
 chmod +x .githooks/*
 ```
 
-После этого `post-checkout` автоматически создаст `BRANCH.md` при переходе на новую ветку, а `post-commit` будет перестраивать graphy-граф при изменениях в `System/`.
+После этого `post-checkout` автоматически создаст `BRANCH.md` при переходе на новую ветку, а `post-commit` будет перестраивать graphify-граф при изменениях в `System/`.
 
-Первый запуск графа (после установки `graphify install`):
+Первый запуск графа (после установки `pip install graphifyy && graphify install`):
 
 ```bash
 # Linux/macOS — разрешить исполнение новых хуков:
 chmod +x .githooks/post-commit
-# Затем в Claude Code:
-# /graphify System/ --mode deep
+# Собрать граф из терминала:
+graphify update System/
+# Или через Claude Code skill:
+# /gsd-graphify build
 ```
 
 ---
