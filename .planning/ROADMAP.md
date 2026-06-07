@@ -107,7 +107,7 @@ Plans:
 
 - `Subsystem/AdamsServer/CLAUDE.md` — ESP32 tech context: PlatformIO, запрещённые файлы, OTA, IP, порты
 - `System/adam/CLAUDE.md` — карта 23 модулей, `Settings.load()` как единственный entrypoint, service adapter pattern
-- `Agent Adam Chip/CLAUDE.md` — порядок загрузки персоны, правила редактирования
+- `Agent-Adam-Chip/CLAUDE.md` — порядок загрузки персоны, правила редактирования
 - `.githooks/post-checkout` — scaffold BRANCH.md при создании не-main ветки
 - `.githooks/pre-commit` — warning если BRANCH.md отсутствует на не-main ветке
 - root `CLAUDE.md` Quick start обновлён: команда `git config core.hooksPath .githooks`
@@ -864,7 +864,7 @@ Plans:
 
 ---
 
-### Phase 7AA: Branch Merge — Identity_Tunning → dynamic-aiim
+### Phase 7AA: Branch Merge — Identity_Tunning → dynamic-aiim ✅ ЗАВЕРШЕНА (2026-06-07)
 
 **Цель:** Влить накопленные изменения ветки `Identity_Tunning` в `dynamic-aiim` до мёржа в `main`.
 Без этого dynamic-aiim теряет: исправления персоны, путей, камеры, warmup-fix и systemd.
@@ -926,9 +926,10 @@ Dynamic-aiim добавила: полный AIIM wiring per-turn.
 **Затрагивает:** `Agent Adam Chip/About/*`, `System/Config.json`, `System/adam/config.py`,
 `System/Orchestrator.py`, `Subsystem/AdamsServer/src/camera/*`, `deploy/systemd/*`, `BRANCH.md`
 
-**Условие завершения:** `git diff Identity_Tunning..dynamic-aiim` показывает только
-AIIM-специфичные файлы (`identity.py`, `identity_drift.py`, `tests/test_identity.py`) и
-нет конфликтующих версий persona-файлов. Все тесты зелёные.
+**Результат (2026-06-07):** Мёрж выполнен. `Agent-Adam-Chip/` (дефис) — единственная директория персоны.
+Config.json persona_paths обновлены. Persona text patches применены. Конфликты разрешены:
+tuning.py и Tuning.json — dynamic-aiim wins; Orchestrator.py — auto-merge (warmup skip + AIIM wiring совместимы).
+29/29 тестов зелёные. Warmup skip fix, camera dual-path, VLM autostart — все из Identity_Tunning.
 
 **Приоритет:** Выполнить ДО Phase 7A — 7A работает на стабилизированной ветке.
 
@@ -941,23 +942,28 @@ AIIM-специфичные файлы (`identity.py`, `identity_drift.py`, `tes
 
 **Решения (зафиксированы 2026-06-07):**
 
-- Default emotion → **`curious`** (подтверждён; Identity.md будет поправлен: "любопытство (по умолчанию)")
+- Default emotion → **`curious`** ✅ применён (Identity.md исправлен: "любопытство (по умолчанию)")
 - Канонический AIIM-профиль → **`Identity.md`** (lo=Δ0.70, Ac-Or — "открытый, идёт к людям")
-- `Personality_AIIM.md` → пометить как `[ARCHIVED — superseded by Identity.md]`
+- `Personality_AIIM.md` → пометить как `[ARCHIVED — superseded by Identity.md]` (ещё не сделано)
 
-**Дефекты к устранению:**
+**Выполнено (2026-06-07) в рамках первичного патча:**
 
-- **Salience заглушка:** drift всегда применяется с 0.5 — нужна реальная salience из `acc.finalize()`; требует перестройки session-close: сначала `acc.finalize()`, потом `apply_session()`
-- **Нет внутрисессионного накопления:** `AspectModulator` каждый turn стартует с `_base_vector`, не с предыдущего модулированного — 20 "warm" turn'ов = 1 "warm" turn; нужен rolling vector внутри сессии
+- ✅ **Salience заглушка:** `acc.finalize()` перемещён перед drift-блоком; drift использует `episode.salience`
+- ✅ **Нет внутрисессионного накопления:** `AspectModulator` теперь стартует с `aiim_state.vector` (предыдущий turn), не с `_base_vector`; modulation накапливается внутри сессии
+- ✅ **`classify_session` вызывается дважды:** кешируется в `session_type`, вызывается один раз
+- ✅ **`_UNREADABLE_PATTERNS` захардкожен:** убраны hardcoded regex; `become_unreadable` читает keywords из `tuning.intention_triggers` (конфигурируется в Tuning.json)
+
+**Остаток к реализации:**
+
 - **`warm` заблокирован для новых зрителей:** зависит от `acc.tone_visitor` (эпизодическая память) — нужен inline tone-detector из transcript (длина + вопросительные конструкции + тематические слова)
 - **Однонаправленный drift:** аспекты только растут к потолку; нужны деградационные дельты для `void` (lo убывает, at убывает)
-- **Два мёртвых флага:** `signal_void` и `become_unreadable` трекируются, но нигде не используются — нужно behavioural consequence (см. обсуждение)
-- **Формула AIIM парсится но план/уровень/состояние выбрасываются:** `Ac vs Pa` и `Or vs Ch` не используются в `AspectModulator`; `Ac-Ch` аспекты должны модулироваться иначе чем `Pa-Or`
-- **`classify_session` вызывается дважды:** дублирующий вызов в session-close блоке
+- **Два мёртвых флага:** `signal_void` и `become_unreadable` трекируются, но behavioural consequence не реализовано
+- **Formula Ac vs Pa игнорируется:** `Or vs Ch` не используются в `AspectModulator`; `Ac-Ch` аспекты должны модулироваться иначе чем `Pa-Or`
+- **`Personality_AIIM.md`** → пометить `[ARCHIVED]`
 
-**Затрагивает:** `identity.py`, `identity_drift.py`, `tuning.py`, `Orchestrator.py` (session close), `Identity.md` (текст дефолта), `Personality_AIIM.md` (архивирование)
+**Затрагивает:** `identity.py`, `identity_drift.py`, `tuning.py`, `Orchestrator.py` (session close), `Agent-Adam-Chip/Engineering/Personality_AIIM.md`
 
-**Условие запуска:** `dynamic-aiim` смёрджена в `main`; Jetson стабилен ≥1 неделя.
+**Условие запуска:** 7AA завершена (ветка стабилизирована). Тесты зелёные. Полный деплой на Jetson перед merge в main.
 
 ---
 
@@ -992,7 +998,7 @@ intention=relive_death          ← только injectable-интенции
 - **Объём:** ≥30 диалоговых turn'ов на версию, два оценщика (человек + LLM-judge)
 - **Инструментация:** лог `turn_id → identity_block_used → judge_score` в `drift_log.jsonl`
 
-**Затрагивает:** `identity.py` (to_ctx_block, src-аннотация), `tuning.py` (EmotionTransitionRule + src поле), `Agent Adam Chip/About/System.md` (расписать per-emotion инструкции), `Tuning.json`
+**Затрагивает:** `identity.py` (to_ctx_block, src-аннотация), `tuning.py` (EmotionTransitionRule + src поле), `Agent-Adam-Chip/About/System.md` (расписать per-emotion инструкции), `Tuning.json`
 
 **Условие запуска:** Phase 7A завершена; тест запускается до полной реализации 7B.
 
@@ -1048,7 +1054,7 @@ Trend формируется при total_sessions кратном N (напри�
 - Автономные источники никогда не переопределяют keyword-триггер — они только модифицируют вероятности
 - Все три источника независимо включаются/выключаются в Tuning.json (`environment_driver.enabled`, `autonomous_intentions.enabled`, `historical_arc.enabled`)
 
-**Затрагивает:** `identity.py` (EmotionMachine + новый EnvironmentDriver, новые intention rules), `identity_drift.py` (extract_trend, trend_line в DriftRecord), `Orchestrator.py` (передача sensors dict в AIIM per-turn), `tuning.py` (новые модели конфига), `Tuning.json`, `Agent Adam Chip/About/System.md`
+**Затрагивает:** `identity.py` (EmotionMachine + новый EnvironmentDriver, новые intention rules), `identity_drift.py` (extract_trend, trend_line в DriftRecord), `Orchestrator.py` (передача sensors dict в AIIM per-turn), `tuning.py` (новые модели конфига), `Tuning.json`, `Agent-Adam-Chip/About/System.md`
 
 **Условие запуска:** Phase 7A + 7B завершены; требует дизайн-сессии по sensors-диапазонам на реальном Jetson.
 
