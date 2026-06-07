@@ -118,7 +118,10 @@
         15
       ],
       "esp_stream_restart_after_fails": 5,
-      "esp_stream_restart_cooldown_sec": 120.0
+      "esp_stream_restart_cooldown_sec": 120.0,
+      "vad_onset": 0.3,
+      "vad_offset": 0.2,
+      "logprob_threshold": -0.8
     },
     "tts": {
       "provider": "silero",
