@@ -91,14 +91,14 @@ powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_com
 
 ```bash
 # С Jetson — проверить что стрим отдаёт данные
-curl --noproxy '*' -v http://192.168.0.171:81/audio --max-time 5 | xxd | head -20
+curl --noproxy '*' -v http://10.10.10.171:81/audio --max-time 5 | xxd | head -20
 # Ожидаем: 52 49 46 46 ... (RIFF WAV header), затем поток PCM
 
 # Статус ESP32
-curl --noproxy '*' -fsS http://192.168.0.171/api/status | python3 -m json.tool
+curl --noproxy '*' -fsS http://10.10.10.171/api/status | python3 -m json.tool
 
 # Проверить канал захвата
-curl --noproxy '*' -fsS http://192.168.0.171/api/audio | python3 -m json.tool
+curl --noproxy '*' -fsS http://10.10.10.171/api/audio | python3 -m json.tool
 # Ожидаем: capture.left_peak > 0, capture.right_peak > 0, signal_state = "active"
 ```
 
@@ -106,19 +106,19 @@ curl --noproxy '*' -fsS http://192.168.0.171/api/audio | python3 -m json.tool
 
 ```bash
 # Установить стерео профиль
-curl --noproxy '*' -X POST http://192.168.0.171/api/audio \
+curl --noproxy '*' -X POST http://10.10.10.171/api/audio \
   -H 'Content-Type: application/json' \
   -d '{"profile": "inmp441_philips32_stereo"}'
 
 # Проверить отклик: оба канала активны
-curl --noproxy '*' -fsS http://192.168.0.171/api/audio | python3 -m json.tool
+curl --noproxy '*' -fsS http://10.10.10.171/api/audio | python3 -m json.tool
 
 # Тест левого канала отдельно
-curl --noproxy '*' -X POST http://192.168.0.171/api/audio \
+curl --noproxy '*' -X POST http://10.10.10.171/api/audio \
   -d '{"profile": "inmp441_philips32_left"}'
 
 # Тест правого канала
-curl --noproxy '*' -X POST http://192.168.0.171/api/audio \
+curl --noproxy '*' -X POST http://10.10.10.171/api/audio \
   -d '{"profile": "inmp441_philips32_right"}'
 ```
 

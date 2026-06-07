@@ -11,7 +11,7 @@ The ESP32-S3 firmware implements a three-tier network failover strategy: W5500 S
 - **Device:** W5500 Ethernet controller (SPI interface)
 - **SPI pins:** CLK=36, MOSI=35, MISO=37, CS=34
 - **Power:** 3.3V regulated supply
-- **IP assignment:** Static 192.168.0.171 (configurable via `AdamsConfig.h`)
+- **IP assignment:** Static 10.10.10.171 (isolated point-to-point subnet 10.10.10.0/24; Jetson eno1=10.10.10.1; configurable via `AdamsConfig.h`)
 - **Port 80:** API routes (sensor read, motor control, diagnostics)
 - **Port 81:** MJPEG camera stream + speaker audio streaming endpoint
 - **MAC address:** Hardcoded in firmware (unique per device)
@@ -51,7 +51,7 @@ The ESP32-S3 firmware implements a three-tier network failover strategy: W5500 S
 From `BootDiagnostics`:
 ```
 [00:00:00.456] [ETH] W5500 SPI detected
-[00:00:00.789] [ETH] IP 192.168.0.171 assigned (static)
+[00:00:00.789] [ETH] IP 10.10.10.171 assigned (static)
 [00:00:01.200] ETH ready
 [00:00:01.500] [WiFi] SSID scan + connect attempt
 [00:00:02.100] WiFi connected (or skipped if Ethernet up)
@@ -103,8 +103,8 @@ RUNTIME POLLING (every 10 seconds)
 ```
 Key: wifi_ssid         Value: "Museum_Guest_5G"
 Key: wifi_password     Value: "***secret***"
-Key: eth_ip_static     Value: "192.168.0.171"
-Key: eth_gw            Value: "192.168.0.1"
+Key: eth_ip_static     Value: "10.10.10.171"
+Key: eth_gw            Value: "0.0.0.0"
 Key: eth_netmask       Value: "255.255.255.0"
 Key: ap_ssid           Value: "ADAM_CHIP_AP"
 Key: failover_mode     Value: 1 (0=ethernet_only, 1=full_failover, 2=wifi_only)
@@ -125,7 +125,7 @@ Response:
 {
   "primary": {
     "type": "ethernet",
-    "ip": "192.168.0.171",
+    "ip": "10.10.10.171",
     "mac": "AA:BB:CC:DD:EE:FF",
     "ready": true,
     "last_ping_ms": 50
@@ -255,7 +255,7 @@ See: `Knowledge-graphs/esp32/GRAPH_REPORT.md` (network community)
 1. **Pre-installation testing:**
    ```bash
    # From Jetson, test each failover mode
-   curl http://192.168.0.171/api/network/status  # Ethernet
+   curl http://10.10.10.171/api/network/status  # Ethernet
    # Unplug Ethernet, wait 30s
    curl http://<wifi_ip>/api/network/status      # WiFi (if provisioned)
    # Turn off WiFi, check phone/laptop for ADAM_CHIP_AP SSID
@@ -268,7 +268,7 @@ See: `Knowledge-graphs/esp32/GRAPH_REPORT.md` (network community)
    - Or via AP mode web UI (first boot)
 
 3. **Monitoring:**
-   - Set cron job: `curl http://192.168.0.171/api/network/events?limit=5` every 5 min
+   - Set cron job: `curl http://10.10.10.171/api/network/events?limit=5` every 5 min
    - Alert if network mode changes (indicates failover event)
    - Log to `/var/log/adam_network.log`
 

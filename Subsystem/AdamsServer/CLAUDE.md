@@ -17,7 +17,7 @@ PlatformIO (pio), не Python/pip.
 
 ## Hardware
 
-- **Static IP:** 192.168.0.171 (W5500 Ethernet, не Wi-Fi — не менять без прошивки)
+- **Static IP (Ethernet):** 10.10.10.171 (W5500, изолированная подсеть 10.10.10.0/24 point-to-point с Jetson eno1=10.10.10.1). Wi-Fi/OTA-сеть: 192.168.0.171 (только для прошивки). Не менять без обновления прошивки.
 - **Port 80:** HTTP API (`/api/*`) — основной управляющий интерфейс
 - **Port 81:** stream-сервер — MJPEG camera (`/stream`) + mic audio (`/audio`, `/api/audio/clip`)
 - **Port 82:** выделенный speaker-сервер — только `/speaker`. Своя FreeRTOS-задача, чтобы непрерывный mic-стрим (монополизирует задачу `:81`) не блокировал воспроизведение. `stream/restart` его не трогает.

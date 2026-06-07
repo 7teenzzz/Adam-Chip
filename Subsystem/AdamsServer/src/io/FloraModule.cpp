@@ -7,12 +7,15 @@
 #include "../core/RuntimeState.h"
 #include "Pca9685Module.h"
 
-// Technoflora animation engine (Phase 29, FLORA-01).
+// Technoflora animation engine (Phase 29, FLORA-01; Phase 30 R5/R6/R3/R4/D-03).
 //
 // A static FreeRTOS task ticks at ~50 Hz (kFloraTickMs), runs a preset state
-// machine, applies a precomputed gamma LUT, crossfades from the last-written
-// duties to the new preset over crossfade_ms, and writes one atomic 16-channel
-// frame per tick via writeAllChannelsRaw. Light = ch 0-10, vibro = ch 11-14.
+// machine, crossfades from the last-written duties to the new preset over
+// crossfade_ms, and writes one atomic 16-channel frame per tick via
+// writeAllChannelsRaw. Light = ch 0-10, vibro = ch 11-14.
+// Phase 30 R5 (decision A): raw PWM, no perceptual gamma. The Jetson already
+// sends raw pct->duty values (linear), so gammaApply is now an identity pass-
+// through. The gamma LUT (sGammaLut/buildGammaLut) is retained but unused.
 // Vibro is hard-zeroed whenever the active preset is `attentive` (D-11:
 // protects the INMP441 mic from motor->mic acoustic coupling during listening).
 
@@ -35,7 +38,7 @@ enum class FloraPreset : uint8_t {
   ThinkPulse,   // раздумье — low base + wandering random-subset flashes (D-01)
   WakeBloom,    // пробуждение — random sprout from dark -> collective inhale -> breathe
   External,     // ответ/calibration — animation suppressed; floraTask yields to
-                // external /api/pca9685/* writes (RMS stream). Watchdog -> breathe.
+                // external /api/pca9685/* writes (RMS stream). Watchdog -> attentive (Phase 30 R3).
 };
 
 struct PresetDefaults {
@@ -46,16 +49,19 @@ struct PresetDefaults {
   bool        vibroEnabled;
 };
 
-// In-code preset defaults (Jetson params override per-call). Duties are 0-4095
-// pre-gamma "levels" expressed directly in 12-bit space for the base/peak
-// anchors; the gamma LUT shapes the interpolation between them.
+// In-code preset defaults (Jetson params override per-call). Duties are raw
+// 0-4095 12-bit PWM values (Phase 30 R5/decision A: no gamma shaping — linear
+// pct->duty mapping, identical to what the Jetson sends). The base/peak anchors
+// are the direct animation floor/ceiling in raw PWM.
 // Brightness ceiling: 71% of 4095 = 2908. No preset peak exceeds this.
 constexpr uint16_t kFlora71PctDuty = 2908u;
 
 constexpr PresetDefaults kPresetDefaults[] = {
   // name           base  peak          periodMs  vibro
-  {"idle",          120,   900,          9000,    false},
-  {"breathe",       696,  1228,          7000,    false},  // base=17%, peak=30%
+  // Phase 30 R6/D-08: idle base raised to 400 (~10%) so the resting state is
+  // clearly lit even without gamma. Was 120 (~3%) which read as nearly off.
+  {"idle",          400,   900,          9000,    false},
+  {"breathe",       287,  2908,          4000,    false},  // base=7%, peak=71%, 4s (matches Config flora.states.breathe)
   {"accent",        400,  kFlora71PctDuty, 1400,  true },  // peak capped at 71%
   {"attentive",    1228,  kFlora71PctDuty,  450,  false},  // base=30%, peak=71%, wave period 450ms
   {"think_pulse",   819,  2600,          1750,    true },  // base=20%
@@ -64,9 +70,13 @@ constexpr PresetDefaults kPresetDefaults[] = {
 };
 constexpr size_t kPresetCount = sizeof(kPresetDefaults) / sizeof(kPresetDefaults[0]);
 
-// --- Gamma LUT (Pattern 3): map a 0..255 animation level to a 12-bit duty ---
-// duty = round(4095 * (level/255)^gamma). Filled once at init; NO pow() in the
-// per-frame path (50 Hz x 16 ch = 800 pow()/s would be wasteful on the ESP).
+// --- Gamma LUT (retained but UNUSED by the light path, Phase 30 R5/decision A) ---
+// The LUT was used to apply a perceptual gamma correction (kFloraGamma=2.2) to
+// the raw duty values. As of Phase 30, the Jetson already sends raw pct->duty
+// values (linear), so applying gamma again would halve the perceived brightness.
+// gammaApply is now an identity pass-through at full 12-bit resolution.
+// buildGammaLut is still called at init to keep the code path consistent, but
+// the table is not read in any per-frame operation.
 uint16_t sGammaLut[256];
 bool     sGammaLutReady = false;
 
@@ -79,12 +89,14 @@ void buildGammaLut() {
   sGammaLutReady = true;
 }
 
-// Apply the gamma LUT to a 0..4095 linear animation duty. The LUT is indexed by
-// a 0..255 level, so we downscale to 8-bit, look up, and the table already
-// yields a 12-bit gamma-corrected duty.
+// Phase 30 R5 (decision A): raw PWM, no perceptual gamma.
+// gammaApply is now a full 12-bit identity: it clamps to 4095 and returns the
+// input unchanged. The old LUT lookup (which quantised to 8-bit and applied
+// gamma-2.2) is removed. This eliminates the double-gamma that was halving
+// apparent brightness (Jetson pct->duty is already linear).
+// kFloraGamma in AdamsConfig.h is now unused by the light path.
 inline uint16_t gammaApply(uint16_t linearDuty) {
-  const uint8_t level = static_cast<uint8_t>((min<uint16_t>(4095, linearDuty) * 255U) / 4095U);
-  return sGammaLut[level];
+  return min<uint16_t>(4095, linearDuty);
 }
 
 // --- Mutex-guarded target state (Pattern 2) ------------------------------
@@ -203,20 +215,28 @@ void floraTick(uint32_t nowMs) {
     if ((nowMs - ref) <= kFloraExternalTimeoutMs) {
       return;  // external writer is live — let its frames stand
     }
-    // Stale: recover to breathe (crossfade from whatever is currently on the lamps).
-    const PresetDefaults &bd = kPresetDefaults[static_cast<size_t>(FloraPreset::Breathe)];
+    // Stale: recover to Attentive (steady plateau) instead of Breathe.
+    // Phase 30 R3/D-06: External is only entered during Adam's spoken answer.
+    // On the degraded /speak path (no WAV/RMS stream), the lamps should hold a
+    // steady lit plateau — not breathe — so the installation never looks like
+    // Adam is idling while he's actually speaking.
+    // R4/D-07: The watchdog cannot fire before kFloraExternalTimeoutMs from entry
+    // because setFloraState(External) resets lastExternalPcaWriteMs to millis(),
+    // so (nowMs - ref) starts at 0 and grows; the guard `<= kFloraExternalTimeoutMs`
+    // ensures the full grace window is always honoured.
+    const PresetDefaults &ad = kPresetDefaults[static_cast<size_t>(FloraPreset::Attentive)];
     portENTER_CRITICAL(&gRuntimeStateMux);
     for (uint8_t ch = 0; ch < 16; ++ch) {
       sCrossfadeFrom[ch] = gRuntimeState.pca9685Channels[ch];
     }
-    sTarget.preset = FloraPreset::Breathe;
-    sTarget.baseDuty = bd.baseDuty;
-    sTarget.peakDuty = bd.peakDuty;
-    sTarget.periodMs = bd.periodMs;
-    sTarget.vibroEnabled = bd.vibroEnabled;
+    sTarget.preset = FloraPreset::Attentive;
+    sTarget.baseDuty = ad.baseDuty;
+    sTarget.peakDuty = ad.peakDuty;
+    sTarget.periodMs = ad.periodMs;
+    sTarget.vibroEnabled = false;  // Attentive always mutes vibro (D-11)
     sTarget.appliedAtMs = nowMs;
     portEXIT_CRITICAL(&gRuntimeStateMux);
-    return;  // next tick renders breathe
+    return;  // next tick renders attentive (steady plateau)
   }
 
   const uint32_t periodMs = (t.periodMs == 0) ? 1 : t.periodMs;
@@ -287,6 +307,18 @@ void floraTick(uint32_t nowMs) {
       const float from = static_cast<float>(sCrossfadeFrom[ch]);
       const float to = static_cast<float>(duties[ch]);
       duties[ch] = static_cast<uint16_t>(from + (to - from) * a);
+    }
+  }
+
+  // Phase 30 D-03: safe-ceiling firmware clamp (defence-in-depth).
+  // Clamp every channel to kFloraMaxDutyPct of full 12-bit scale before writing.
+  // Mirrors Config.json flora.max_duty_pct — structural default duplicated
+  // firmware-side. Ensures no animation frame exceeds the safe PWM cap regardless
+  // of preset params, Jetson-side values, or floating-point rounding.
+  {
+    const uint16_t maxDuty = (4095u * kFloraMaxDutyPct) / 100u;
+    for (uint8_t ch = 0; ch < 16; ++ch) {
+      duties[ch] = min<uint16_t>(duties[ch], maxDuty);
     }
   }
 

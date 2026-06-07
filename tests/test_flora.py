@@ -79,6 +79,10 @@ def test_flora_config() -> None:
     # Vibro policy (D-11): silent in listening/attentive.
     assert "attentive" in flora["vibro"]["silent_states"]
 
+    # Phase 30 additions: safe-ceiling default (D-03) and external watchdog timeout (C2).
+    assert flora["max_duty_pct"] == 100
+    assert flora["external_timeout_ms"] == 500
+
 
 class _FakeMCU:
     """Records set_flora_state calls without touching the network."""
@@ -221,3 +225,136 @@ def test_rms_envelope() -> None:
 
     # Empty / short WAV returns [] gracefully.
     assert ctrl._rms_envelope(b"") == []
+
+
+# ── Phase 30 tests ────────────────────────────────────────────────────────────
+
+
+def test_answer_end_guard() -> None:
+    """R2: late tts_finished must not override post-barge-in state.
+
+    When _answer_active is False (barge-in already cleared it), _on_answer_end
+    must be a no-op.  When _answer_active is True, it must push 'breathe'.
+    """
+    import asyncio
+
+    # --- guard path: _answer_active=False -> ZERO set_flora_state calls ---
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+    ctrl._answer_active = False
+
+    asyncio.run(ctrl._on_answer_end())
+
+    assert mcu.calls == [], (
+        "_on_answer_end must be a no-op when _answer_active is False"
+    )
+
+    # --- active path: _answer_active=True -> 'breathe' pushed ---
+    mcu2 = _FakeMCU()
+    ctrl2 = _make_controller(mcu2)
+    ctrl2._answer_active = True
+
+    asyncio.run(ctrl2._on_answer_end())
+
+    assert "breathe" in _states(mcu2), (
+        "_on_answer_end must push 'breathe' when _answer_active is True"
+    )
+
+
+def test_raw_pwm_duty() -> None:
+    """R5 Jetson side: percent -> duty mapping is LINEAR raw PWM (no gamma).
+
+    The Jetson sends raw percent duties; gamma is firmware-side only.
+    Verify that _build_params maps breathe.peak_pct to
+    int(round(4095 * peak_pct / 100)) — not via any gamma curve.
+    """
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+
+    flora_cfg = Settings.load().section("flora")
+    peak_pct = flora_cfg["states"]["breathe"]["peak_pct"]
+
+    params = ctrl._build_params("breathe")
+
+    expected_peak_duty = int(round(4095 * peak_pct / 100))
+    assert params["peak_duty"] == expected_peak_duty, (
+        f"peak_duty must be raw linear PWM mapping: "
+        f"got {params['peak_duty']}, expected {expected_peak_duty}"
+    )
+
+
+def test_safe_ceiling_clamp() -> None:
+    """D-03: _build_params and _envelope_to_duties clamp duties to max_duty_pct.
+
+    Monkeypatches _live_flora_cfg to return max_duty_pct=50, then verifies that
+    both base_duty and peak_duty in _build_params('attentive') are clamped to the
+    50 % ceiling.  Also verifies _envelope_to_duties honours max_duty_pct=40.
+    """
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+
+    # --- _build_params ceiling clamp ---
+    fake_cfg = {
+        "max_duty_pct": 50,
+        "crossfade_ms": 200,
+        "states": {
+            "attentive": {
+                "base_pct": 30,
+                "peak_pct": 71,
+                "vibro": False,
+            }
+        },
+        "vibro": {
+            "intensity_pct": 30,
+            "silent_states": ["attentive"],
+        },
+    }
+    ctrl._live_flora_cfg = lambda: fake_cfg
+
+    params = ctrl._build_params("attentive")
+
+    ceiling_duty = int(round(4095 * 50 / 100))
+    expected_peak = min(int(round(4095 * 71 / 100)), ceiling_duty)
+    expected_base = min(int(round(4095 * 30 / 100)), ceiling_duty)
+
+    assert params["peak_duty"] == expected_peak, (
+        f"peak_duty must be clamped to 50% ceiling: "
+        f"got {params['peak_duty']}, expected {expected_peak}"
+    )
+    assert params["base_duty"] == expected_base, (
+        f"base_duty must be clamped to 50% ceiling: "
+        f"got {params['base_duty']}, expected {expected_base}"
+    )
+
+    # --- _envelope_to_duties ceiling clamp ---
+    ctrl2 = _make_controller(_FakeMCU())
+    ctrl2._live_flora_cfg = lambda: {"max_duty_pct": 40}
+
+    max_allowed = int(round(4095 * 40 / 100))
+    duties = ctrl2._envelope_to_duties([0.0, 0.5, 1.0])
+
+    assert max(duties) <= max_allowed, (
+        f"_envelope_to_duties must clamp duties to max_duty_pct=40 "
+        f"(ceiling {max_allowed}): got max {max(duties)}"
+    )
+
+
+def test_feed_speech_wav_guard() -> None:
+    """R9: feed_speech_wav must be a no-op when _answer_active is False.
+
+    Calling feed_speech_wav outside a running event loop (i.e. synchronously,
+    not via asyncio.run) must not raise and must not schedule any set_channels
+    call.  Only the guard path (answer_active=False) is tested here — the
+    active path requires a running loop (asyncio.create_task).
+    """
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+    ctrl._answer_active = False
+    ctrl._enabled = True
+
+    # Must not raise even without a running event loop.
+    ctrl.feed_speech_wav(_make_sine_wav())
+
+    assert mcu.channel_calls == [], (
+        "feed_speech_wav must make zero set_channels calls when _answer_active is False"
+    )

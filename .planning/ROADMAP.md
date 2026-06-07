@@ -975,6 +975,39 @@ Plans:
 
 ---
 
+## Phase 30: Technoflora Reliability & Brightness Fixes
+
+**Branch:** `LuxFlora-modes_V1.1`
+
+**Goal:** Закрыть оставшиеся баги технофлоры после фикса погасания (Parts A/B/C уже применены: I2C-мьютекс, External-режим, развод легаси-слоя). Источник: `.planning/debug/flora-stops-on-state-change.md` + анализ R1–R9.
+
+**Requires:** Фикс погасания (debug/flora-stops-on-state-change, Parts A/B/C) применён ✓; firmware собирается `pio run`.
+
+**Locked decisions:**
+
+- **R5 = вариант A** — убрать перцептивную гамму, сырой PWM: `duty = 4095 × pct/100`. «70%» = 2867 PWM. Подписи = сырой PWM-сигнал. Устраняет двойное применение гаммы (Jetson linear %→duty + firmware gammaApply).
+- **Safe-ceiling** — глобальный параметр `flora.max_duty_pct` (в сыром PWM), клампится во всех write'ах флоры (Jetson + firmware defence-in-depth). В scope.
+- **Страница настроек технофлоры (WebUI)** — НЕ в этой фазе (UI-фича, отдельная фаза позже).
+
+**Delivers (баги R1–R9):**
+
+- **R1** — калибровочный скрипт `flora_line_identify.py` ставит `flora enabled=false` на время прогона (+ re-enable в конце и в Ctrl+C), иначе floraTask перетирает его записи
+- **R2** — guard в `flora.py _on_answer_end` (`if not _answer_active: return`) — barge-in + поздний `tts_finished` не должен перетирать состояние на breathe
+- **R3** — деградированный `/speak`-путь: не уходить в breathe во время ответа (вернуть steady-плато или удержать External без watchdog-сброса)
+- **R4** — External watchdog не должен срабатывать преждевременно в начале ответа (рефреш на `tts_started` или увеличенный grace)
+- **R5** — сырой PWM без гаммы (Jetson + firmware), вариант A
+- **R6** — idle-пресет не должен выглядеть «выключено» (поднять базу или оседать в breathe)
+- **R7** — загейтить `/api/agent/scene` + manual `/api/pca9685/*` за `flora.enabled` (или явный override-флаг), чтобы ручные записи не дрались с floraTask
+- **R8** — `flora enabled=false` не должен оставлять флору тёмной навсегда при сбое (безопасное восстановление / re-enable гарантия в скрипте)
+- **R9** — `feed_speech_wav` считает RMS-огибающую вне event-loop (`to_thread`), чтобы не блокировать цикл
+- Safe-ceiling `flora.max_duty_pct` + клампы (Config-First + схема)
+
+**Mode:** standard (debug-fix; firmware + Jetson, hardware-gated verification)
+
+**Requirement IDs:** FFIX-01 (R1), FFIX-02 (R2), FFIX-03 (R3), FFIX-04 (R4), FFIX-05 (R5 raw PWM), FFIX-06 (R6 idle), FFIX-07 (safe-ceiling), FFIX-08 (R7 gate manual), FFIX-09 (R8 recovery), FFIX-10 (R9 async envelope)
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.

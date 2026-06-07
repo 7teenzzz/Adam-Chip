@@ -85,7 +85,7 @@
             "primary": {
               "type": "string",
               "enum": ["esp_mjpeg", "jetson_gstreamer", "remote_rtsp"],
-              "description": "Active video source. 'esp_mjpeg' uses ESP32 camera stream at esp_mjpeg_url (192.168.0.171:81/stream). 'jetson_gstreamer' uses local USB/CSI camera via GStreamer pipeline. 'remote_rtsp' uses an IP camera RTSP stream.",
+              "description": "Active video source. 'esp_mjpeg' uses ESP32 camera stream at esp_mjpeg_url (10.10.10.171:81/stream). 'jetson_gstreamer' uses local USB/CSI camera via GStreamer pipeline. 'remote_rtsp' uses an IP camera RTSP stream.",
               "default": "esp_mjpeg"
             },
             "gstreamer_pipeline": {
@@ -106,7 +106,7 @@
             "esp_mjpeg_url": {
               "type": "string",
               "description": "HTTP URL of the ESP32 MJPEG camera stream.",
-              "default": "http://192.168.0.171:81/stream"
+              "default": "http://10.10.10.171:81/stream"
             },
             "esp_fail_threshold": {
               "type": "integer",
@@ -679,12 +679,12 @@
         "base_url": {
           "type": "string",
           "description": "Base URL for the ESP32 HTTP API (port 80). Static IP set via W5500 Ethernet.",
-          "default": "http://192.168.0.171"
+          "default": "http://10.10.10.171"
         },
         "speaker_url": {
           "type": "string",
           "description": "URL for the ESP32 speaker playback endpoint (port 81). Separate server on the ESP32 handles audio streaming.",
-          "default": "http://192.168.0.171:81/speaker"
+          "default": "http://10.10.10.171:81/speaker"
         },
         "timeout_sec": {
           "type": "integer",
@@ -778,6 +778,13 @@
           "default": 500,
           "minimum": 100,
           "maximum": 5000
+        },
+        "max_duty_pct": {
+          "type": "integer",
+          "description": "GLOBAL safe-ceiling for technoflora as a RAW PWM percent (0-100). Every flora channel write — Jetson flora.py preset duties and RMS speech stream, AND the firmware floraTask animation — is clamped to 4095 * max_duty_pct / 100 so the lamps and power supply never exceed this cap, regardless of preset peak_pct or RMS level. Defence-in-depth: clamped on both Jetson and firmware sides (firmware mirrors this ceiling via const kFloraMaxDutyPct in AdamsConfig.h). NOTE: this is RAW PWM (Phase 30 decision A removed perceptual gamma from this ceiling — the % is the PWM signal directly, so 100 = full 4095 counts, 70 = 2867 counts). Default 100 = no clamp (full range allowed); lower it per hardware installation to protect LED strips or power supply.",
+          "default": 100,
+          "minimum": 0,
+          "maximum": 100
         },
         "speech": {
           "type": "object",

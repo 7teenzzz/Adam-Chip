@@ -21,7 +21,7 @@ python3 System/Orchestrator.py
 Legacy Host UI можно запускать только для диагностики ESP endpoints:
 
 ```bash
-ESP_BASE_URL="http://192.168.0.171" python3 System/HostUI/server.py
+ESP_BASE_URL="http://10.10.10.171" python3 System/HostUI/server.py
 ```
 
 После переключения ESP32 на прямой W5500 Ethernet с Jetson используйте:

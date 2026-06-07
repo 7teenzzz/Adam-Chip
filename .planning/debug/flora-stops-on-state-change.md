@@ -146,7 +146,7 @@ cannot flash). After applying Part A and reflashing:
   3. I2C-contention stress (this is the direct repro of the dark-out). From the Jetson, hammer
      `/api/pca9685/channels` while floraTask runs, e.g.:
      `for i in $(seq 1 300); do curl --noproxy '*' -s -m 1 -X POST \
-        http://192.168.0.171/api/pca9685/channels \
+        http://10.10.10.171/api/pca9685/channels \
         -H 'Content-Type: application/json' \
         -d '{"updates":[{"channel":0,"value":2000},{"channel":5,"value":2000},{"channel":10,"value":2000}]}' \
         >/dev/null; done`

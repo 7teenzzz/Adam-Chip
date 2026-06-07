@@ -60,7 +60,7 @@ def check_config() -> None:
 
     expected = {
         "media.audio.mic_source": media["audio"]["mic_source"] == "esp32",
-        "media.video.esp_mjpeg_url": media["video"]["esp_mjpeg_url"] == "http://192.168.0.171:81/stream",
+        "media.video.esp_mjpeg_url": media["video"]["esp_mjpeg_url"] == "http://10.10.10.171:81/stream",
         "services.asr.model": services["asr"]["model"] == "small",
         "services.tts.sample_rate": services["tts"]["sample_rate"] == 24000,
         "services.tts.filler_enabled": services["tts"]["filler_enabled"] is True,

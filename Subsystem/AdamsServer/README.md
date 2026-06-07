@@ -16,8 +16,8 @@ ESP32 автоматически выбирает транспорт в поря
 
 | Приоритет | Транспорт | Статический IP |
 |-----------|-----------|----------------|
-| 1 | W5500 Ethernet (SPI) | `192.168.0.171` |
-| 2 | Wi-Fi STA | `192.168.0.171` |
+| 1 | W5500 Ethernet (SPI) | `10.10.10.171` (isolated subnet 10.10.10.0/24, Jetson eno1=10.10.10.1) |
+| 2 | Wi-Fi STA | `192.168.0.171` (LAN, for OTA flashing only) |
 | 3 | AP-fallback (если оба недоступны) | `192.168.4.1` |
 
 Никакого ручного переключения не нужно — прошивка сама определяет, что доступно.
@@ -81,13 +81,13 @@ AP-fallback: SSID `Adam Chip`, пароль `4D4M-CH1P4$`, IP `192.168.4.1`.
 WAV-файл:
 
 ```powershell
-curl.exe --data-binary "@input.wav" -H "Content-Type: audio/wav" http://192.168.0.171:81/speaker
+curl.exe --data-binary "@input.wav" -H "Content-Type: audio/wav" http://10.10.10.171:81/speaker
 ```
 
 Поток через `ffmpeg`:
 
 ```powershell
-ffmpeg -re -i input.wav -f s16le -acodec pcm_s16le -ac 1 -ar 44100 http://192.168.0.171:81/speaker
+ffmpeg -re -i input.wav -f s16le -acodec pcm_s16le -ac 1 -ar 44100 http://10.10.10.171:81/speaker
 ```
 
 Speaker ring buffer: **32 KB** (~372 мс при 44100 Hz). Alloced в DRAM. Запись rate-limited — при переполнении ждёт I2S drain вместо дропа (4 мс backoff).
@@ -100,13 +100,13 @@ Speaker ring buffer: **32 KB** (~372 мс при 44100 Hz). Alloced в DRAM. З�
 
 ```powershell
 # Статус: профиль, пики L/R, signal_state, dc_offset, clip_count
-curl.exe http://192.168.0.171/api/audio
+curl.exe http://10.10.10.171/api/audio
 
 # WAV-клип последних 2 с из ring buffer
-curl.exe "http://192.168.0.171/api/audio/clip?ms=2000" --output mic_test.wav
+curl.exe "http://10.10.10.171/api/audio/clip?ms=2000" --output mic_test.wav
 
 # Смена профиля без перепрошивки
-curl.exe -X POST http://192.168.0.171/api/audio `
+curl.exe -X POST http://10.10.10.171/api/audio `
   -H "Content-Type: application/json" `
   -d '{"profile":"inmp441_philips32_stereo","software_gain":7.0,"dc_block":true}'
 ```
@@ -133,14 +133,14 @@ Mic ring buffer: **256 KB** в PSRAM (~4 с стерео при 16 kHz 16-bit).
 ```yaml
 streams:
   adams_cam:
-    - ffmpeg:http://192.168.0.171:81/stream#video=mjpeg
-    - ffmpeg:http://192.168.0.171:81/audio#audio=pcm_s16le#audio=16000
+    - ffmpeg:http://10.10.10.171:81/stream#video=mjpeg
+    - ffmpeg:http://10.10.10.171:81/audio#audio=pcm_s16le#audio=16000
 ```
 
 Быстрая проверка audio transport:
 
 ```powershell
-ffmpeg -i http://192.168.0.171:81/audio -f null -
+ffmpeg -i http://10.10.10.171:81/audio -f null -
 ```
 
 ---
@@ -154,7 +154,7 @@ ffmpeg -i http://192.168.0.171:81/audio -f null -
 Один канал:
 
 ```powershell
-curl.exe -X POST http://192.168.0.171/api/pca9685/channel `
+curl.exe -X POST http://10.10.10.171/api/pca9685/channel `
   -H "Content-Type: application/json" `
   -d '{"channel":0,"mode":"pwm","value":2048}'
 ```
@@ -162,7 +162,7 @@ curl.exe -X POST http://192.168.0.171/api/pca9685/channel `
 Несколько каналов:
 
 ```powershell
-curl.exe -X POST http://192.168.0.171/api/pca9685/channels `
+curl.exe -X POST http://10.10.10.171/api/pca9685/channels `
   -H "Content-Type: application/json" `
   -d '{"channels":[{"channel":0,"mode":"pwm","value":2048},{"channel":1,"mode":"off"}]}'
 ```
@@ -170,7 +170,7 @@ curl.exe -X POST http://192.168.0.171/api/pca9685/channels `
 Сцена:
 
 ```powershell
-curl.exe -X POST http://192.168.0.171/api/pca9685/scene `
+curl.exe -X POST http://10.10.10.171/api/pca9685/scene `
   -H "Content-Type: application/json" `
   -d '{"scene":"boot_idle"}'
 ```
@@ -180,7 +180,7 @@ curl.exe -X POST http://192.168.0.171/api/pca9685/scene `
 Частота:
 
 ```powershell
-curl.exe -X POST http://192.168.0.171/api/pca9685/frequency `
+curl.exe -X POST http://10.10.10.171/api/pca9685/frequency `
   -H "Content-Type: application/json" `
   -d '{"frequency":50}'
 ```
@@ -194,9 +194,9 @@ Boot-звук встроен в прошивку и проигрывается �
 Ручной тест:
 
 ```powershell
-curl.exe -X POST "http://192.168.0.171/api/sound/play?name=boot"
-curl.exe -X POST "http://192.168.0.171/api/sound/play?name=success"
-curl.exe -X POST "http://192.168.0.171/api/sound/play?name=tone"
+curl.exe -X POST "http://10.10.10.171/api/sound/play?name=boot"
+curl.exe -X POST "http://10.10.10.171/api/sound/play?name=success"
+curl.exe -X POST "http://10.10.10.171/api/sound/play?name=tone"
 ```
 
 Формат embedded assets: mono, 44.1 kHz, 16-bit PCM.
@@ -299,7 +299,7 @@ powershell -ExecutionPolicy Bypass -File .\Subsystem\AdamsServer\tools\flash_ota
 ```powershell
 curl.exe -X POST -H "Content-Type: application/octet-stream" `
   --data-binary "@AdamsServer.ino.bin" `
-  http://192.168.0.171/api/ota/upload
+  http://192.168.0.171/api/ota/upload  # Wi-Fi OTA — на рантайм Ethernet IP (10.10.10.171) OTA не поддерживается
 ```
 
 ---

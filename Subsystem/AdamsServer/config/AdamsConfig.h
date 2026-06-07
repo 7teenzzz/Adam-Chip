@@ -142,7 +142,7 @@ inline constexpr uint8_t kFloraLightChannelLo = 0;      // D-02: light = channel
 inline constexpr uint8_t kFloraLightChannelHi = 10;
 inline constexpr uint8_t kFloraVibroChannelLo = 11;     // D-02: vibro = channels 11-14
 inline constexpr uint8_t kFloraVibroChannelHi = 14;
-inline constexpr float kFloraGamma = 2.2f;              // D-13: perceptual gamma for the light LUT
+inline constexpr float kFloraGamma = 2.2f;              // D-13: perceptual gamma — now UNUSED by the light path (Phase 30 R5/decision A: raw PWM, no gamma)
 inline constexpr uint32_t kFloraDefaultCrossfadeMs = 200;  // D-09: 150-250 ms preset crossfade
 // Vibro is NOT subject to safety.motor_* clamps (D-04/FLORA-06): those guard
 // action.py timed actuations. Flora vibro is continuous low-amplitude presence,
@@ -153,6 +153,12 @@ inline constexpr uint16_t kFloraVibroIntensityCeiling = 1228;  // ~30% of 4095
 // auto-recovers to breathe so the lamps never freeze. Mirrors Config.json
 // flora.external_timeout_ms (structural default duplicated firmware-side).
 inline constexpr uint32_t kFloraExternalTimeoutMs = 500;
+// Safe-ceiling for all flora animation output (Phase 30 D-03). Raw PWM percent,
+// mirrors Config.json flora.max_duty_pct — structural default duplicated
+// firmware-side, like kFloraExternalTimeoutMs. Applied in floraTick immediately
+// before writeAllChannelsRaw as defence-in-depth so no animation frame can
+// exceed this ceiling regardless of preset params or Jetson-side values.
+inline constexpr uint8_t kFloraMaxDutyPct = 100;
 
 inline constexpr size_t kStatusJsonCapacity = 16384;
 inline constexpr size_t kSensorJsonCapacity = 768;

@@ -207,6 +207,11 @@ class FloraController:
 
     async def _on_answer_end(self) -> None:
         """Answer finished — stop the RMS streamer and settle to calm idle."""
+        # R2 guard: after a barge-in the handler already cleared _answer_active and
+        # transitioned to accent/attentive.  A late tts_finished event must NOT
+        # override that post-barge-in state by forcing breathe.
+        if not self._answer_active:
+            return
         await self._stop_rms_stream()
         self._answer_active = False
         self._fed_wav_this_answer = False
@@ -280,6 +285,9 @@ class FloraController:
         crossfade_ms = int(flora.get("crossfade_ms", self._crossfade_ms))
         vibro_intensity_pct = int(vibro_cfg.get("intensity_pct", self._vibro_intensity_pct))
         silent_states: set[str] = set(vibro_cfg.get("silent_states", list(self._silent_states)))
+        # D-03 safe-ceiling: global raw-PWM cap, hot-reload-aware.
+        max_duty_pct: float = float(flora.get("max_duty_pct", 100))
+        max_duty: int = int(round(self._value_max * max_duty_pct / 100.0))
 
         preset: dict[str, Any] = states_cfg.get(state, {}) or {}
         params: dict[str, Any] = {
@@ -295,9 +303,15 @@ class FloraController:
                     params["vibro_mode"] = value
             elif key in ("base_pct", "peak_pct"):
                 duty_key = "base_duty" if key == "base_pct" else "peak_duty"
-                params[duty_key] = int(round(self._value_max * float(value) / 100.0))
+                # D-03: clamp each duty to the safe ceiling.
+                params[duty_key] = min(
+                    int(round(self._value_max * float(value) / 100.0)), max_duty
+                )
             elif key == "plateau_pct":
-                duty = int(round(self._value_max * float(value) / 100.0))
+                # D-03: clamp plateau (both base and peak use the same value).
+                duty = min(
+                    int(round(self._value_max * float(value) / 100.0)), max_duty
+                )
                 params["base_duty"] = duty
                 params["peak_duty"] = duty
             elif key in ("wave_period_ms", "flash_ms"):
@@ -371,14 +385,20 @@ class FloraController:
 
         base_duty_pct (~25%) is the floor so lamps never go dark mid-utterance;
         peak_duty_pct (~90%) is the crest. Percent duties; gamma is firmware-side.
+        D-03: every duty is clamped to max_duty (flora.max_duty_pct, hot-reload).
         """
-        base = int(round(self._value_max * self._base_duty_pct / 100.0))
-        peak = int(round(self._value_max * self._peak_duty_pct / 100.0))
+        flora = self._live_flora_cfg()
+        max_duty_pct: float = float(flora.get("max_duty_pct", 100))
+        max_duty: int = int(round(self._value_max * max_duty_pct / 100.0))
+
+        base = min(int(round(self._value_max * self._base_duty_pct / 100.0)), max_duty)
+        peak = min(int(round(self._value_max * self._peak_duty_pct / 100.0)), max_duty)
         lo, hi = (base, peak) if base <= peak else (peak, base)
         span = hi - lo
         duties: list[int] = []
         for level in levels:
             clamped = 0.0 if level < 0.0 else (1.0 if level > 1.0 else level)
+            # D-03: output is already bounded by [base, peak] which are both <= max_duty.
             duties.append(lo + int(round(span * clamped)))
         return duties
 
@@ -403,7 +423,9 @@ class FloraController:
           to but are outside _answer_active because they fire before
           tts_started is emitted — a minor known gap, acceptable).
         - Synchronous fast (never blocks): asyncio.create_task() is ~µs;
-          the actual HTTP POSTs run in the spawned task.
+          the actual WAV decoding (_rms_envelope) and HTTP POSTs run inside
+          the spawned task (R9: _rms_envelope is CPU work — wave.open +
+          audioop.rms — and must NOT block the event loop).
 
         Degraded path (non-streaming /speak): Silero's internal /speak
         endpoint plays audio natively without exposing WAV bytes, so this
@@ -414,21 +436,29 @@ class FloraController:
         """
         if not self._enabled or not self._answer_active:
             return
-        levels = self._rms_envelope(wav_bytes)
-        if not levels:
-            return
-        duties = self._envelope_to_duties(levels)
-        self._start_rms_stream(duties)
-        self._fed_wav_this_answer = True
-
-    def _start_rms_stream(self, duties: list[int]) -> None:
-        """Create (or restart) the asyncio RMS streamer task for this chunk."""
-        # Cancel any prior chunk's task first (edge-case: slow I2C / missed finish).
+        # R9: offload CPU-bound WAV decode + RMS computation to a thread so
+        # the event loop is not stalled.  Cancel any prior chunk task first
+        # (preserves the cancel-then-create semantics of the old _start_rms_stream).
         if self._rms_task is not None and not self._rms_task.done():
             self._rms_task.cancel()
         self._rms_task = asyncio.create_task(
-            self._rms_stream(duties), name="flora_rms"
+            self._rms_chunk_task(wav_bytes), name="flora_rms"
         )
+        self._fed_wav_this_answer = True
+
+    async def _rms_chunk_task(self, wav_bytes: bytes) -> None:
+        """Compute RMS envelope in a thread, then stream duties.  R9."""
+        try:
+            levels = await asyncio.to_thread(self._rms_envelope, wav_bytes)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("flora rms_chunk_task: _rms_envelope failed", exc_info=True)
+            return
+        if not levels:
+            return
+        duties = self._envelope_to_duties(levels)
+        await self._rms_stream(duties)
 
     async def _rms_stream(self, duties: list[int]) -> None:
         """Stream brightness frames to light channels 0-10 in lockstep with playback.
@@ -455,7 +485,14 @@ class FloraController:
         offset_s: float = self._hdmi_offset_ms / 1000.0
         interval_s: float = self._frame_interval_ms / 1000.0
 
-        peak_duty = int(round(self._value_max * self._peak_duty_pct / 100.0))
+        # D-03: read max_duty fresh per stream (hot-reload-aware).
+        flora = self._live_flora_cfg()
+        max_duty_pct: float = float(flora.get("max_duty_pct", 100))
+        max_duty: int = int(round(self._value_max * max_duty_pct / 100.0))
+
+        peak_duty = min(
+            int(round(self._value_max * self._peak_duty_pct / 100.0)), max_duty
+        )
         vibro_scale: float = self._vibro_intensity_pct / 100.0
 
         try:
@@ -464,6 +501,9 @@ class FloraController:
                 delay = target_t - perf_counter()
                 if delay > 0:
                     await asyncio.sleep(delay)
+
+                # D-03: clamp per-frame light duty to safe ceiling.
+                duty = min(duty, max_duty)
 
                 # Build the batch update: all light channels at this frame's duty.
                 updates: list[dict] = [
@@ -481,12 +521,14 @@ class FloraController:
                     spark_chs = random.sample(self._light_channels, n_sparks)
                     spark_set = set(spark_chs)
                     updates = [
+                        # D-03: spark peak is already clamped (peak_duty <= max_duty).
                         {"channel": ch, "value": peak_duty if ch in spark_set else duty}
                         for ch in self._light_channels
                     ]
 
                 # Vibro: scaled RMS duty — throbs subtly with voice (D-12).
-                vibro_duty = int(round(duty * vibro_scale))
+                # D-03: clamp vibro duty to safe ceiling as well.
+                vibro_duty = min(int(round(duty * vibro_scale)), max_duty)
                 updates.extend(
                     {"channel": ch, "value": vibro_duty}
                     for ch in self._vibro_channels

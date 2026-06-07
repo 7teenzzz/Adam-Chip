@@ -18,17 +18,23 @@ traffic via http_proxy env vars and leaks half-open sockets to ESP32:81, drainin
 its 4-slot pool. We therefore use a private ProxyHandler({}) opener (see
 System/adam/device.py for the same pattern / CLAUDE.md gotcha).
 
+Flora auto-suspend (R1/D-04):
+  At startup the script POSTs {"state":"breathe","enabled":false} to
+  /api/flora/state so the firmware floraTask stops fighting the channel writes
+  (floraTask overwrites PCA9685 ~50 times/sec; without the suspend the line test
+  does not work). On normal exit AND on Ctrl+C/SIGTERM the script always restores
+  {"enabled":true} so flora is never left dark. Use --no-suspend to skip this
+  behaviour if you manage flora state yourself.
+
 Usage (from repo root):
     python scripts/diagnostics/flora_line_identify.py                 # channels 0-14
     python scripts/diagnostics/flora_line_identify.py --channels 0-10 # light only
     python scripts/diagnostics/flora_line_identify.py --channels 11-14 --no-tts
     python scripts/diagnostics/flora_line_identify.py --channels 0,3,7 --duration 6
+    python scripts/diagnostics/flora_line_identify.py --no-suspend    # skip flora pause
 
 Config (mcu.base_url, services.tts.base_url, channel range, flora.gamma) is read
 from System/Config.json by default; override with --base-url / --tts-url.
-
-NOTE: run with the orchestrator's flora controller idle (maintenance mode or the
-orchestrator stopped), otherwise it will fight the script for the channels.
 """
 from __future__ import annotations
 
@@ -112,6 +118,25 @@ class Esp:
         if not ok:  # fall back to per-channel if batch route is unavailable
             for c in channels:
                 self.set_channel(c, 0)
+
+
+def set_flora_enabled(base_url: str, enabled: bool, timeout: float) -> bool:
+    """POST /api/flora/state with enabled=true/false.
+
+    The 'state' field is required by the firmware handler; 'breathe' is a
+    harmless valid preset that is immediately overridden by the enabled flag.
+    Uses the same proxy-free opener as all other ESP HTTP calls (D-04/R1).
+
+    Returns True on success, False on any network or HTTP error.
+    """
+    ok, info = _post_json(
+        f"{base_url.rstrip('/')}/api/flora/state",
+        {"state": "breathe", "enabled": enabled},
+        timeout,
+    )
+    if not ok:
+        print(f"[warn] set_flora_enabled({enabled}) failed: {info}")
+    return ok
 
 
 def tts_say(tts_url: str, speaker: str, text: str, timeout: float) -> None:
@@ -214,6 +239,13 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--esp-timeout", type=float, default=2.0)
     ap.add_argument("--tts-timeout", type=float, default=20.0)
     ap.add_argument("--no-tts", action="store_true", help="skip spoken announcements")
+    ap.add_argument(
+        "--no-suspend",
+        action="store_true",
+        help="skip automatic flora suspend/restore (for advanced use when you manage "
+             "flora state yourself; by default the script pauses floraTask via "
+             "enabled=false so it does not overwrite PCA9685 channels during the run)",
+    )
     args = ap.parse_args(argv)
 
     channels = [c for c in parse_channels(args.channels) if 0 <= c <= 15]
@@ -226,9 +258,19 @@ def main(argv: list[str]) -> int:
     level_frac = max(0.0, min(1.0, args.level / 100.0))
     hold_duty = int(round(value_max * (level_frac ** args.gamma)))
 
+    # Flora suspend state — used by both the SIGINT handler and the finally block.
+    _flora_suspended = not args.no_suspend
+
+    def _restore_flora() -> None:
+        """Turn channels off then re-enable floraTask (D-04/R8 guarantee)."""
+        esp.all_off(range(0, 16))
+        if _flora_suspended:
+            set_flora_enabled(args.base_url, True, args.esp_timeout)
+            print("[flora] floraTask re-enabled")
+
     def cleanup(*_a) -> None:
         print("\n[cleanup] all channels off")
-        esp.all_off(range(0, 16))
+        _restore_flora()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, cleanup)
@@ -247,29 +289,45 @@ def main(argv: list[str]) -> int:
         print(f"  mode:     BREATHE period={args.period}s peak={args.peak}% "
               f"gamma={args.gamma} for {args.duration}s per line")
     print("  channels 0-10 = light (watch lamps), 11-14 = vibro (feel motors)")
-    print("  >>> run with the orchestrator's flora controller idle <<<")
+    if _flora_suspended:
+        print("  [flora] will auto-suspend floraTask (enabled=false) for the run")
+    else:
+        print("  [flora] --no-suspend: flora state NOT managed by this script")
     print("=" * 60)
 
-    esp.all_off(range(0, 16))
-    time.sleep(0.3)
+    # Suspend floraTask before any channel writes so it cannot overwrite our output.
+    # Re-enable is guaranteed via try/finally regardless of how we exit (D-04/R8).
+    if _flora_suspended:
+        set_flora_enabled(args.base_url, False, args.esp_timeout)
+        print("[flora] floraTask suspended (enabled=false)")
 
-    for ch in channels:
-        word = ru_number(ch)
-        print(f"\n--- channel {ch}  ('Линия {word}') ---")
+    try:
         esp.all_off(range(0, 16))
-        if not args.no_tts:
-            tts_say(args.tts_url, args.speaker, f"Линия {word}", args.tts_timeout)
-            time.sleep(0.3)
-        if args.mode == "hold":
-            hold_channel(esp, ch, args.duration, level_frac, args.gamma)
-        else:
-            breathe_channel(esp, ch, args.duration, args.period,
-                            args.fps, args.gamma, peak_frac)
-        esp.set_channel(ch, 0)
-        time.sleep(args.gap)
+        time.sleep(0.3)
 
-    esp.all_off(range(0, 16))
-    print("\nDone. All channels off. Write down: channel index -> physical line.")
+        for ch in channels:
+            word = ru_number(ch)
+            print(f"\n--- channel {ch}  ('Линия {word}') ---")
+            esp.all_off(range(0, 16))
+            if not args.no_tts:
+                tts_say(args.tts_url, args.speaker, f"Линия {word}", args.tts_timeout)
+                time.sleep(0.3)
+            if args.mode == "hold":
+                hold_channel(esp, ch, args.duration, level_frac, args.gamma)
+            else:
+                breathe_channel(esp, ch, args.duration, args.period,
+                                args.fps, args.gamma, peak_frac)
+            esp.set_channel(ch, 0)
+            time.sleep(args.gap)
+
+        esp.all_off(range(0, 16))
+        print("\nDone. All channels off. Write down: channel index -> physical line.")
+    finally:
+        # Always re-enable flora on normal completion or any raised exception (R8).
+        if _flora_suspended:
+            set_flora_enabled(args.base_url, True, args.esp_timeout)
+            print("[flora] floraTask re-enabled")
+
     return 0
 
 

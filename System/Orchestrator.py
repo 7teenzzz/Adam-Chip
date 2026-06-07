@@ -95,7 +95,7 @@ _media_cfg = settings.section("media")
 _video_cfg = dict(_media_cfg.get("video", {}))
 if not _video_cfg.get("esp_mjpeg_url"):
     from urllib.parse import urlparse as _urlparse
-    _mcu_base = settings.section("mcu").get("base_url", "http://192.168.0.171").rstrip("/")
+    _mcu_base = settings.section("mcu").get("base_url", "http://10.10.10.171").rstrip("/")
     _parsed = _urlparse(_mcu_base)
     _video_cfg["esp_mjpeg_url"] = f"{_parsed.scheme}://{_parsed.hostname}:81/stream"
 camera_reader = CameraReader(_video_cfg, on_event=lambda t, p: event_log.append(t, p))
@@ -2413,6 +2413,12 @@ async def stop() -> dict[str, Any]:
 
 @app.post("/api/agent/scene")
 async def update_scene(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    # Part C (flora): /api/agent/scene writes motor scenes to PCA9685 channels 0-14,
+    # which the technoflora owns when flora.enabled=true. Suppress the write so flora
+    # animation is not interrupted. Raw /api/pca9685/* endpoints are NOT gated here —
+    # the calibration/maintenance scripts need direct access with flora disabled.
+    if bool(settings.section("flora").get("enabled", True)):
+        return {"ok": True, "status": 204, "data": {"action": "suppressed_flora_owns_channels"}, "error": None}
     text = str(payload.get("text", "")).strip()
     meta = payload.get("meta", {})
     if not text:

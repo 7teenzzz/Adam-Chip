@@ -52,7 +52,7 @@ See `diploma/chapter-3/3.3.2_perception_motor_layers.md` for audioflora details.
 
 ## Jetson Audio Streaming
 
-**HTTP Speaker Endpoint:** POST `http://192.168.0.171:81/speaker`
+**HTTP Speaker Endpoint:** POST `http://10.10.10.171:81/speaker`
 
 - Jetson sends PCM frames (16-bit mono, 44.1 kHz) to this endpoint
 - ESP32 buffers and plays immediately via I2S TX

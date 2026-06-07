@@ -57,7 +57,7 @@ Example:
 ```
 [00:00:00.123] [SENSORS] Initialized
 [00:00:00.456] [ETH] W5500 SPI detected
-[00:00:00.789] [ETH] IP 192.168.0.171 assigned
+[00:00:00.789] [ETH] IP 10.10.10.171 assigned
 ...
 [00:00:03.120] Boot complete
 [00:00:05.800] Boot sound playback

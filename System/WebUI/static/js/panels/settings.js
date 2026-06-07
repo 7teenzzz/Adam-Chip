@@ -388,7 +388,7 @@ const SCHEMA = [
     source: "config", section: "mcu", title: "Модуль ESP32",
     fields: [
       { key: "base_url",    label: "Адрес ESP32",         type: "text",
-        hint: "http://192.168.0.171" },
+        hint: "http://10.10.10.171" },
       { key: "speaker_url", label: "Адрес динамика ESP32", type: "text" },
       { key: "timeout_sec", label: "Таймаут (с)",          type: "number",
         hint: "1 рекомендуется — иначе блокирует диалог" },

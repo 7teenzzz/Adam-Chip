@@ -18,8 +18,8 @@ import urllib.request
 import wave
 from datetime import datetime
 
-ESP_BASE    = "http://192.168.0.171"
-ESP_STREAM  = "http://192.168.0.171:81/audio"
+ESP_BASE    = "http://10.10.10.171"
+ESP_STREAM  = "http://10.10.10.171:81/audio"
 ARTIFACTS   = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "Subsystem", "AdamsServer", "artifacts", "mic_tests")
 RATE        = 16000
