@@ -183,9 +183,9 @@
     },
     "states": {
       "breathe": {
-        "base_pct": 17,
-        "peak_pct": 30,
-        "period_ms": 7000,
+        "base_pct": 7,
+        "peak_pct": 71,
+        "period_ms": 4000,
         "vibro": false
       },
       "accent": {
@@ -204,8 +204,10 @@
       },
       "think_pulse": {
         "base_pct": 20,
-        "peak_pct": 63,
-        "flash_ms": 1750,
+        "peak_pct": 71,
+        "flash_ms": 500,
+        "wave_period_ms": 500,
+        "flicker_ms": 120,
         "vibro": "double_pulse"
       },
       "wake_bloom": {
