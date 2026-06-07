@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready_to_plan
-last_updated: "2026-05-18T08:14:02.295Z"
+last_updated: "2026-06-07T00:00:00.000Z"
 progress:
   total_phases: 32
   completed_phases: 3
@@ -14,7 +14,7 @@ progress:
 
 # Adam-Chip — Project State
 
-**Last Updated:** 2026-05-18
+**Last Updated:** 2026-06-07
 **Status:** Ready to plan
 
 ## Active Phase
@@ -28,6 +28,8 @@ Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-r
 
 **Recently completed (хронологически):**
 
+- Phase 30 (Skills — Jokes + Weather) ✓ 2026-06-07 — ветка `Extra`, ожидает Jetson smoke-test + коммита
+
 - Phase 15 (Roadmap Global Update) — финализирован этим merge'ем; 12 будущих фаз добавлены, нумерация унифицирована, voice-фазы вставлены как 7-11
 - Phase 14 (Next-Phases Planning) ✓ 2026-05-17
 - Phase 13 (Theory-Code Verification) ✓ 2026-05-17
@@ -38,6 +40,21 @@ Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-r
 - Phase 7 (ESP32 Mic Pipeline Refactor — MicReader keep-alive) ✓ 2026-05-17
 
 ## Completed Phases
+
+### Phase 30: Skills — Jokes + Weather ✓ (2026-06-07, ветка Extra)
+
+Что сделано:
+
+- `System/adam/skills.py` (новый) — IntentRouter (offline keyword classifier), WeatherProvider (Open-Meteo, trust_env=False, background poll), JokeGate (verbatim selector, pool="jokes" cooldown)
+- `System/Orchestrator.py` — weather poll_loop в lifespan, intent-врезка в `_run_dialogue_turn_locked`, новая `_run_joke_turn()` (LLM bypass)
+- `System/adam/prompt.py` — `weather_ctx` параметр, `[ctx.weather]` блок в `_build_context_body()`
+- `System/Config.json` + `Config.schema.json` + `adam/config.py` — секция `skills.weather` (Галерея А-Б 55.721265/37.625647) + `skills.jokes`
+- `Agent-Adam-Chip/About/Jokes.md` (новый) — пул 25 анекдотов, формат Echoes.md
+- `tests/test_skills.py` (новый) — 18 unit-тестов, все зелёные
+- `tests/test_weather_integration.py` (новый) — 12 интеграционных тестов (запускать на Jetson с `httpx`)
+- `.planning/phases/30-skills-jokes-weather/30-CONTEXT.md` — полный контекст фазы с инструкциями по тестированию
+
+Ожидает: smoke-тест на Jetson + коммит + merge в main
 
 ### Phase 15: Roadmap Global Update ✓ COMPLETE (2026-05-18)
 
@@ -161,6 +178,7 @@ Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-r
 
 ## History
 
+- 2026-06-07: Phase 30 (Skills — Jokes + Weather) — ветка `Extra`. JokeGate (verbatim, bypass LLM) + WeatherProvider (Open-Meteo, фоновый кэш, [ctx.weather] инжекция). 18 unit + 12 integration тестов. Pending: Jetson smoke-test + коммит.
 - 2026-06-01: Phase 29 (ESP Audio Output — TTS DSP chain) — аудио-часть готова (commits `2b27ac3`, `e99ced0`, `0b7361a`). DSP-цепочка (HPF/comp/presence/limiter/soxr) + paced-подача без щелчков; профиль hpf240/makeup4/comp2.0. Итоги: `29-SUMMARY.md`. Deferred: хрип = аналог (GAIN +15дБ / 5В), firmware backpressure, самоэхо. Урок сессии: обрывы громкого звука были от USB-питания, не от кода.
 - 2026-05-18: Merge ветки `V-S08.1-code_rev_ref_opt` → `main`. ROADMAP перенумерован: voice-фазы получили номера 7-11, diploma+planning фазы сдвинуты на +5 (Phase 7→12, …, Phase 23→28). Phase 11 (Voice Pipeline Refactor) — active.
 - 2026-05-17: Phase 14 (Next-Phases Planning) завершена. 12 фаз спроектированы.
