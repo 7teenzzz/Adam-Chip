@@ -2531,16 +2531,28 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         memory_retrieved_ids = [ep.id for ep in recent_eps]
 
     # echoes / chinese gate (приоритет — echoes, потом chinese)
-    # mood = _resolve_mood(scene_cache.text, sensors)  # disabled: VLM outputs English, Russian keywords never match
-    mood = "neutral"
+    # Phase 30 (layer A): окно последних реплик (зритель + Адам) для тематического
+    # матча тегов — реплики Адама несут внутреннюю лексику (технофлора, память),
+    # совпадающую с тегами карточек.
+    _match_window_turns = max(
+        tuning.echoes.history_window_turns, tuning.chinese.history_window_turns
+    )
+    _match_history = memory.recent_dialogue(_match_window_turns) if _match_window_turns else []
+    history_text = " ".join(str(t.get("text", "")) for t in _match_history)
+    # Phase 30 (layer D): mood оживлён — _resolve_mood даёт overload по English
+    # VLM "group"/русским словам толпы; mood_block:[overload] снова работает.
+    mood = _resolve_mood(scene_cache.text, sensors)
     echo_hint: str | None = None
     echo_meta: dict[str, Any] | None = None
     if tuning.echoes.enabled:
         echo_inj = echoes_gate.maybe_inject(
             transcript=transcript,
-            mood=mood,
-            adam_state=acc.adam_state,
             tuning=tuning.echoes,
+            themes=acc.themes,
+            theme_clusters=tuning.memory.theme_clusters,
+            history_text=history_text,
+            mood=mood,
+            session_id=acc.session_id,
         )
         if echo_inj:
             echo_hint = echo_inj.hint_text
@@ -2552,9 +2564,12 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     if echo_hint is None and tuning.chinese.enabled:
         cn_inj = chinese_gate.maybe_inject(
             transcript=transcript,
-            mood=mood,
-            adam_state=acc.adam_state,
             tuning=tuning.chinese,
+            themes=acc.themes,
+            theme_clusters=tuning.memory.theme_clusters,
+            history_text=history_text,
+            mood=mood,
+            session_id=acc.session_id,
         )
         if cn_inj:
             echo_hint = cn_inj.hint_text
@@ -2562,6 +2577,36 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             echo_meta = {"pool": "chinese", "id": cn_inj.entry.id, "score": cn_inj.score}
             memory_metrics.record_echo_injected(
                 cn_inj.entry.id, cn_inj.score, tuning.chinese.matcher_type
+            )
+    # Phase 30 (layer C): спонтанный канал — если тематический инжект не сработал,
+    # с низкой вероятностью «всплывает» echo/chinese по глубине сессии (без матча).
+    if echo_hint is None and tuning.echoes.enabled:
+        sp_inj = echoes_gate.maybe_inject_spontaneous(
+            tuning=tuning.echoes,
+            turn_count=acc.turn_count,
+            session_id=acc.session_id,
+            mood=mood,
+        )
+        if sp_inj:
+            echo_hint = sp_inj.hint_text
+            acc.note_echo_used(sp_inj.entry.id)
+            echo_meta = {"pool": "echoes", "id": sp_inj.entry.id, "score": sp_inj.score, "spontaneous": True}
+            memory_metrics.record_echo_injected(
+                sp_inj.entry.id, sp_inj.score, tuning.echoes.matcher_type
+            )
+    if echo_hint is None and tuning.chinese.enabled:
+        sp_cn = chinese_gate.maybe_inject_spontaneous(
+            tuning=tuning.chinese,
+            turn_count=acc.turn_count,
+            session_id=acc.session_id,
+            mood=mood,
+        )
+        if sp_cn:
+            echo_hint = sp_cn.hint_text
+            acc.note_chinese_used(sp_cn.entry.id)
+            echo_meta = {"pool": "chinese", "id": sp_cn.entry.id, "score": sp_cn.score, "spontaneous": True}
+            memory_metrics.record_echo_injected(
+                sp_cn.entry.id, sp_cn.score, tuning.chinese.matcher_type
             )
 
     # semantic

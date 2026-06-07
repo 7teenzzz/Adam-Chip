@@ -426,7 +426,6 @@ class TestEchoCooldown(unittest.TestCase):
         result = self.gate.maybe_inject(
             transcript="расскажи про коридор и свет",
             mood="neutral",
-            adam_state="Ac-Or",
             tuning=self.tuning,
         )
         self.assertIsNotNone(result)
@@ -435,13 +434,11 @@ class TestEchoCooldown(unittest.TestCase):
         self.gate.maybe_inject(
             transcript="коридор свет",
             mood="neutral",
-            adam_state="Ac-Or",
             tuning=self.tuning,
         )
         blocked = self.gate.maybe_inject(
             transcript="коридор свет",
             mood="neutral",
-            adam_state="Ac-Or",
             tuning=self.tuning,
         )
         self.assertIsNone(blocked)

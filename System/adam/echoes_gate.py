@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import yaml
 
@@ -52,12 +52,22 @@ class InjectedEcho:
 
     @property
     def hint_text(self) -> str:
-        """Сформировать строку для prompt."""
+        """Сформировать строку для prompt.
+
+        Для chinese-пула прокидываем ru_hint (смысл фразы по-русски) рядом с
+        иероглифами: Silero v5_5_ru не озвучивает hanzi, поэтому LLM нужна
+        русская смысловая опора, чтобы вплести фразу осмысленно (Phase 30).
+        """
+        phrase = self.entry.body.strip()
         if self.entry.pool == "chinese":
-            return f"[сейчас можешь вставить короткую китайскую фразу: «{self.entry.body.strip()}»]"
-        return (
-            f"[сейчас можешь упомянуть, если уместно: «{self.entry.body.strip()}»]"
-        )
+            ru = (self.entry.ru_hint or "").strip()
+            if ru:
+                return (
+                    f"[сейчас можешь вставить короткую китайскую фразу «{phrase}» "
+                    f"(смысл по-русски: {ru}) — не переводи её вслух]"
+                )
+            return f"[сейчас можешь вставить короткую китайскую фразу: «{phrase}»]"
+        return f"[сейчас можешь упомянуть, если уместно: «{phrase}»]"
 
 
 # ---------- парсер ----------
@@ -215,7 +225,13 @@ class EchoGate:
         self._tfidf: Optional[TfIdfMatcher] = None
         self._turn_counter: int = 0
         self._last_use_turn: int = -10_000  # никогда не использовалось
+        # Phase 30 (layer D): использованные теги по session_id для анти-повтора
+        # семантического кластера за сессию. Ограничено _MAX_SESSIONS записями.
+        self._session_tags: dict[str, set[str]] = {}
+        self._session_order: list[str] = []
         self.reload()
+
+    _MAX_SESSIONS = 64
 
     # ----- public API -----
 
@@ -241,16 +257,27 @@ class EchoGate:
         self,
         *,
         transcript: str,
-        mood: str,
-        adam_state: str,
         tuning: EchoesTuning | ChineseTuning,
+        themes: Optional[Iterable[str]] = None,
+        theme_clusters: Optional[dict[str, list[str]]] = None,
+        history_text: str = "",
+        mood: str = "neutral",
+        session_id: Optional[str] = None,
         now: Optional[datetime] = None,
     ) -> Optional[InjectedEcho]:
         """Главная точка вызова. None или InjectedEcho.
 
+        Phase 30:
+          - Слой A: матч тегов идёт против `{themes} ∪ {ключевые слова кластеров}`
+            и текста взвешенного окна (`transcript` + `history_text`), а не против
+            одной сырой реплики.
+          - Слой B: жёсткий порог заменён мягким движком — кандидаты выше
+            `selection_floor` выбираются взвешенно-случайно по
+            `thematic_score × weight × recency_decay`.
+          - Слой D: карточки, делящие тег с уже инжектнутыми за сессию, отсеиваются.
+
         Side-effect: при инжекте — увеличивает turn-counter и записывает used.
-        Если просто пересчитать turn-counter без инжекта (например мы уже знаем что не инжектим
-        по другой причине) — используй note_turn().
+        Если просто пересчитать turn-counter без инжекта — используй note_turn().
         """
         with self._lock:
             self._turn_counter += 1
@@ -266,35 +293,93 @@ class EchoGate:
             if since_last < tuning.global_cooldown_turns:
                 return None
 
-            # candidates
             now = now or datetime.now(timezone.utc)
-            cooldown_cutoff = now - timedelta(days=self._cooldown_days(tuning))
-            recent_uses = self.memory.all_recent_uses(pool=self.pool, since=cooldown_cutoff)
+            recent_uses, recency_uses = self._use_maps(tuning, now)
+            text, _tokens, theme_terms = self._build_vocab(
+                transcript, history_text, themes, theme_clusters
+            )
+            session_tags = self._session_tags.get(session_id, set()) if session_id else set()
 
-            candidates: list[tuple[EchoEntry, float, list[str]]] = []
+            candidates: list[tuple[EchoEntry, float, list[str], float]] = []
             for entry in self._entries:
-                if mood in entry.mood_block:
+                if not self._eligible(entry, mood, recent_uses, session_tags, tuning):
                     continue
-                if entry.id in recent_uses:
+                score, matched = self._score_match(entry, text, theme_terms, tuning)
+                if score < tuning.selection_floor:
                     continue
-                score, matched = self._score_match(entry, transcript, tuning)
-                if score >= tuning.match_threshold:
-                    candidates.append((entry, score, matched))
+                final = self._final_weight(entry, score, recency_uses, tuning, now)
+                if final <= 0:
+                    continue
+                candidates.append((entry, score, matched, final))
 
             if not candidates:
                 return None
 
-            candidates.sort(key=lambda c: c[1], reverse=True)
-            top, score, matched = candidates[0]
-            effective_weight = max(0.0, min(1.0, top.weight * tuning.weight_multiplier))
-            if self._rng.random() > effective_weight:
-                return None
-
-            echo_id = top.id
+            entry, score, matched, _final = self._weighted_choice(candidates)
+            echo_id = entry.id
             self._last_use_turn = self._turn_counter
-            injected = InjectedEcho(entry=top, score=score, matched_tags=matched)
+            if session_id:
+                self._record_session_tags(session_id, entry.tags)
+            injected = InjectedEcho(entry=entry, score=score, matched_tags=matched)
 
         # Record use outside the lock to avoid holding it during file I/O.
+        self.memory.record_echo_used(echo_id, pool=self.pool)
+        return injected
+
+    def maybe_inject_spontaneous(
+        self,
+        *,
+        tuning: EchoesTuning | ChineseTuning,
+        turn_count: int,
+        session_id: Optional[str] = None,
+        mood: str = "neutral",
+        now: Optional[datetime] = None,
+    ) -> Optional[InjectedEcho]:
+        """Слой C: низковероятный инжект по глубине сессии, без тематического матча.
+
+        Вызывается оркестратором ПОСЛЕ неудачной попытки тематического инжекта в
+        тот же turn, поэтому НЕ инкрементит turn-counter. Уважает global/per-id
+        cooldown, diversity и weight. Выбор карточки — взвешенно по
+        `weight × recency_decay` («память всплывает сама», по лору).
+        """
+        with self._lock:
+            if not tuning.enabled or not tuning.spontaneous_enabled:
+                return None
+            if turn_count < tuning.spontaneous_min_turns:
+                return None
+            if not self._entries:
+                self.reload(default_weight=tuning.default_entry_weight)
+            if not self._entries:
+                return None
+            since_last = self._turn_counter - self._last_use_turn
+            if since_last < tuning.global_cooldown_turns:
+                return None
+            if self._rng.random() > tuning.spontaneous_probability:
+                return None
+
+            now = now or datetime.now(timezone.utc)
+            recent_uses, recency_uses = self._use_maps(tuning, now)
+            session_tags = self._session_tags.get(session_id, set()) if session_id else set()
+
+            candidates: list[tuple[EchoEntry, float, list[str], float]] = []
+            for entry in self._entries:
+                if not self._eligible(entry, mood, recent_uses, session_tags, tuning):
+                    continue
+                final = self._final_weight(entry, 1.0, recency_uses, tuning, now)
+                if final <= 0:
+                    continue
+                candidates.append((entry, 0.0, [], final))
+
+            if not candidates:
+                return None
+
+            entry, score, matched, _final = self._weighted_choice(candidates)
+            echo_id = entry.id
+            self._last_use_turn = self._turn_counter
+            if session_id:
+                self._record_session_tags(session_id, entry.tags)
+            injected = InjectedEcho(entry=entry, score=score, matched_tags=matched)
+
         self.memory.record_echo_used(echo_id, pool=self.pool)
         return injected
 
@@ -321,38 +406,104 @@ class EchoGate:
     def _cooldown_days(self, tuning: EchoesTuning | ChineseTuning) -> int:
         return tuning.per_echo_cooldown_days
 
+    def _use_maps(
+        self, tuning: EchoesTuning | ChineseTuning, now: datetime
+    ) -> tuple[dict[str, datetime], dict[str, datetime]]:
+        """Возвращает (recent_uses, recency_uses).
+
+        recent_uses — использования внутри per-id cooldown (для исключения).
+        recency_uses — внутри более широкого окна recency_window_days (для decay).
+        """
+        cooldown_cutoff = now - timedelta(days=self._cooldown_days(tuning))
+        recent_uses = self.memory.all_recent_uses(pool=self.pool, since=cooldown_cutoff)
+        recency_cutoff = now - timedelta(
+            days=max(tuning.recency_window_days, self._cooldown_days(tuning))
+        )
+        recency_uses = self.memory.all_recent_uses(pool=self.pool, since=recency_cutoff)
+        return recent_uses, recency_uses
+
+    def _eligible(
+        self,
+        entry: EchoEntry,
+        mood: str,
+        recent_uses: dict[str, datetime],
+        session_tags: set[str],
+        tuning: EchoesTuning | ChineseTuning,
+    ) -> bool:
+        """Общие фильтры пригодности: mood-block, per-id cooldown, diversity."""
+        if mood in entry.mood_block:
+            return False
+        if entry.id in recent_uses:
+            return False
+        if tuning.diversity_enabled and session_tags and (set(entry.tags) & session_tags):
+            return False
+        return True
+
+    def _build_vocab(
+        self,
+        transcript: str,
+        history_text: str,
+        themes: Optional[Iterable[str]],
+        theme_clusters: Optional[dict[str, list[str]]],
+    ) -> tuple[str, set[str], set[str]]:
+        """Слой A: словарь контекста для матча.
+
+        Возвращает (text, tokens, theme_terms):
+          - text: lower-объединение transcript + окна истории (для substring/word match)
+          - tokens: токены text (зарезервировано под tfidf/будущие матчеры)
+          - theme_terms: имена обнаруженных тем + ключевые слова их кластеров
+            (нормализованный мост: «одиноко» → тема «одиночество» → тег «одиночество»)
+        """
+        text = f"{transcript or ''} {history_text or ''}".lower()
+        tokens = set(_tokenize(text))
+        theme_terms: set[str] = set()
+        clusters = theme_clusters or {}
+        for th in (themes or []):
+            tl = str(th).lower()
+            theme_terms.add(tl)
+            for kw in (clusters.get(th) or clusters.get(tl) or []):
+                theme_terms.add(str(kw).lower())
+        return text, tokens, theme_terms
+
     def _score_match(
         self,
         entry: EchoEntry,
-        transcript: str,
+        text: str,
+        theme_terms: set[str],
         tuning: "EchoesTuning | ChineseTuning",
     ) -> tuple[float, list[str]]:
         """Выбирает алгоритм матчинга по tuning.matcher_type ("tag" или "tfidf")."""
         if tuning.matcher_type == "tfidf":
-            return self._score_tfidf(entry, transcript)
-        return self._score_tag(entry, transcript, tuning)
+            return self._score_tfidf(entry, text)
+        return self._score_tag(entry, text, theme_terms, tuning)
 
     def _score_tag(
         self,
         entry: EchoEntry,
-        transcript: str,
+        text: str,
+        theme_terms: set[str],
         tuning: "EchoesTuning | ChineseTuning",
     ) -> tuple[float, list[str]]:
-        """Tag-based матч: сколько тегов entry присутствуют в transcript."""
+        """Tag-based матч против тематического словаря + текста окна (слой A).
+
+        Тег засчитывается если: (1) он совпадает с темой/ключом кластера
+        (тематический мост), либо (2) буквально присутствует в тексте окна.
+        """
         if not entry.tags:
             return 0.0, []
-        normalized = transcript.lower()
         short_cutoff = tuning.tag_short_cutoff
         boost = tuning.score_boost
         matched: list[str] = []
         for tag in entry.tags:
             tag_lower = tag.lower()
+            if tag_lower in theme_terms:
+                matched.append(tag)
+                continue
             if len(tag_lower) <= short_cutoff:
-                pattern = rf"\b{re.escape(tag_lower)}\b"
-                if re.search(pattern, normalized):
+                if re.search(rf"\b{re.escape(tag_lower)}\b", text):
                     matched.append(tag)
             else:
-                if tag_lower in normalized:
+                if tag_lower in text:
                     matched.append(tag)
         if not matched:
             return 0.0, []
@@ -362,16 +513,83 @@ class EchoGate:
     def _score_tfidf(
         self,
         entry: EchoEntry,
-        transcript: str,
+        text: str,
     ) -> tuple[float, list[str]]:
-        """TF-IDF cosine similarity между transcript и тегами карточки."""
+        """TF-IDF cosine similarity между текстом окна и тегами карточки."""
         if self._tfidf is None or not entry.tags:
             return 0.0, []
         try:
             idx = self._entries.index(entry)
         except ValueError:
             return 0.0, []
-        query_tokens = _tokenize(transcript)
+        query_tokens = _tokenize(text)
         score = self._tfidf.score(query_tokens, idx)
-        matched = [t for t in entry.tags if t in transcript.lower()]
+        matched = [t for t in entry.tags if t in text]
         return score, matched
+
+    def _recency_decay(
+        self,
+        echo_id: str,
+        recency_uses: dict[str, datetime],
+        tuning: EchoesTuning | ChineseTuning,
+        now: datetime,
+    ) -> float:
+        """Слой B: множитель свежести 0..1.
+
+        Никогда не использованные → 1.0. Использованные недавно (но за пределами
+        cooldown) → ближе к recency_min, линейно растёт к 1.0 на горизонте
+        recency_window_days.
+        """
+        last = recency_uses.get(echo_id)
+        if last is None:
+            return 1.0
+        age_days = (now - last).total_seconds() / 86400.0
+        cd = self._cooldown_days(tuning)
+        if age_days <= cd:
+            return tuning.recency_min  # обычно уже отфильтровано recent_uses
+        span = max(1e-6, tuning.recency_window_days - cd)
+        frac = min(1.0, (age_days - cd) / span)
+        return tuning.recency_min + (1.0 - tuning.recency_min) * frac
+
+    def _final_weight(
+        self,
+        entry: EchoEntry,
+        score: float,
+        recency_uses: dict[str, datetime],
+        tuning: EchoesTuning | ChineseTuning,
+        now: datetime,
+    ) -> float:
+        """Слой B: итоговый вес кандидата = score × eff_weight × recency_decay."""
+        eff_weight = max(0.0, min(1.0, entry.weight * tuning.weight_multiplier))
+        if eff_weight <= 0:
+            return 0.0
+        recency = self._recency_decay(entry.id, recency_uses, tuning, now)
+        return score * eff_weight * recency
+
+    def _weighted_choice(
+        self,
+        candidates: list[tuple[EchoEntry, float, list[str], float]],
+    ) -> tuple[EchoEntry, float, list[str], float]:
+        """Взвешенно-случайный выбор по полю final (индекс 3). Использует self._rng."""
+        total = sum(c[3] for c in candidates)
+        if total <= 0:
+            return self._rng.choice(candidates)
+        r = self._rng.random() * total
+        upto = 0.0
+        for c in candidates:
+            upto += c[3]
+            if r <= upto:
+                return c
+        return candidates[-1]
+
+    def _record_session_tags(self, session_id: str, tags: list[str]) -> None:
+        """Слой D: запомнить теги инжектнутой карточки для анти-повтора за сессию."""
+        bag = self._session_tags.get(session_id)
+        if bag is None:
+            bag = set()
+            self._session_tags[session_id] = bag
+            self._session_order.append(session_id)
+            if len(self._session_order) > self._MAX_SESSIONS:
+                old = self._session_order.pop(0)
+                self._session_tags.pop(old, None)
+        bag.update(t.lower() for t in tags)

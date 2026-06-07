@@ -881,31 +881,47 @@
           "type": "object",
           "description": "Pool of pre-written 'echo' utterances Adam can drop into replies (e.g. fragments of memories). Tag-matched against the current conversation.",
           "properties": {
-            "enabled": { "type": "boolean", "default": false, "description": "Master switch for echoes injection." },
+            "enabled": { "type": "boolean", "default": true, "description": "Master switch for echoes injection. Phase 30: enabled by default — Echoes pool is a core part of the persona's voice." },
             "global_cooldown_turns": { "type": "integer", "minimum": 0, "default": 12, "description": "Min turns between ANY two echoes firing." },
             "per_echo_cooldown_days": { "type": "integer", "minimum": 0, "default": 7, "description": "Min days before the SAME echo can fire again." },
-            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55, "description": "Min tag-match score for an echo to be eligible." },
+            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55, "description": "Phase 30: legacy/reference value. The hard threshold was replaced by the soft probabilistic engine — eligibility is now gated by selection_floor, and selection is weighted-random by thematic_score × weight × recency_decay. Kept for backward compatibility and tuning reference." },
             "weight_multiplier": { "type": "number", "minimum": 0, "maximum": 5, "default": 1.0, "description": "Global multiplier on echo selection weights." },
-            "matcher_type": { "type": "string", "enum": ["tag", "tfidf"], "default": "tag", "description": "Matching algorithm: tag-set overlap or TF-IDF cosine." },
+            "matcher_type": { "type": "string", "enum": ["tag", "tfidf"], "default": "tag", "description": "Matching algorithm: tag-set overlap or TF-IDF cosine. Phase 30: tag matcher now bridges through theme clusters (acc.themes ∪ cluster keywords), not just literal substring against the raw transcript." },
             "score_boost": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.2, "description": "Bonus added to score when an echo's tags exactly match." },
             "tag_short_cutoff": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3, "description": "Tag sets shorter than this get a different scoring formula (over-weight short matches less)." },
-            "default_entry_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Default weight for echo entries that don't declare their own." }
+            "default_entry_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Default weight for echo entries that don't declare their own." },
+            "selection_floor": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15, "description": "Phase 30 (layer B): minimum thematic_score for an echo to enter the weighted-random candidate pool. Replaces the hard match_threshold cliff — low value lets near-misses participate, with rarity enforced by cooldowns rather than by an abrupt cutoff." },
+            "recency_window_days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 30, "description": "Phase 30 (layer B): lookback window (days) for the recency_decay multiplier. Echoes used within this window (but past per_echo_cooldown_days) are weighted down relative to never-used / long-ago ones." },
+            "recency_min": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Phase 30 (layer B): minimum recency_decay multiplier for an echo used right after its cooldown expired. Ramps linearly back to 1.0 across recency_window_days. 1.0 disables recency weighting." },
+            "diversity_enabled": { "type": "boolean", "default": true, "description": "Phase 30 (layer D): when true, the gate won't inject an echo that shares any tag with an echo already injected this session — prevents thematically-adjacent repeats (e.g. corridor → stairs → escalator)." },
+            "history_window_turns": { "type": "integer", "minimum": 0, "maximum": 20, "default": 4, "description": "Phase 30 (layer A): number of recent dialogue turns (viewer + Adam) whose text feeds the tag-match vocabulary, in addition to the current transcript and the normalized theme set. Adam's own replies carry internal vocabulary (технофлора, память, симбиоз) that matches echo tags." },
+            "spontaneous_enabled": { "type": "boolean", "default": true, "description": "Phase 30 (layer C): master switch for the spontaneous injection channel — surfaces an echo by weight alone (no thematic match) on session depth, lore-faithful to 'memories surface on their own'." },
+            "spontaneous_probability": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.05, "description": "Phase 30 (layer C): per-turn probability of a spontaneous echo when no thematic echo fired and session depth ≥ spontaneous_min_turns. Kept low to preserve rarity." },
+            "spontaneous_min_turns": { "type": "integer", "minimum": 0, "maximum": 100, "default": 3, "description": "Phase 30 (layer C): minimum session turn count before the spontaneous channel may fire. Avoids surfacing memories before any rapport is established." }
           }
         },
         "chinese": {
           "type": "object",
           "description": "Chinese-language interjections — same machinery as echoes but for the bilingual flavour layer. Rarer, longer cooldown.",
           "properties": {
-            "enabled": { "type": "boolean", "default": false, "description": "Master switch for Chinese-language interjections." },
+            "enabled": { "type": "boolean", "default": true, "description": "Master switch for Chinese-language interjections. Phase 30: enabled. Silero v5_5_ru cannot pronounce hanzi, so the card's ru_hint is passed into the LLM hint alongside the Chinese phrase (pre-rendered wav playback by audio_id is deferred to a later phase)." },
             "global_cooldown_turns": { "type": "integer", "minimum": 0, "default": 30, "description": "Min turns between any two Chinese interjections." },
             "per_echo_cooldown_days": { "type": "integer", "minimum": 0, "default": 7, "description": "Min days before the same Chinese phrase repeats." },
-            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.65, "description": "Higher than echoes — Chinese should only fire on clear topical matches." },
+            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Phase 30: legacy/reference value (lowered from 0.65). Hard threshold replaced by selection_floor + soft engine, same as echoes." },
             "weight_multiplier": { "type": "number", "minimum": 0, "maximum": 5, "default": 1.0 },
             "matcher_type": { "type": "string", "enum": ["tag", "tfidf"], "default": "tag" },
             "score_boost": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.2 },
             "tag_short_cutoff": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 },
             "default_entry_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
-            "audio_mode": { "type": "string", "enum": ["prerendered_only", "prerendered_with_text_fallback", "text_only"], "default": "prerendered_with_text_fallback", "description": "How Chinese phrases get played: pre-rendered audio file, audio with TTS fallback, or text-only (Silero TTS pronounces transliteration)." }
+            "audio_mode": { "type": "string", "enum": ["prerendered_only", "prerendered_with_text_fallback", "text_only"], "default": "prerendered_with_text_fallback", "description": "How Chinese phrases get played: pre-rendered audio file, audio with TTS fallback, or text-only (Silero TTS pronounces transliteration). Phase 30: pre-rendered wav playback by audio_id is not yet wired — the LLM currently receives the phrase + ru_hint as text." },
+            "selection_floor": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15, "description": "Phase 30 (layer B): minimum thematic_score for the weighted-random candidate pool. See tuning.echoes.selection_floor." },
+            "recency_window_days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 30, "description": "Phase 30 (layer B): recency_decay lookback window in days. See tuning.echoes.recency_window_days." },
+            "recency_min": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Phase 30 (layer B): minimum recency_decay multiplier. See tuning.echoes.recency_min." },
+            "diversity_enabled": { "type": "boolean", "default": true, "description": "Phase 30 (layer D): per-session tag-overlap anti-repeat. See tuning.echoes.diversity_enabled." },
+            "history_window_turns": { "type": "integer", "minimum": 0, "maximum": 20, "default": 4, "description": "Phase 30 (layer A): recent dialogue turns feeding the tag-match vocabulary. See tuning.echoes.history_window_turns." },
+            "spontaneous_enabled": { "type": "boolean", "default": true, "description": "Phase 30 (layer C): spontaneous channel switch. See tuning.echoes.spontaneous_enabled." },
+            "spontaneous_probability": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.03, "description": "Phase 30 (layer C): per-turn spontaneous probability. Lower than echoes (0.03 vs 0.05) — Chinese should stay rarer. See tuning.echoes.spontaneous_probability." },
+            "spontaneous_min_turns": { "type": "integer", "minimum": 0, "maximum": 100, "default": 3, "description": "Phase 30 (layer C): minimum session turn count before the spontaneous channel may fire. See tuning.echoes.spontaneous_min_turns." }
           }
         },
         "session": {

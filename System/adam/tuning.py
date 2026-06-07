@@ -86,7 +86,30 @@ class MemoryTuning(BaseModel):
     theme_clusters: Dict[str, List[str]] = Field(default_factory=dict)
 
 
-class EchoesTuning(BaseModel):
+class _GateSmartMixin(BaseModel):
+    """Phase 30 — параметры умного инжекта (общие для echoes и chinese).
+
+    Слой A: history_window_turns — окно последних реплик (зритель + Адам),
+            против которого матчатся теги (плюс тематический мост через
+            theme_clusters в Orchestrator).
+    Слой B: selection_floor + recency_window_days/recency_min — мягкий
+            вероятностный движок вместо жёсткого match_threshold.
+    Слой C: spontaneous_* — независимый низковероятный канал инжекта по
+            глубине сессии, без тематического матча.
+    Слой D: diversity_enabled — анти-повтор семантического кластера за сессию.
+    """
+
+    selection_floor: float = Field(0.15, ge=0, le=1)
+    recency_window_days: int = Field(30, ge=1, le=365)
+    recency_min: float = Field(0.5, ge=0, le=1)
+    diversity_enabled: bool = True
+    history_window_turns: int = Field(4, ge=0, le=20)
+    spontaneous_enabled: bool = True
+    spontaneous_probability: float = Field(0.05, ge=0, le=1)
+    spontaneous_min_turns: int = Field(3, ge=0, le=100)
+
+
+class EchoesTuning(_GateSmartMixin):
     enabled: bool = True
     global_cooldown_turns: int = Field(12, ge=0)
     per_echo_cooldown_days: int = Field(7, ge=0)
@@ -98,7 +121,7 @@ class EchoesTuning(BaseModel):
     default_entry_weight: float = Field(0.5, ge=0, le=1)
 
 
-class ChineseTuning(BaseModel):
+class ChineseTuning(_GateSmartMixin):
     enabled: bool = True
     global_cooldown_turns: int = Field(30, ge=0)
     per_echo_cooldown_days: int = Field(7, ge=0)
@@ -108,6 +131,7 @@ class ChineseTuning(BaseModel):
     score_boost: float = Field(0.2, ge=0, le=1)
     tag_short_cutoff: int = Field(3, ge=1, le=10)
     default_entry_weight: float = Field(0.5, ge=0, le=1)
+    spontaneous_probability: float = Field(0.03, ge=0, le=1)
     audio_mode: Literal[
         "prerendered_only",
         "prerendered_with_text_fallback",
