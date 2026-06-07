@@ -201,7 +201,7 @@ class AspectCeilingConfig(BaseModel):
 
 class DriftTableEntry(BaseModel):
     aspect: str
-    base_delta: float = Field(0.001, ge=0.0, le=0.02)
+    base_delta: float = Field(0.001, ge=-0.02, le=0.02)
 
 
 class DriftTableConfig(BaseModel):

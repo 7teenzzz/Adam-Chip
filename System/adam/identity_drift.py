@@ -138,7 +138,7 @@ class DriftAccumulator:
             )
             if aspect in IdentityVector.LOCKED:
                 continue
-            if aspect and base_delta > 0:
+            if aspect and base_delta != 0:
                 result[aspect] = round(base_delta * max(0.0, salience), 6)
         return result
 
@@ -164,6 +164,9 @@ class DriftAccumulator:
             if ceiling is not None:
                 max_accum = max(0.0, ceiling - base)
                 new_accum = min(new_accum, max_accum)
+            # Floor: drift cannot reduce weight below 50% of base
+            min_accum = -(base * 0.5)
+            new_accum = max(new_accum, min_accum)
             updated[aspect] = round(new_accum, 6)
         return updated
 

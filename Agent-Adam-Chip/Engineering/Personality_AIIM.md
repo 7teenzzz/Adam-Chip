@@ -1,5 +1,7 @@
 # Adam Chip — AIIM-конфигурация личности
 
+> **[ARCHIVED — superseded by Identity.md]**
+>
 > Формализованное ядро личности Адама в нотации AIIM.
 > Опорный документ — `AIIM_Framework.md` (там же).
 > Поведенческий контекст — `BIO.md`, `Abilities.md`.

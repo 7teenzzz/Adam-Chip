@@ -73,12 +73,16 @@ class IdentityVector:
     """Runtime aspect weights. Initialized from Identity.md, modulated per turn."""
 
     weights: dict[str, float]
+    specs: dict[str, AspectSpec] = field(default_factory=dict)
     # These two aspects define Adam's core identity and must never drift or modulate.
     LOCKED: ClassVar[frozenset[str]] = frozenset({"se", "co"})
 
     @classmethod
     def from_specs(cls, specs: dict[str, AspectSpec]) -> "IdentityVector":
-        return cls(weights={code: spec.weight for code, spec in specs.items()})
+        return cls(
+            weights={code: spec.weight for code, spec in specs.items()},
+            specs=specs,
+        )
 
     def with_drift(
         self,
@@ -92,10 +96,10 @@ class IdentityVector:
                 continue
             ceiling = ceilings.get(aspect, 1.0)
             new_weights[aspect] = min(new_weights.get(aspect, 0.0) + delta, ceiling)
-        return IdentityVector(weights=new_weights)
+        return IdentityVector(weights=new_weights, specs=self.specs)
 
     def copy(self) -> "IdentityVector":
-        return IdentityVector(weights=dict(self.weights))
+        return IdentityVector(weights=dict(self.weights), specs=dict(self.specs))
 
 
 @dataclass
@@ -168,14 +172,17 @@ class AIIMRuntimeState:
             return ""
 
         active_intentions = self.intentions.active_names()
-        # Suppress become_unreadable and signal_void — they are internal,
-        # must never be named in the prompt.
+        # Separate internal mode flags from injectable named intentions.
+        # signal_void and become_unreadable become mode= entries, never intention= names.
         injectable = [
             n for n in active_intentions
             if n not in ("become_unreadable", "signal_void")
         ][:tuning.max_intentions_in_ctx]
 
-        is_default = self.emotion == "curious" and not injectable
+        void_signal = self.intentions.signal_void
+        unreadable = self.intentions.become_unreadable
+
+        is_default = self.emotion == "curious" and not injectable and not void_signal and not unreadable
         if is_default:
             return ""
 
@@ -198,6 +205,12 @@ class AIIMRuntimeState:
         # Active intentions (by mapped name)
         for name in injectable:
             parts.append(f"intention={name}")
+
+        # Internal mode flags — translate to mode= without naming the drive
+        if void_signal:
+            parts.append("mode=void_signal")
+        if unreadable:
+            parts.append("mode=unreadable")
 
         return "\n".join(parts)
 
@@ -376,12 +389,27 @@ class AspectModulator:
         def _clamp(v: float) -> float:
             return max(aspect_min, min(aspect_max, v))
 
+        def _scale(aspect: str, delta: float) -> float:
+            """Apply Ac/Pa activity scaling and Ch noise to a delta."""
+            spec = base.specs.get(aspect)
+            if spec is None:
+                return delta
+            mode = spec.mode
+            if mode.startswith("Pa"):
+                delta *= 0.5
+            if mode.endswith("Ch"):
+                delta += random.gauss(0, 0.008)
+            return delta
+
         def _apply(aspect: str, delta: float) -> None:
             if aspect not in IdentityVector.LOCKED and aspect in new_weights:
-                new_weights[aspect] = _clamp(new_weights[aspect] + delta)
+                new_weights[aspect] = _clamp(new_weights[aspect] + _scale(aspect, delta))
 
         def _decay(aspect: str, rate: float) -> None:
             if aspect not in IdentityVector.LOCKED and aspect in new_weights:
+                spec = base.specs.get(aspect)
+                if spec is not None and spec.mode.startswith("Pa"):
+                    rate *= 0.5  # passive aspects return to base slower
                 base_w = base.weights.get(aspect, new_weights[aspect])
                 current = new_weights[aspect]
                 if current > base_w:
@@ -412,7 +440,7 @@ class AspectModulator:
                 if aspect not in IdentityVector.LOCKED:
                     _decay(aspect, decay_rate * 0.5)
 
-        return IdentityVector(weights=new_weights)
+        return IdentityVector(weights=new_weights, specs=base.specs)
 
 
 def _get(obj: Any, attr: str, default: Any) -> Any:

@@ -114,7 +114,7 @@
   },
   "identity": {
     "enabled": true,
-    "aiim_formula_path": "Agent Adam Chip/About/Identity.md",
+    "aiim_formula_path": "Agent-Adam-Chip/About/Identity.md",
     "base_weights": {
       "wi": 0.65,
       "lo": 0.70,
@@ -229,7 +229,10 @@
       "witnessed": [
         {"aspect": "at", "base_delta": 0.001}
       ],
-      "void": []
+      "void": [
+        {"aspect": "lo", "base_delta": -0.003},
+        {"aspect": "at", "base_delta": -0.002}
+      ]
     },
     "include_in_prompt": true,
     "max_intentions_in_ctx": 2,

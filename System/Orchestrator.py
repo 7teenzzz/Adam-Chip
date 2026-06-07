@@ -144,6 +144,28 @@ _intention_tracker = IntentionTracker()
 _aspect_modulator = AspectModulator()
 _drift_accumulator = DriftAccumulator()
 
+_VISITOR_TONE_SAD = {
+    "грустно", "тяжело", "устал", "устала", "одинок", "одинока",
+    "потерял", "потеряла", "скучно", "боюсь", "страшно", "больно",
+    "печально", "пусто", "одиноко",
+}
+_VISITOR_TONE_CURIOUS = {
+    "почему", "как это", "что это", "расскажи", "объясни",
+    "а если", "а вдруг", "интересно", "хочу понять", "что значит",
+    "зачем", "как работает",
+}
+
+
+def _detect_visitor_tone(transcript: str, word_count: int) -> str:
+    """Infer visitor's conversational tone from transcript heuristics."""
+    t = transcript.lower()
+    if any(m in t for m in _VISITOR_TONE_SAD):
+        return "sad"
+    if "?" in transcript or any(m in t for m in _VISITOR_TONE_CURIOUS):
+        if word_count >= 3:
+            return "curious"
+    return "neutral"
+
 # Ring-buffer полных промтов для UI диагностики.
 from collections import deque  # noqa: E402
 
@@ -2565,7 +2587,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         try:
             silence_s = max(0.0, now_ts - float(session_state.get("last_turn_at") or now_ts))
             word_count = len(transcript.split())
-            visitor_tone = acc.tone_visitor if acc else "neutral"
+            visitor_tone = _detect_visitor_tone(transcript, word_count)
             aiim_state.emotion = _emotion_machine.transition(
                 aiim_state.emotion, transcript, visitor_tone,
                 silence_s, word_count, tuning.identity,
