@@ -693,7 +693,12 @@ class VoiceLoopController:
             await self._run_via_mic_reader(frame_bytes)
         else:
             frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
-            await self._run_local(frame_bytes)
+            while self.running:
+                await self._run_local(frame_bytes)
+                if self.running:
+                    # Retries in _run_local exhausted (device disconnect/busy).
+                    # Pause 5 s then retry — supports USB mic hot-reconnect.
+                    await asyncio.sleep(5.0)
 
     async def _run_via_mic_reader(self, frame_bytes: int) -> None:
         """Consume chunks from MicReader queue and drive _vad_loop.
@@ -733,8 +738,13 @@ class VoiceLoopController:
                 })
             finally:
                 self._stop_process()
-        self.running = False
-        event_log.append("voice_loop_stopped", self.status())
+        # Don't set running=False here — outer loop in _run() retries for USB
+        # device reconnect. voice_loop_stopped is emitted only by stop().
+        event_log.append("voice_loop_error", {
+            "error": "local mic retries exhausted",
+            "attempt": len(_delays) + 1,
+            "retrying": True,
+        })
 
     # Phase 7: ESP32 stream-open / drain / reconnect logic lives in MicReader
     # (System/adam/mic_reader.py). _make_stereo_reader is a module-level free
@@ -824,6 +834,10 @@ class VoiceLoopController:
                     await asyncio.sleep(0.005)
                     continue
                 _empty_streak = 0
+                # Partial frame: arecord exited mid-buffer; subsequent reads
+                # will be empty and trigger the 3-streak error properly.
+                if len(chunk) < frame_bytes:
+                    continue
                 chunk = self._apply_vad_hpf(chunk)
 
                 _rms = audioop.rms(chunk, 2)

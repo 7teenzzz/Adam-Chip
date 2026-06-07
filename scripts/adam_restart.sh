@@ -73,12 +73,35 @@ if [[ -n "${strays}" ]]; then
 fi
 echo "  ✓ старый оркестратор остановлен"
 
+# Wait for port to be free before binding uvicorn — race condition on rapid restart.
+_wait_port_free() {
+  local port=$1 tries=${2:-20}
+  for _ in $(seq 1 "${tries}"); do
+    ss -tlnp 2>/dev/null | grep -q ":${port} " || return 0
+    sleep 0.3
+  done
+  echo "  ! порт ${port} всё ещё занят после ожидания" >&2
+  return 1
+}
+_wait_port_free "${PORT}" 20 || {
+  echo "  · принудительное освобождение порта ${PORT}…"
+  fuser -k "${PORT}/tcp" 2>/dev/null || true
+  sleep 1
+}
+
 # ─── 2. Какие сервисы сейчас живы → ADAM_EXPECTED_SERVICES ───────────────────
+# Read ports from Config.json to avoid hardcoded values.
+_cfg() { python3 -c "import json; d=json.load(open('${ROOT_DIR}/System/Config.json')); print($1)" 2>/dev/null || echo "$2"; }
+LLM_HEALTH_PORT="$(_cfg "d['services']['llm']['base_url'].split(':')[-1].rstrip('/')" 8081)"
+TTS_HEALTH_PORT="$(_cfg "d['services']['tts']['base_url'].split(':')[-1].rstrip('/')" 8082)"
+ASR_HEALTH_PORT="$(_cfg "d['services']['asr']['base_url'].split(':')[-1].rstrip('/')" 8095)"
+VLM_HEALTH_PORT="$(_cfg "d['services']['vlm']['base_url'].split(':')[-1].rstrip('/')" 8084)"
+
 EXPECTED=""
-curl --noproxy '*' -fsS -m2 "http://127.0.0.1:8081/health" >/dev/null 2>&1 && EXPECTED+="llm,"
-curl --noproxy '*' -fsS -m2 "http://127.0.0.1:8082/health" >/dev/null 2>&1 && EXPECTED+="tts,"
-curl --noproxy '*' -fsS -m2 "http://127.0.0.1:8095/health" >/dev/null 2>&1 && EXPECTED+="asr,"
-curl --noproxy '*' -fsS -m2 "http://127.0.0.1:8084/"        >/dev/null 2>&1 && EXPECTED+="vlm,"
+curl --noproxy '*' -fsS -m2 "http://127.0.0.1:${LLM_HEALTH_PORT}/health" >/dev/null 2>&1 && EXPECTED+="llm,"
+curl --noproxy '*' -fsS -m2 "http://127.0.0.1:${TTS_HEALTH_PORT}/health" >/dev/null 2>&1 && EXPECTED+="tts,"
+curl --noproxy '*' -fsS -m2 "http://127.0.0.1:${ASR_HEALTH_PORT}/health" >/dev/null 2>&1 && EXPECTED+="asr,"
+curl --noproxy '*' -fsS -m2 "http://127.0.0.1:${VLM_HEALTH_PORT}/"        >/dev/null 2>&1 && EXPECTED+="vlm,"
 EXPECTED="${EXPECTED%,}"
 echo "  ожидаемые сервисы: ${EXPECTED:-none}"
 
