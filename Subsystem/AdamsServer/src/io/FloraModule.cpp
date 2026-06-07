@@ -22,6 +22,9 @@ namespace {
 StaticTask_t sFloraTaskBuffer;
 StackType_t  sFloraTaskStack[4096];
 bool         sFloraTaskStarted = false;
+// C7: honor flora.enabled. Set via setFloraState params.enabled. When false the
+// animation task does not drive the channels at all (external/manual control wins).
+volatile bool sFloraEnabled = true;
 
 // --- Preset identifiers --------------------------------------------------
 enum class FloraPreset : uint8_t {
@@ -31,6 +34,8 @@ enum class FloraPreset : uint8_t {
   Attentive,    // слушание — bright plateau, vibro forced 0 (D-11)
   ThinkPulse,   // раздумье — low base + wandering random-subset flashes (D-01)
   WakeBloom,    // пробуждение — random sprout from dark -> collective inhale -> breathe
+  External,     // ответ/calibration — animation suppressed; floraTask yields to
+                // external /api/pca9685/* writes (RMS stream). Watchdog -> breathe.
 };
 
 struct PresetDefaults {
@@ -55,6 +60,7 @@ constexpr PresetDefaults kPresetDefaults[] = {
   {"attentive",    1228,  kFlora71PctDuty,  450,  false},  // base=30%, peak=71%, wave period 450ms
   {"think_pulse",   819,  2600,          1750,    true },  // base=20%
   {"wake_bloom",    0,    kFlora71PctDuty, 3000,  true },  // peak capped at 71%
+  {"external",      0,    0,               1000,  false},  // suppressed; floraTick yields to HTTP writes
 };
 constexpr size_t kPresetCount = sizeof(kPresetDefaults) / sizeof(kPresetDefaults[0]);
 
@@ -163,16 +169,55 @@ uint16_t computeLightLevel(FloraPreset preset, uint16_t base, uint16_t peak,
       const float s = constrain(phase, 0.0f, 1.0f);
       return static_cast<uint16_t>(base + span * s);
     }
+    case FloraPreset::External: {
+      // Unused — floraTick returns before computing levels for External.
+      return base;
+    }
   }
   return base;
 }
 
 // One animation frame: fill duties[16] for this tick.
 void floraTick(uint32_t nowMs) {
+  // C7: honor flora.enabled — when disabled the task must not drive the channels
+  // (let external/manual control stand).
+  if (!sFloraEnabled) {
+    return;
+  }
+
   // Snapshot target under the mux (cheap copy of POD fields).
   portENTER_CRITICAL(&gRuntimeStateMux);
   const FloraTarget t = sTarget;
   portEXIT_CRITICAL(&gRuntimeStateMux);
+
+  // Part B: External preset — floraTask yields so the Jetson raw-frame stream
+  // (RMS "ответ" effect / calibration) is not overwritten every 20 ms (fixes
+  // C1/C2). Watchdog: if no external HTTP frame arrives for kFloraExternalTimeoutMs
+  // (stream died), auto-recover to breathe so the lamps never freeze.
+  if (t.preset == FloraPreset::External) {
+    uint32_t lastExt;
+    portENTER_CRITICAL(&gRuntimeStateMux);
+    lastExt = gRuntimeState.lastExternalPcaWriteMs;
+    portEXIT_CRITICAL(&gRuntimeStateMux);
+    const uint32_t ref = (lastExt != 0) ? lastExt : t.appliedAtMs;
+    if ((nowMs - ref) <= kFloraExternalTimeoutMs) {
+      return;  // external writer is live — let its frames stand
+    }
+    // Stale: recover to breathe (crossfade from whatever is currently on the lamps).
+    const PresetDefaults &bd = kPresetDefaults[static_cast<size_t>(FloraPreset::Breathe)];
+    portENTER_CRITICAL(&gRuntimeStateMux);
+    for (uint8_t ch = 0; ch < 16; ++ch) {
+      sCrossfadeFrom[ch] = gRuntimeState.pca9685Channels[ch];
+    }
+    sTarget.preset = FloraPreset::Breathe;
+    sTarget.baseDuty = bd.baseDuty;
+    sTarget.peakDuty = bd.peakDuty;
+    sTarget.periodMs = bd.periodMs;
+    sTarget.vibroEnabled = bd.vibroEnabled;
+    sTarget.appliedAtMs = nowMs;
+    portEXIT_CRITICAL(&gRuntimeStateMux);
+    return;  // next tick renders breathe
+  }
 
   const uint32_t periodMs = (t.periodMs == 0) ? 1 : t.periodMs;
   const uint32_t sinceApplied = nowMs - t.appliedAtMs;
@@ -290,6 +335,14 @@ void startFloraTask() {
 }
 
 bool setFloraState(const char *preset, const FloraParams &params) {
+  // C7: honor flora.enabled — can arrive with any preset (e.g. {"state":"breathe",
+  // "enabled":false}). Applied even if the preset name is unknown below.
+  if (params.enabled == 0) {
+    sFloraEnabled = false;
+  } else if (params.enabled == 1) {
+    sFloraEnabled = true;
+  }
+
   FloraPreset resolved;
   if (!presetFromName(preset, resolved)) {
     return false;
@@ -333,6 +386,14 @@ bool setFloraState(const char *preset, const FloraParams &params) {
   sTarget.vibroDuty = vibroDuty;
   sTarget.appliedAtMs = millis();
   portEXIT_CRITICAL(&gRuntimeStateMux);
+
+  // Entering External resets the watchdog so the Jetson gets the full grace
+  // window (kFloraExternalTimeoutMs) to start streaming frames before auto-recovery.
+  if (resolved == FloraPreset::External) {
+    portENTER_CRITICAL(&gRuntimeStateMux);
+    gRuntimeState.lastExternalPcaWriteMs = millis();
+    portEXIT_CRITICAL(&gRuntimeStateMux);
+  }
 
   return true;
 }

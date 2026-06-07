@@ -170,6 +170,7 @@
     "gamma": 2.2,
     "tick_ms": 20,
     "crossfade_ms": 200,
+    "external_timeout_ms": 500,
     "speech": {
       "frame_interval_ms": 80,
       "hdmi_latency_offset_ms": 150,

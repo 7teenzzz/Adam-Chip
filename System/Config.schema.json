@@ -772,6 +772,13 @@
           "minimum": 0,
           "maximum": 2000
         },
+        "external_timeout_ms": {
+          "type": "integer",
+          "description": "Watchdog for the firmware `external` preset (debug/flora-stops-on-state-change Part B). While flora is in `external` (Jetson streaming raw RMS/calibration frames via /api/pca9685/*), floraTask suppresses its own writes so the streamed frames stick. If no external HTTP frame arrives for this many ms (the Jetson stream died mid-utterance), floraTask auto-recovers to `breathe` so the lamps never freeze. Mirrors firmware const kFloraExternalTimeoutMs (structural default duplicated firmware-side in AdamsConfig.h). ~500 ms comfortably exceeds the RMS frame_interval_ms (~80 ms) so live streams are never falsely timed out.",
+          "default": 500,
+          "minimum": 100,
+          "maximum": 5000
+        },
         "speech": {
           "type": "object",
           "description": "Parameters for the Jetson-driven RMS speech-light state (state 4, D-07). When Adam speaks, the Jetson streams brightness frames for light channels 0-10 in time with TTS playback (FLORA-04, filled in plan 04).",

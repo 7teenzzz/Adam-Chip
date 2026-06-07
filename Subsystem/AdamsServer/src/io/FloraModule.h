@@ -21,6 +21,7 @@ struct FloraParams {
   uint32_t crossfadeMs = 0;           // 0 = keep firmware default
   int8_t   vibroEnabled = -1;         // -1 keep, 0 force off, 1 enable
   uint16_t vibroDuty = UINT16_MAX;    // 0-4095 vibro amplitude (clamped to ceiling)
+  int8_t   enabled = -1;              // -1 keep, 0 disable flora task writes, 1 enable (flora.enabled)
 };
 
 // Start the animation FreeRTOS task. Call once from setup() after

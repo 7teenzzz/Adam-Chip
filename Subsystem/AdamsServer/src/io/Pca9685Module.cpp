@@ -4,12 +4,40 @@
 
 #include <Preferences.h>
 #include <Wire.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include "../../config/AdamsConfig.h"
 #include "../core/BootDiagnostics.h"
 #include "../core/RuntimeState.h"
 
 namespace {
+
+// I2C bus mutex: floraTask (50 Hz) and the web-server task both run multi-byte
+// Wire transactions on the same bus. Without a lock a preemption mid-
+// endTransmission() interleaves two I2C transactions and latches up the PCA9685
+// (root cause of the technoflora dark-out — debug/flora-stops-on-state-change).
+// Guarded at the leaf Wire helpers so each lock spans one complete transaction.
+// The three leaf helpers never call each other, so the mutex is non-recursive.
+// Lazy-init is race-free: the first lock comes from initPca9685() during single-
+// threaded boot, before startFloraTask() / the web server exist.
+StaticSemaphore_t sI2cMutexBuffer;
+SemaphoreHandle_t sI2cMutex = nullptr;
+
+inline void i2cBusLock() {
+  if (sI2cMutex == nullptr) {
+    sI2cMutex = xSemaphoreCreateMutexStatic(&sI2cMutexBuffer);
+  }
+  if (sI2cMutex != nullptr) {
+    xSemaphoreTake(sI2cMutex, portMAX_DELAY);
+  }
+}
+
+inline void i2cBusUnlock() {
+  if (sI2cMutex != nullptr) {
+    xSemaphoreGive(sI2cMutex);
+  }
+}
 
 constexpr char kNvsNamespace[] = "pca9685";
 constexpr char kNvsKeyFreq[]   = "freq";
@@ -35,30 +63,38 @@ constexpr uint8_t kPrescaleReg = 0xFE;
 constexpr uint8_t kLed0OnLowReg = 0x06;
 
 bool writeRegister(uint8_t reg, uint8_t value) {
+  i2cBusLock();
+  bool ok = false;
   for (int attempt = 0; attempt < 3; ++attempt) {
     Wire.beginTransmission(kPca9685Address);
     Wire.write(reg);
     Wire.write(value);
-    if (Wire.endTransmission() == 0) return true;
+    if (Wire.endTransmission() == 0) { ok = true; break; }
     delay(2);
   }
-  return false;
+  i2cBusUnlock();
+  return ok;
 }
 
 bool writeRegisters(uint8_t reg, const uint8_t *data, size_t len) {
+  i2cBusLock();
+  bool ok = false;
   for (int attempt = 0; attempt < 3; ++attempt) {
     Wire.beginTransmission(kPca9685Address);
     Wire.write(reg);
     for (size_t i = 0; i < len; ++i) {
       Wire.write(data[i]);
     }
-    if (Wire.endTransmission() == 0) return true;
+    if (Wire.endTransmission() == 0) { ok = true; break; }
     delay(2);
   }
-  return false;
+  i2cBusUnlock();
+  return ok;
 }
 
 bool readRegister(uint8_t reg, uint8_t &value) {
+  i2cBusLock();
+  bool ok = false;
   for (int attempt = 0; attempt < 3; ++attempt) {
     Wire.beginTransmission(kPca9685Address);
     Wire.write(reg);
@@ -71,9 +107,11 @@ bool readRegister(uint8_t reg, uint8_t &value) {
       continue;
     }
     value = Wire.read();
-    return true;
+    ok = true;
+    break;
   }
-  return false;
+  i2cBusUnlock();
+  return ok;
 }
 
 void fillChannelPayload(uint16_t duty, uint8_t *payload) {
@@ -277,6 +315,9 @@ bool applyPca9685Update(const Pca9685ChannelUpdate &update) {
     portENTER_CRITICAL(&gRuntimeStateMux);
     strncpy(gRuntimeState.activeScene, "manual", sizeof(gRuntimeState.activeScene) - 1);
     gRuntimeState.activeScene[sizeof(gRuntimeState.activeScene) - 1] = '\0';
+    // FloraModule External-preset watchdog: timestamp this external HTTP write so
+    // floraTask knows the Jetson stream (RMS/calibration) is still live.
+    gRuntimeState.lastExternalPcaWriteMs = millis();
     portEXIT_CRITICAL(&gRuntimeStateMux);
   }
   return ok;
@@ -308,6 +349,9 @@ bool applyPca9685Updates(const Pca9685ChannelUpdate *updates, size_t count) {
   portENTER_CRITICAL(&gRuntimeStateMux);
   strncpy(gRuntimeState.activeScene, "manual", sizeof(gRuntimeState.activeScene) - 1);
   gRuntimeState.activeScene[sizeof(gRuntimeState.activeScene) - 1] = '\0';
+  // FloraModule External-preset watchdog: timestamp this external HTTP write so
+  // floraTask knows the Jetson stream (RMS/calibration) is still live.
+  gRuntimeState.lastExternalPcaWriteMs = millis();
   portEXIT_CRITICAL(&gRuntimeStateMux);
   return true;
 }

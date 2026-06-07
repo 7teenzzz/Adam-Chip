@@ -4,7 +4,8 @@
 Walks PCA9685 channels one by one. For each channel it:
   1. announces the channel number out loud via the Silero TTS service
      ("Линия ноль", "Линия один", ...), and
-  2. plays a fast "breathing" pulse on ONLY that channel (all others off),
+  2. drives ONLY that channel to a steady level and holds it (default 70%
+     for 5 s; use --mode breathe for a pulse instead), all others off,
 
 so the operator can watch/feel which physical lamp line (channels 0-10 light,
 channels 11-14 vibro motors) corresponds to each logical channel index, and
@@ -151,6 +152,20 @@ def breathe_channel(
     esp.set_channel(ch, 0)
 
 
+def hold_channel(
+    esp: Esp,
+    ch: int,
+    duration_s: float,
+    level_frac: float,
+    gamma: float,
+) -> None:
+    """Drive one channel to a steady gamma-corrected level and hold it."""
+    duty = int(round(esp.value_max * (level_frac ** gamma)))
+    esp.set_channel(ch, duty)
+    time.sleep(max(0.0, duration_s))
+    esp.set_channel(ch, 0)
+
+
 # --- channel-spec parsing ------------------------------------------------------
 def parse_channels(spec: str) -> list[int]:
     out: list[int] = []
@@ -181,10 +196,14 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--tts-url", default=tts.get("base_url", "http://127.0.0.1:8082"),
                     help="TTS service base URL (default from Config services.tts.base_url)")
     ap.add_argument("--speaker", default=tts.get("speaker", "eugene"))
-    ap.add_argument("--duration", type=float, default=4.0,
-                    help="seconds of breathing per channel (default 4)")
+    ap.add_argument("--mode", choices=["hold", "breathe"], default="hold",
+                    help="hold = steady level for --duration (default); breathe = pulsing")
+    ap.add_argument("--duration", type=float, default=5.0,
+                    help="seconds the line stays active per channel (default 5)")
+    ap.add_argument("--level", type=float, default=70.0,
+                    help="steady brightness %% (gamma-corrected) in hold mode (default 70)")
     ap.add_argument("--period", type=float, default=0.6,
-                    help="breath period in seconds — small = fast breathing (default 0.6)")
+                    help="breath period in seconds for --mode breathe (default 0.6)")
     ap.add_argument("--fps", type=float, default=20.0,
                     help="frame rate of PWM updates (default 20; ESP HTTP ceiling ~15-20)")
     ap.add_argument("--gap", type=float, default=1.0,
@@ -204,6 +223,8 @@ def main(argv: list[str]) -> int:
 
     esp = Esp(args.base_url, value_max, args.esp_timeout)
     peak_frac = max(0.0, min(1.0, args.peak / 100.0))
+    level_frac = max(0.0, min(1.0, args.level / 100.0))
+    hold_duty = int(round(value_max * (level_frac ** args.gamma)))
 
     def cleanup(*_a) -> None:
         print("\n[cleanup] all channels off")
@@ -219,8 +240,12 @@ def main(argv: list[str]) -> int:
     print(f"  ESP:      {args.base_url}")
     print(f"  TTS:      {'(disabled)' if args.no_tts else args.tts_url} speaker={args.speaker}")
     print(f"  channels: {channels}")
-    print(f"  breath:   period={args.period}s duration={args.duration}s "
-          f"fps={args.fps} peak={args.peak}% gamma={args.gamma}")
+    if args.mode == "hold":
+        print(f"  mode:     HOLD steady {args.level}% (duty {hold_duty}/{value_max}, "
+              f"gamma {args.gamma}) for {args.duration}s per line")
+    else:
+        print(f"  mode:     BREATHE period={args.period}s peak={args.peak}% "
+              f"gamma={args.gamma} for {args.duration}s per line")
     print("  channels 0-10 = light (watch lamps), 11-14 = vibro (feel motors)")
     print("  >>> run with the orchestrator's flora controller idle <<<")
     print("=" * 60)
@@ -235,8 +260,11 @@ def main(argv: list[str]) -> int:
         if not args.no_tts:
             tts_say(args.tts_url, args.speaker, f"Линия {word}", args.tts_timeout)
             time.sleep(0.3)
-        breathe_channel(esp, ch, args.duration, args.period,
-                        args.fps, args.gamma, peak_frac)
+        if args.mode == "hold":
+            hold_channel(esp, ch, args.duration, level_frac, args.gamma)
+        else:
+            breathe_channel(esp, ch, args.duration, args.period,
+                            args.fps, args.gamma, peak_frac)
         esp.set_channel(ch, 0)
         time.sleep(args.gap)
 

@@ -148,6 +148,11 @@ inline constexpr uint32_t kFloraDefaultCrossfadeMs = 200;  // D-09: 150-250 ms p
 // action.py timed actuations. Flora vibro is continuous low-amplitude presence,
 // so it gets its own intensity ceiling instead (D-12, restrained default ~30%).
 inline constexpr uint16_t kFloraVibroIntensityCeiling = 1228;  // ~30% of 4095
+// External-preset watchdog: if no HTTP /api/pca9685/* frame arrives for this long
+// while flora is in External (Jetson RMS/calibration stream died), floraTask
+// auto-recovers to breathe so the lamps never freeze. Mirrors Config.json
+// flora.external_timeout_ms (structural default duplicated firmware-side).
+inline constexpr uint32_t kFloraExternalTimeoutMs = 500;
 
 inline constexpr size_t kStatusJsonCapacity = 16384;
 inline constexpr size_t kSensorJsonCapacity = 768;

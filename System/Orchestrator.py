@@ -2399,9 +2399,16 @@ async def cue(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 @app.post("/api/agent/stop")
 async def stop() -> dict[str, Any]:
     runtime_state["speaking"] = False
-    action = await mcu.idle()
-    event_log.append("agent_stop", {"mcu": action.as_dict()})
-    return {"ok": True, "mcu": action.as_dict()}
+    # Part C (flora): the legacy idle scene writes boot_idle (all channels 0) to
+    # the SAME PCA9685 channels 0-14 the technoflora owns, fighting the flora
+    # animation. Only drive the idle scene when flora is disabled.
+    flora_enabled = bool(settings.section("flora").get("enabled", True))
+    action = None if flora_enabled else await mcu.idle()
+    event_log.append(
+        "agent_stop",
+        {"mcu": action.as_dict() if action else None, "flora_owns_channels": flora_enabled},
+    )
+    return {"ok": True, "mcu": action.as_dict() if action else None}
 
 
 @app.post("/api/agent/scene")
@@ -3218,6 +3225,13 @@ async def _sensor_payload() -> dict[str, Any]:
 
 
 async def _execute_action(action: Any) -> dict[str, Any]:
+    # Part C (flora): the LLM action layer drives PCA9685 scenes/channels 0-14,
+    # which the technoflora now owns. While flora is enabled it is the single owner
+    # of those channels — suppress legacy scene/channel writes so they do not fight
+    # the flora animation (debug/flora-stops-on-state-change Part C). The legacy
+    # scene API stays available for maintenance when flora.enabled=false.
+    if bool(settings.section("flora").get("enabled", True)):
+        return {"ok": True, "status": 204, "data": {"action": "suppressed_flora_owns_channels"}, "error": None}
     if action.kind == "scene" and action.scene:
         return (await mcu.set_scene(action.scene)).as_dict()
     if action.kind == "channel" and action.channel is not None and action.value is not None:

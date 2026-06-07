@@ -2772,6 +2772,9 @@ esp_err_t floraStateHandler(httpd_req_t *req) {
   if (extractJsonInt(body, "vibro_duty", intValue)) {
     params.vibroDuty = static_cast<uint16_t>(constrain(intValue, 0, 4095));
   }
+  if (extractJsonBool(body, "enabled", boolValue)) {
+    params.enabled = boolValue ? 1 : 0;  // C7: honor flora.enabled
+  }
 
   if (!setFloraState(state.c_str(), params)) {
     return sendError(req, "400 Bad Request", "{\"error\":\"invalid_flora_state\"}");

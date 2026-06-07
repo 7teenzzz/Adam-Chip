@@ -197,9 +197,13 @@ class FloraController:
         """
         self._answer_active = True
         self._fed_wav_this_answer = False
-        # Transition to a slightly brighter plateau while awaiting the first
-        # WAV chunk; the real RMS modulation will replace this shortly.
-        await self._set_state("attentive")
+        # Push the firmware into `external` (animation-suppressed) so floraTask
+        # stops drawing its own frames @50 Hz and the per-chunk RMS stream we POST
+        # via set_channels actually sticks (fixes C2 — was 'attentive', which the
+        # firmware kept animating over the RMS frames). If no WAV ever arrives
+        # (non-streaming /speak path), the firmware External watchdog auto-recovers
+        # to breathe after flora.external_timeout_ms — the only degraded path.
+        await self._set_state("external")
 
     async def _on_answer_end(self) -> None:
         """Answer finished — stop the RMS streamer and settle to calm idle."""
@@ -231,7 +235,7 @@ class FloraController:
         """
         flora = self._live_flora_cfg()
         known = set((flora.get("states") or {}).keys())
-        known.update({"idle", "breathe", "accent", "attentive", "think_pulse", "wake_bloom"})
+        known.update({"idle", "breathe", "accent", "attentive", "think_pulse", "wake_bloom", "external"})
         if state not in known:
             return False
         await self._set_state(state)
