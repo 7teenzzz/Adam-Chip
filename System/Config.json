@@ -107,7 +107,7 @@
       "wake_word_required": true,
       "reply_window_expired_action": "standby",
       "silence_after_speech_ms": 1000,
-      "silence_rms_threshold": 50,
+      "silence_rms_threshold": 100,
       "disable_local_fallback": true,
       "esp_open_timeout_sec": 8,
       "esp_probe_after_fails": 2,
@@ -165,8 +165,25 @@
   },
   "flora": {
     "enabled": true,
-    "light_channels": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-    "vibro_channels": [11, 12, 13, 14],
+    "light_channels": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "vibro_channels": [
+      11,
+      12,
+      13,
+      14
+    ],
     "gamma": 2.2,
     "tick_ms": 20,
     "crossfade_ms": 200,
@@ -179,7 +196,9 @@
     },
     "vibro": {
       "intensity_pct": 30,
-      "silent_states": ["attentive"]
+      "silent_states": [
+        "attentive"
+      ]
     },
     "states": {
       "breathe": {
@@ -189,32 +208,33 @@
         "vibro": false
       },
       "accent": {
-        "base_pct": 10,
         "peak_pct": 71,
-        "period_ms": 1400,
         "attack_ms": 250,
         "vibro": true,
-        "vibro_pulse_ms": 120
+        "vibro_pulse_ms": 120,
+        "base_pct": 10,
+        "period_ms": 1400
       },
       "attentive": {
+        "plateau_pct": 40,
+        "vibro": false,
         "base_pct": 30,
         "peak_pct": 71,
-        "wave_period_ms": 450,
-        "vibro": false
+        "wave_period_ms": 450
       },
       "think_pulse": {
         "base_pct": 20,
-        "peak_pct": 63,
         "flash_ms": 1750,
-        "vibro": "double_pulse"
+        "vibro": "double_pulse",
+        "peak_pct": 63
       },
       "wake_bloom": {
-        "base_pct": 0,
-        "peak_pct": 71,
-        "period_ms": 3000,
         "from_dark": true,
         "settle_to": "breathe",
-        "vibro": true
+        "vibro": true,
+        "base_pct": 0,
+        "peak_pct": 71,
+        "period_ms": 3000
       }
     }
   },
