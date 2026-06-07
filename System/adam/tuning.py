@@ -78,12 +78,30 @@ class ConsolidatorTuning(BaseModel):
     instant_threshold: float = Field(0.75, ge=0, le=1)
 
 
+DEFAULT_THEME_CLUSTERS: Dict[str, List[str]] = {
+    "память": ["помнишь", "забыл", "прошлое", "вспомни", "память", "вспоминаю"],
+    "смерть": ["умрёшь", "умер", "умирать", "конец", "смерть", "погибнуть", "умру"],
+    "тесей": ["тесей", "корабль", "части", "заменить", "деталь", "заменяют"],
+    "одиночество": ["один", "скучно", "пусто", "никого", "одиноко", "пустота"],
+    "создатель": ["создал", "создали", "кто ты", "зачем ты", "кто тебя", "зачем тебя"],
+    "восприятие": ["видишь", "слышишь", "чувствуешь", "ощущаешь", "воспринимаешь"],
+    "сознание": ["думаешь", "мысли", "сознание", "разум", "понимаешь", "осознаёшь"],
+    "страх": ["боишься", "страшно", "страх", "пугает", "ужас", "тревога"],
+}
+"""Базовый набор тематических кластеров (Phase 30, слой A — тематический мост).
+
+Используется и как pydantic-дефолт, и как seed-данные при restore_defaults() —
+голый `{}` обнуляет тематический мост (см. инцидент Phase 30 MemoryFixes:
+restore_defaults() → Tuning().model_dump() стирал theme_clusters в {}).
+"""
+
+
 class MemoryTuning(BaseModel):
     episodic: EpisodicTuning = Field(default_factory=EpisodicTuning)
     semantic: SemanticTuning = Field(default_factory=SemanticTuning)
     recent_injection: RecentInjectionTuning = Field(default_factory=RecentInjectionTuning)
     consolidator: ConsolidatorTuning = Field(default_factory=ConsolidatorTuning)
-    theme_clusters: Dict[str, List[str]] = Field(default_factory=dict)
+    theme_clusters: Dict[str, List[str]] = Field(default_factory=lambda: copy.deepcopy(DEFAULT_THEME_CLUSTERS))
 
 
 class _GateSmartMixin(BaseModel):
