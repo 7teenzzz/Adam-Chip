@@ -92,7 +92,7 @@ const SCHEMA = [
     source: "tuning", tuningSectionPath: "prompt", title: "Сборка промта",
     fields: [
       { key: "history_turns",   label: "Ходов истории",            type: "int",  min: 0, max: 50,
-        hint: "2–4 рекомендуется · меньше = быстрее · дублирует agent.history_turns в Config" },
+        hint: "2–4 рекомендуется · меньше = быстрее" },
       { key: "include_scene",   label: "Включить описание сцены",  type: "bool",
         hint: "добавляет VLM-описание в промт" },
       { key: "include_sensors", label: "Включить данные сенсоров", type: "bool" },
@@ -108,8 +108,9 @@ const SCHEMA = [
       { key: "speed_multiplier", label: "Скорость речи", type: "float", min: 0.8, max: 1.6, step: 0.05,
         slider: true,
         hint: "1.0 = нормально · 1.25 = живее (рекомендуется) · 1.5 = быстро" },
-      { key: "volume",           label: "Громкость",     type: "float", min: 0, max: 2, step: 0.05,
-        hint: "1.0 = нормально" },
+      { key: "volume",           label: "Громкость голоса Адама", type: "float", min: 0, max: 2, step: 0.05,
+        slider: true,
+        hint: "0.0 = тишина · 1.0 = норма · 2.0 = максимум (с возможным клипированием). Персональный волюм Адама — применяется поверх системной громкости Jetson" },
     ],
   },
 
@@ -127,6 +128,23 @@ const SCHEMA = [
     ],
   },
 
+  // ── TTS filler («Хм...») ─────────────────────────────────────────────────────
+  {
+    source: "config", section: "services.tts", title: "TTS · Филлер (междометия)",
+    fields: [
+      { key: "filler_enabled", label: "Включить междометия", type: "bool",
+        hint: "если LLM долго думает — Адам произносит короткое «Хм...» вместо тишины" },
+      { key: "filler_phrase", label: "Фраза", type: "text",
+        hint: "что произносить · например «Хм...», «Ух», «Эээ»" },
+      { key: "filler_delay_ms", label: "Задержка LLM (мс)", type: "number",
+        min: 0, max: 5000, step: 50,
+        hint: "если ответ LLM начался быстрее этой задержки — филлер не звучит. 800 = норма" },
+      { key: "filler_probability", label: "Вероятность (0..1)", type: "number",
+        min: 0, max: 1, step: 0.05,
+        hint: "0.30 = в среднем 1 из 3 ходов · 0.0 = выключено de facto · 1.0 = всегда (старое поведение). Не привязано к таймеру — независимый бросок на каждый ход" },
+    ],
+  },
+
   // ── OWW · Wake word ──────────────────────────────────────────────────────────
   {
     source: "config", section: "wake_word", title: "OWW · Wake word",
@@ -140,11 +158,30 @@ const SCHEMA = [
       { key: "vad_threshold", label: "VAD порог (Silero внутри OWW)", type: "number",
         hint: "0–1 · 0 — выключено · выше = строже фильтрует тишину",
         min: 0, max: 1, step: 0.05 },
-      { key: "wake_silence_timeout_sec", label: "Тишина после wake word (с)", type: "number",
-        hint: "5 рекомендуется · после истечения — обратно в standby",
-        min: 0.5, max: 10, step: 0.5 },
     ],
     extras: () => buildWakeWordExtras(),
+  },
+
+  // ── Тайминги голосового пайплайна ────────────────────────────────────────────
+  {
+    source: "config", section: "services.asr", title: "Тайминги голосового пайплайна",
+    fields: [
+      { key: "listening_silence_timeout_sec", label: "LISTENING — тишина → STANDBY (с)", type: "number",
+        hint: "Если после wake word пользователь молчит N секунд — возврат в ожидание. Защита от ложных wake-word. 6 рекомендуется.",
+        min: 1, max: 30, step: 0.5 },
+      { key: "reply_silence_timeout_sec", label: "REPLY — тишина → STANDBY (с)", type: "number",
+        hint: "После ответа Адама микрофон ждёт продолжения N секунд (без wake word). 5 рекомендуется. Отсчёт начинается ПОСЛЕ окна сброса эха (см. ниже).",
+        min: 1, max: 10, step: 0.5 },
+      { key: "post_tts_discard_window_ms", label: "Окно сброса эха TTS (мс)", type: "number",
+        hint: "Сколько миллисекунд после окончания TTS микрофоны игнорируются — чтобы хвост речи Адама не попал в REPLY как речь пользователя. ESP32-стрим имеет лаг ~2.3с. 2500 — наблюдаемый worst case + запас. 0 = выключено (только если эхо физически отсутствует).",
+        min: 0, max: 10000, step: 100 },
+      { key: "silence_after_speech_ms", label: "Конец фразы — длительность тишины (мс)", type: "number",
+        hint: "Сколько миллисекунд подряд должно быть тихо ПОСЛЕ начала речи, чтобы считать запрос завершённым. Действует и в LISTENING, и в REPLY. 1500 — рекомендуемое значение.",
+        min: 200, max: 5000, step: 100 },
+      { key: "silence_rms_threshold", label: "Чувствительность тишины (RMS)", type: "number",
+        hint: "Уровень звука, ниже которого аудио считается тишиной (даже если VAD считает иначе). Повысьте, если фоновый шум зала мешает закончить фразу. 0 — отключить фильтр (только WebRTC VAD). Типично 200–500.",
+        min: 0, max: 2000, step: 50 },
+    ],
   },
 
   // ── ASR · WhisperX ───────────────────────────────────────────────────────────
@@ -154,18 +191,15 @@ const SCHEMA = [
       { key: "model", label: "Модель WhisperX", type: "select",
         choices: ["tiny", "base", "small", "medium", "large-v2", "large-v3"],
         hint: "tiny/base — быстро, точность низкая · small — баланс · medium — рекомендуется · large-v2/v3 — максимум точности, 10+ ГБ VRAM" },
-      { key: "command_endpointing_ms", label: "Endpointing — пауза перед отправкой (мс)", type: "number",
-        hint: "3000 рекомендуется · VAD ждёт такую паузу тишины, затем отправляет фразу в распознавание",
-        min: 200, max: 5000, step: 100 },
-      { key: "reply_window_sec", label: "Reply window — ожидание ответа (с)", type: "number",
-        hint: "4.0 · после ответа Адама открывается окно, в котором зритель может говорить без wake word",
-        min: 1, max: 30, step: 0.5 },
-      { key: "reply_absolute_deadline_sec", label: "Reply window — жёсткий дедлайн (с)", type: "number",
-        hint: "12.0 · принудительное закрытие reply window даже при наличии звука",
-        min: 5, max: 60, step: 1 },
+      { key: "reply_window_sec", label: "Reply window — soft (с)", type: "number",
+        hint: "3.75 · soft-окно после ответа Адама — зритель может говорить без wake word; если речи нет → STANDBY",
+        min: 1, max: 30, step: 0.25 },
+      { key: "reply_absolute_deadline_sec", label: "Reply window — доп. время до hard-дедлайна (с)", type: "number",
+        hint: "7.5 · дополнительные секунды поверх soft-окна. Hard cutoff = soft + это значение (по умолчанию 3.75 + 7.5 = 11.25)",
+        min: 1, max: 60, step: 0.5 },
       { key: "reply_window_expired_action", label: "Reply window — действие по истечении", type: "select",
         choices: ["standby", "stop"],
-        hint: "standby — остаётся в ожидании wake word · stop — отключает микрофон (принудительно, как в exhibition)" },
+        hint: "standby — возврат в ожидание wake word (микрофон работает) · stop — полностью останавливает voice loop, требует ручного запуска через /api/voice/start" },
       { key: "webrtc_vad_aggressiveness", label: "WebRTC VAD — агрессивность", type: "number",
         sourceSection: "media.audio",
         hint: "0–3 · 2 = баланс, 3 = строго · выше = меньше ложных срабатываний на фоновый шум, но возможны пропуски тихой речи",
@@ -596,15 +630,46 @@ function buildWakeWordExtras() {
     style: "font-size:10px; color:var(--muted); font-family:var(--font-mono)",
   }, "");
 
-  // Pull current calibration profile label from status on mount.
-  import("../api.js").then(({ api }) => {
-    api.get("/api/agent/status").then((s) => {
-      const vl = s?.voice_loop || {};
+  // T17 fix — the calibration profile label has to track mic_active_source
+  // live, otherwise the user sees a stale "local" after an ESP32 reboot
+  // (or stale "esp32" after a silent fallback to local). The previous
+  // one-shot fetch on mount caused the user-reported "UI doesn't match
+  // actual mic" confusion.
+  //
+  // GSD-investigation T17-deploy follow-up: the previous implementation
+  // leaked an SSE subscription on every panel-unmount because the panel
+  // mount returned an empty teardown. Now buildWakeWordExtras exposes a
+  // `_dispose` callback on the wrapper element so the panel teardown can
+  // tear the subscription down cleanly.
+  let _profileUnsub = null;
+  Promise.all([
+    import("../api.js"),
+  ]).then(([{ api, subscribeEvents }]) => {
+    const renderProfileLabel = (status) => {
+      const vl = status?.voice_loop || {};
       const src = vl.mic_active_source || vl.mic_source || "local";
       const profile = vl.esp32_mic_profile || "";
-      const key = src.startsWith("esp") ? `esp32:${profile}` : `local:${s?.media?.audio?.input_device || "pulse"}`;
-      calibProfileEl.textContent = `Профиль: ${key}`;
-    }).catch(() => {});
+      const key = src.startsWith("esp")
+        ? `esp32:${profile}`
+        : `local:${status?.media?.audio?.input_device || "pulse"}`;
+      const fallbackTag = vl.esp_mic_fallback ? " · fallback" : "";
+      calibProfileEl.textContent = `Профиль: ${key}${fallbackTag}`;
+    };
+    const refresh = () => api.get("/api/agent/status").then(renderProfileLabel).catch(() => {});
+    refresh();
+    // Subscribe to events that change which mic is actually active.
+    _profileUnsub = subscribeEvents((event) => {
+      if (event && [
+        "voice_loop_started",
+        "voice_loop_stopped",
+        "esp32_mic_fallback_start",
+        "esp32_mic_restored",
+        "mode_changed",
+        "config_patched",
+      ].includes(event.type)) {
+        refresh();
+      }
+    });
   });
 
   function _describeCalibProfile(rec) {
@@ -614,7 +679,7 @@ function buildWakeWordExtras() {
     return `Профиль: ${key} — калибровано ${ts}`;
   }
 
-  return el("div", { style: "display:flex; flex-direction:column; gap:6px; margin-top:10px" }, [
+  const wrapper = el("div", { style: "display:flex; flex-direction:column; gap:6px; margin-top:10px" }, [
     el("div", { style: "display:flex; align-items:center; gap:8px" }, [
       el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Уровень микрофона · порог OWW"),
       el("span", { class: "spacer" }),
@@ -629,6 +694,16 @@ function buildWakeWordExtras() {
     ]),
     calibProfileEl,
   ]);
+  // T17-deploy GSD fix — expose a dispose hook so the panel teardown can
+  // unsubscribe the SSE listener + dispose the wake-meter widget. Without
+  // this every settings-then-leave navigation leaked one EventSource.
+  wrapper._dispose = () => {
+    try { if (_profileUnsub) _profileUnsub(); } catch (_) {}
+    if (meter && typeof meter.dispose === "function") {
+      try { meter.dispose(); } catch (_) {}
+    }
+  };
+  return wrapper;
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -654,6 +729,10 @@ export function mount(target) {
   let audioDevices = [];
   let inputDevices = [];
   let ttsVoices    = [];
+  // T17-deploy GSD fix — collect dispose callbacks from any panel-scoped
+  // resources (SSE subscriptions, animation frames, canvases). The mount
+  // teardown drains this list so navigating away leaks nothing.
+  const disposables = [];
 
   const container  = el("div", { class: "col" });
   const refreshBtn = el("button", { class: "btn", onclick: () => renderAll() }, "Перезагрузить");
@@ -708,6 +787,13 @@ export function mount(target) {
   ]));
 
   async function renderAll() {
+    // T17-deploy GSD fix — releasing previous-render disposables before
+    // re-rendering. Without this, every "Перезагрузить" click stacked one
+    // more SSE listener on top of the existing one.
+    while (disposables.length) {
+      const fn = disposables.pop();
+      try { fn(); } catch (_) {}
+    }
     container.innerHTML = "";
     container.appendChild(el("div", { class: "muted" }, [el("span", { class: "spinner" }), " загрузка…"]));
 
@@ -779,7 +865,14 @@ export function mount(target) {
       const bodyChildren = [grid];
       if (typeof group.extras === "function") {
         const extra = group.extras(ctx, sectionData);
-        if (extra) bodyChildren.push(extra);
+        if (extra) {
+          bodyChildren.push(extra);
+          // T17-deploy GSD fix — collect disposable extras so the panel
+          // teardown can release their SSE subscriptions / canvases.
+          if (typeof extra._dispose === "function") {
+            disposables.push(extra._dispose);
+          }
+        }
       }
 
       const card = el("section", { class: "card" }, [
@@ -806,5 +899,14 @@ export function mount(target) {
   }
 
   renderAll();
-  return () => {};
+  return () => {
+    // T17-deploy GSD fix — drain every dispose callback registered during
+    // this mount. Without this, each settings-then-leave navigation leaked
+    // an SSE subscription that kept fetching /api/agent/status against a
+    // detached DOM.
+    while (disposables.length) {
+      const fn = disposables.pop();
+      try { fn(); } catch (_) {}
+    }
+  };
 }

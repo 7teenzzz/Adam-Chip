@@ -1,0 +1,33 @@
+# Utilities and scripts
+tools/
+*.py
+
+# Old versions and drafts
+**/_drafts/
+_old/
+backup/
+
+# Generated cache
+output/graphify-out/
+.graphify_*
+__pycache__/
+*.pyc
+
+# System and config
+.gitignore
+.git/
+.env
+.env.example
+
+# Binary files
+*.pdf
+*.zip
+*.tar
+*.gz
+
+# IDE and temp
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

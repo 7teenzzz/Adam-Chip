@@ -1,0 +1,327 @@
+{
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\video_test_baseline_20260423_183409.json": {
+    "mtime": 1776958449.5800433,
+    "ast_hash": "3dea2140e9e9ef90d5bd6f6b3dc82874",
+    "semantic_hash": "3dea2140e9e9ef90d5bd6f6b3dc82874"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\video_test_baseline_20260423_183503.json": {
+    "mtime": 1776958503.9474194,
+    "ast_hash": "033bce0a1a16275c183d0dab60046536",
+    "semantic_hash": "033bce0a1a16275c183d0dab60046536"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\video_test_baseline_quick_20260423_181335.json": {
+    "mtime": 1776957215.827395,
+    "ast_hash": "357b044e7cd5cdefe58cff16aac33116",
+    "semantic_hash": "357b044e7cd5cdefe58cff16aac33116"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\video_test_baseline_smoke_20260423_181129.json": {
+    "mtime": 1776957089.9388669,
+    "ast_hash": "97447e21c3db32a9bbc3b4b18a79d94f",
+    "semantic_hash": "97447e21c3db32a9bbc3b4b18a79d94f"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\video_test_preset_switch_20260423_181232.json": {
+    "mtime": 1776957152.0483177,
+    "ast_hash": "a14b114c116f8388c37868a2cf08aaf1",
+    "semantic_hash": "a14b114c116f8388c37868a2cf08aaf1"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\video_test_preset_switch_20260423_183411.json": {
+    "mtime": 1776958451.7295437,
+    "ast_hash": "7c8e9c05ad5cf60e57bac73b7f670873",
+    "semantic_hash": "7c8e9c05ad5cf60e57bac73b7f670873"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\video_test_preset_switch_20260423_183630.json": {
+    "mtime": 1776958590.8389804,
+    "ast_hash": "82162e073857edc8619de9af328f95b3",
+    "semantic_hash": "82162e073857edc8619de9af328f95b3"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_054512_gain7.0_5s_meta.json": {
+    "mtime": 1778726712.469303,
+    "ast_hash": "d19ac91b7d9580974cc1065464076449",
+    "semantic_hash": "d19ac91b7d9580974cc1065464076449"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_054632_gain2.5_5s_meta.json": {
+    "mtime": 1778726792.5069406,
+    "ast_hash": "058e553e586255762242b4841c6db544",
+    "semantic_hash": "058e553e586255762242b4841c6db544"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_054708_gain1.0_5s_meta.json": {
+    "mtime": 1778726828.9806738,
+    "ast_hash": "48f8733b1afff34adc6ea0e496e84c94",
+    "semantic_hash": "48f8733b1afff34adc6ea0e496e84c94"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_055352_gain4.0_5s_meta.json": {
+    "mtime": 1778727232.8560286,
+    "ast_hash": "499ee390955514db11e9b1b083af65d2",
+    "semantic_hash": "499ee390955514db11e9b1b083af65d2"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_070303_gain4.0_5s_meta.json": {
+    "mtime": 1778731383.5543082,
+    "ast_hash": "11cff7816ed3d9a4b874e634aa4a84f1",
+    "semantic_hash": "11cff7816ed3d9a4b874e634aa4a84f1"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\config\\AdamsConfig.h": {
+    "mtime": 1778822166.4554656,
+    "ast_hash": "1ee8d698cb0c696fdab72f5fd9b04b0b",
+    "semantic_hash": "1ee8d698cb0c696fdab72f5fd9b04b0b"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\config\\PinsConfig.h": {
+    "mtime": 1778704042.0675788,
+    "ast_hash": "2b7efd48438a74550bbd5a69d5b54606",
+    "semantic_hash": "2b7efd48438a74550bbd5a69d5b54606"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\config\\PrivateConfig.example.h": {
+    "mtime": 1778534662.6614752,
+    "ast_hash": "6714017b0f283dfe26fda68b7a87335d",
+    "semantic_hash": "6714017b0f283dfe26fda68b7a87335d"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\config\\PrivateConfig.h": {
+    "mtime": 1778579130.25325,
+    "ast_hash": "4c539f6a803c96d70d132a05acbd6895",
+    "semantic_hash": "4c539f6a803c96d70d132a05acbd6895"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\audio\\AudioModule.cpp": {
+    "mtime": 1778763794.2259128,
+    "ast_hash": "a444283a07fa1a82ed2d5922be06c2d8",
+    "semantic_hash": "a444283a07fa1a82ed2d5922be06c2d8"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\audio\\AudioModule.h": {
+    "mtime": 1778610132.7722368,
+    "ast_hash": "26719bf9d27f2fcf151c9501a24a3f10",
+    "semantic_hash": "26719bf9d27f2fcf151c9501a24a3f10"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\audio\\SystemSoundData.h": {
+    "mtime": 1778534662.671474,
+    "ast_hash": "c989fd665e3816121a65fcf0a26a94eb",
+    "semantic_hash": "c989fd665e3816121a65fcf0a26a94eb"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\audio\\SystemSoundModule.cpp": {
+    "mtime": 1778534662.6724744,
+    "ast_hash": "63745caa982ed0704280777b1d9e0b59",
+    "semantic_hash": "63745caa982ed0704280777b1d9e0b59"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\audio\\SystemSoundModule.h": {
+    "mtime": 1778534662.6724744,
+    "ast_hash": "debe78be3fc617804f0f3fd8bf04b96e",
+    "semantic_hash": "debe78be3fc617804f0f3fd8bf04b96e"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\camera\\CameraModule.cpp": {
+    "mtime": 1778534662.6734743,
+    "ast_hash": "527863059f8fa95cb0aa5db64806d28e",
+    "semantic_hash": "527863059f8fa95cb0aa5db64806d28e"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\camera\\CameraModule.h": {
+    "mtime": 1778534662.6744745,
+    "ast_hash": "02914ef181844b2f226683ed6233fa08",
+    "semantic_hash": "02914ef181844b2f226683ed6233fa08"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\camera\\camera_index.h": {
+    "mtime": 1778534662.6754756,
+    "ast_hash": "494fb23dc6c1e2f9d50eb70650e5342d",
+    "semantic_hash": "494fb23dc6c1e2f9d50eb70650e5342d"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\BootDiagnostics.cpp": {
+    "mtime": 1778534662.6754756,
+    "ast_hash": "9ab09ea30c4a686184c7e3db3b165633",
+    "semantic_hash": "9ab09ea30c4a686184c7e3db3b165633"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\BootDiagnostics.h": {
+    "mtime": 1778534662.6764753,
+    "ast_hash": "1e0ab269b5b4d1cc6d3e422bd09017e9",
+    "semantic_hash": "1e0ab269b5b4d1cc6d3e422bd09017e9"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\NetworkModule.cpp": {
+    "mtime": 1778534662.6764753,
+    "ast_hash": "4854a54d911c1d1aee9b802eff41c7d6",
+    "semantic_hash": "4854a54d911c1d1aee9b802eff41c7d6"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\NetworkModule.h": {
+    "mtime": 1778534662.6764753,
+    "ast_hash": "9e9f7b00f4d70686eee6146cf2bdb021",
+    "semantic_hash": "9e9f7b00f4d70686eee6146cf2bdb021"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\OtaModule.cpp": {
+    "mtime": 1778534662.677475,
+    "ast_hash": "ea318fec03a9e4790f249e4693cc2d05",
+    "semantic_hash": "ea318fec03a9e4790f249e4693cc2d05"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\OtaModule.h": {
+    "mtime": 1778534662.678475,
+    "ast_hash": "895654222c88d6ad96ba9adc2bdb2f53",
+    "semantic_hash": "895654222c88d6ad96ba9adc2bdb2f53"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\RuntimeState.cpp": {
+    "mtime": 1778534662.678475,
+    "ast_hash": "1e6ad4dcd566d641211b625cf9e9f658",
+    "semantic_hash": "1e6ad4dcd566d641211b625cf9e9f658"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\RuntimeState.h": {
+    "mtime": 1778534662.6794763,
+    "ast_hash": "7c244d868b2f33e42c3a639d98dea808",
+    "semantic_hash": "7c244d868b2f33e42c3a639d98dea808"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\VideoLatencyMetrics.cpp": {
+    "mtime": 1778534662.6794763,
+    "ast_hash": "1bbf46d903c8a28a9b4f661a95c2c91c",
+    "semantic_hash": "1bbf46d903c8a28a9b4f661a95c2c91c"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\core\\VideoLatencyMetrics.h": {
+    "mtime": 1778534662.6804757,
+    "ast_hash": "897be0ed5a6a324af062a42363eae9c2",
+    "semantic_hash": "897be0ed5a6a324af062a42363eae9c2"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\io\\Pca9685Module.cpp": {
+    "mtime": 1778718403.9124496,
+    "ast_hash": "357c151f6dcde56763f2a81583c0efa1",
+    "semantic_hash": "357c151f6dcde56763f2a81583c0efa1"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\io\\Pca9685Module.h": {
+    "mtime": 1778591478.4473507,
+    "ast_hash": "05dda644d8501079a582ba9f8b048b83",
+    "semantic_hash": "05dda644d8501079a582ba9f8b048b83"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\io\\SensorModule.cpp": {
+    "mtime": 1778534662.6824784,
+    "ast_hash": "0abfd5e878a6c969478022638bd91f92",
+    "semantic_hash": "0abfd5e878a6c969478022638bd91f92"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\io\\SensorModule.h": {
+    "mtime": 1778534662.6824784,
+    "ast_hash": "e51585e1190958f08bc0fa83a197cb0b",
+    "semantic_hash": "e51585e1190958f08bc0fa83a197cb0b"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\web\\WebServerModule.cpp": {
+    "mtime": 1778822166.458467,
+    "ast_hash": "74c36fb93f8239d9207a728b111e4fe6",
+    "semantic_hash": "74c36fb93f8239d9207a728b111e4fe6"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\src\\web\\WebServerModule.h": {
+    "mtime": 1778534662.6844735,
+    "ast_hash": "f426fd2f66ca24296f7f0b2074609684",
+    "semantic_hash": "f426fd2f66ca24296f7f0b2074609684"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\tools\\flash_com7.ps1": {
+    "mtime": 1778585801.4953504,
+    "ast_hash": "635c56bf44438b8c9c3163b270cf0e69",
+    "semantic_hash": "635c56bf44438b8c9c3163b270cf0e69"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\tools\\flash_ota.ps1": {
+    "mtime": 1778718200.2054913,
+    "ast_hash": "4755b40fbac6e0c93d4e5590475ee427",
+    "semantic_hash": "4755b40fbac6e0c93d4e5590475ee427"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\tools\\video_test_runner.ps1": {
+    "mtime": 1778534662.9719892,
+    "ast_hash": "cd6d2f3f6e343e20d9dcb88cea486d3a",
+    "semantic_hash": "cd6d2f3f6e343e20d9dcb88cea486d3a"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\CLAUDE.md": {
+    "mtime": 1778833921.3506634,
+    "ast_hash": "3c9047545cf479a0abf4bc7a229b6a8e",
+    "semantic_hash": "3c9047545cf479a0abf4bc7a229b6a8e"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\README.md": {
+    "mtime": 1778822166.454466,
+    "ast_hash": "a5c4483ade880b76bc0f7a60bac8fd72",
+    "semantic_hash": "a5c4483ade880b76bc0f7a60bac8fd72"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\_dashboard.html": {
+    "mtime": 1776624219.7025795,
+    "ast_hash": "8577628f45a8a0a1e78a7d5de4311a85",
+    "semantic_hash": "8577628f45a8a0a1e78a7d5de4311a85"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\_http_diag_log.txt": {
+    "mtime": 1776606086.7517943,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\_live.html": {
+    "mtime": 1776624218.246867,
+    "ast_hash": "706d0ded150a0b0d28ccc15c8d3252a5",
+    "semantic_hash": "706d0ded150a0b0d28ccc15c8d3252a5"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\_serial_err.txt": {
+    "mtime": 1776624190.4184346,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\_serial_log.txt": {
+    "mtime": 1778785805.2805471,
+    "ast_hash": "23c94f030d2022e66b47d8311bdf3015",
+    "semantic_hash": "23c94f030d2022e66b47d8311bdf3015"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\docs\\RUNBOOK_WINDOWS_COM7.md": {
+    "mtime": 1778534662.6614752,
+    "ast_hash": "4bdb983d9337c16a65a62dbd366548f7",
+    "semantic_hash": "4bdb983d9337c16a65a62dbd366548f7"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\_audio_clip.wav": {
+    "mtime": 1776624221.3356197,
+    "ast_hash": "800ea34119b791a1be054aafd09fc896",
+    "semantic_hash": "800ea34119b791a1be054aafd09fc896"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\_mic_test.wav": {
+    "mtime": 1776618421.2383637,
+    "ast_hash": "52eda72f57bcd4b140ae8136e6f023cf",
+    "semantic_hash": "52eda72f57bcd4b140ae8136e6f023cf"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_samples\\20260514_141524_left.wav": {
+    "mtime": 1778757414.723011,
+    "ast_hash": "4208932ef506c30ca17b66883529a7e8",
+    "semantic_hash": "4208932ef506c30ca17b66883529a7e8"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_samples\\20260514_141524_right.wav": {
+    "mtime": 1778757482.6554482,
+    "ast_hash": "f79461e1f71fb0186262512d6438e172",
+    "semantic_hash": "f79461e1f71fb0186262512d6438e172"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_samples\\20260514_142125_stereo.wav": {
+    "mtime": 1778757685.434574,
+    "ast_hash": "fb0454060c2d326461f31bc6adb38184",
+    "semantic_hash": "fb0454060c2d326461f31bc6adb38184"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_054512_gain7.0_5s_mono.wav": {
+    "mtime": 1778726712.4673035,
+    "ast_hash": "3defecb591c62ae9ac73edfb586f7207",
+    "semantic_hash": "3defecb591c62ae9ac73edfb586f7207"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_054512_gain7.0_5s_stereo.wav": {
+    "mtime": 1778726712.4662993,
+    "ast_hash": "81cea7c0b9ea2e3c8b299db328a18691",
+    "semantic_hash": "81cea7c0b9ea2e3c8b299db328a18691"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_054632_gain2.5_5s_mono.wav": {
+    "mtime": 1778726792.5059931,
+    "ast_hash": "9652b315ce75f71b188cac50f97de673",
+    "semantic_hash": "9652b315ce75f71b188cac50f97de673"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_054632_gain2.5_5s_stereo.wav": {
+    "mtime": 1778726792.5039344,
+    "ast_hash": "8a8a13b7fd7cf9ec03e5c896490471b3",
+    "semantic_hash": "8a8a13b7fd7cf9ec03e5c896490471b3"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_054708_gain1.0_5s_mono.wav": {
+    "mtime": 1778726828.9796562,
+    "ast_hash": "382570fbc024403d70ee5f69edcb8c57",
+    "semantic_hash": "382570fbc024403d70ee5f69edcb8c57"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_054708_gain1.0_5s_stereo.wav": {
+    "mtime": 1778726828.9782612,
+    "ast_hash": "5631ef9e57d495f1981abab9d5f70e8f",
+    "semantic_hash": "5631ef9e57d495f1981abab9d5f70e8f"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_055352_gain4.0_5s_mono.wav": {
+    "mtime": 1778727232.8549936,
+    "ast_hash": "c9208b7437cea30f2f2e6cb5e08846db",
+    "semantic_hash": "c9208b7437cea30f2f2e6cb5e08846db"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_055352_gain4.0_5s_stereo.wav": {
+    "mtime": 1778727232.852964,
+    "ast_hash": "afd07bcfa95794f050da5acaa31a4e13",
+    "semantic_hash": "afd07bcfa95794f050da5acaa31a4e13"
+  },
+  "F:\\Adam-Chip\\Subsystem\\AdamsServer\\artifacts\\mic_tests\\20260514_070303_gain4.0_5s_left.wav": {
+    "mtime": 1778731383.5533297,
+    "ast_hash": "4711bb7b9eca2bd1ff429f412bd59ac7",
+    "semantic_hash": "4711bb7b9eca2bd1ff429f412bd59ac7"
+  }
+}

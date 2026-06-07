@@ -1,6 +1,7 @@
 #include "WebServerModule.h"
 
 #include <cctype>
+#include <cerrno>
 #include <cinttypes>
 #include <cstring>
 #include <cstdlib>
@@ -381,6 +382,13 @@ void buildStatusJson(String &json) {
   portENTER_CRITICAL(&gRuntimeStateMux);
   const uint32_t videoClients = gRuntimeState.videoClients;
   const uint32_t audioClients = gRuntimeState.audioClients;
+  // T17 fix #11 — audio diagnostic counters (snapshot under the same lock).
+  const uint32_t audioSessionsTotal          = gRuntimeState.audioSessionsTotal;
+  const uint32_t audioSessionsActive         = gRuntimeState.audioSessionsActive;
+  const uint32_t audioSessionsTimedOut       = gRuntimeState.audioSessionsTimedOut;
+  const uint32_t audioSessionsKeepaliveDeath = gRuntimeState.audioSessionsKeepaliveDeath;
+  const uint32_t audioChunkAllocFailures     = gRuntimeState.audioChunkAllocFailures;
+  const uint32_t audioHeaderSendFailures     = gRuntimeState.audioHeaderSendFailures;
   const uint32_t websocketClients = gRuntimeState.websocketClients;
   const uint32_t frameTimeMs = gRuntimeState.frameTimeMs;
   const uint32_t frameRateTimes10 = gRuntimeState.frameRateTimes10;
@@ -489,6 +497,24 @@ void buildStatusJson(String &json) {
   json += videoClients;
   json += ",\"audio_clients\":";
   json += audioClients;
+  // T17 fix #11 — operator-visible diagnostics for the /audio:81 endpoint.
+  // heap_free_min lets us see the lowest watermark since boot (proxy for
+  // "did we leak heap during the test"). The session counters bucket exit
+  // reasons so we can tell zombie-cleanup mode at a glance.
+  json += ",\"heap_free_min\":";
+  json += String(static_cast<uint32_t>(esp_get_minimum_free_heap_size()));
+  json += ",\"audio_sessions_total\":";
+  json += audioSessionsTotal;
+  json += ",\"audio_sessions_active\":";
+  json += audioSessionsActive;
+  json += ",\"audio_sessions_timed_out\":";
+  json += audioSessionsTimedOut;
+  json += ",\"audio_sessions_keepalive_death\":";
+  json += audioSessionsKeepaliveDeath;
+  json += ",\"audio_chunk_alloc_failures\":";
+  json += audioChunkAllocFailures;
+  json += ",\"audio_header_send_failures\":";
+  json += audioHeaderSendFailures;
   json += ",\"websocket_clients\":";
   json += websocketClients;
   json += ",\"camera_ready\":";
@@ -2412,21 +2438,58 @@ esp_err_t audioHandler(httpd_req_t *req) {
   const WavHeader header = makeWavHeader();
   esp_err_t result = httpd_resp_send_chunk(req, reinterpret_cast<const char *>(&header), sizeof(header));
   if (result != ESP_OK) {
+    // T17 fix #11 — count header-send failures so we can correlate with
+    // /audio hangs after the firmware fix is deployed. A growing counter
+    // here means the LRU-purge cleanup window is too tight.
+    portENTER_CRITICAL(&gRuntimeStateMux);
+    gRuntimeState.audioHeaderSendFailures = gRuntimeState.audioHeaderSendFailures + 1;
+    portEXIT_CRITICAL(&gRuntimeStateMux);
     return result;
   }
 
   auto *chunk = static_cast<uint8_t *>(malloc(kAudioReadChunkBytes));
   if (chunk == nullptr) {
+    // T17 fix #11 — counter for the heap-exhaustion signature that bricked
+    // the stream server during the original zombie-session pile-up.
+    portENTER_CRITICAL(&gRuntimeStateMux);
+    gRuntimeState.audioChunkAllocFailures = gRuntimeState.audioChunkAllocFailures + 1;
+    portEXIT_CRITICAL(&gRuntimeStateMux);
     return sendError(req, "503 Service Unavailable", "{\"error\":\"audio_chunk_alloc_failed\"}");
   }
 
   portENTER_CRITICAL(&gRuntimeStateMux);
   gRuntimeState.audioClients = gRuntimeState.audioClients + 1;
+  // T17 fix #11 — cumulative + active session counters for the regression
+  // smoke test (scripts/adam_esp32_stream_stress.sh) and operator UI.
+  gRuntimeState.audioSessionsTotal = gRuntimeState.audioSessionsTotal + 1;
+  gRuntimeState.audioSessionsActive = gRuntimeState.audioSessionsActive + 1;
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
   uint64_t cursor = getAudioWriteSequence();
 
+  // T17 zombie-session fix — non-blocking peek detects client-side close
+  // immediately, even during the 8 ms idle waits when no audio data is
+  // ready to send. Without this, the handler kept looping (silently) for
+  // up to send_wait_timeout seconds after the client had gone, holding the
+  // socket slot and ~5-10 KB of task heap.
+  const int audioSockFd = httpd_req_to_sockfd(req);
+  auto clientStillAlive = [audioSockFd]() -> bool {
+    if (audioSockFd < 0) return true;  // can't check — assume alive
+    char peekBuf;
+    ssize_t r = recv(audioSockFd, &peekBuf, 1, MSG_PEEK | MSG_DONTWAIT);
+    if (r > 0) return true;            // unread bytes — alive
+    if (r == 0) return false;          // orderly close
+    return (errno == EAGAIN || errno == EWOULDBLOCK);
+  };
+
+  bool exitedViaKeepalive = false;
   while (result == ESP_OK) {
+    if (!clientStillAlive()) {
+      exitedViaKeepalive = true;
+      result = ESP_FAIL;
+      break;
+    }
+
     size_t bytesRead = 0;
     if (!readAudioChunk(chunk, kAudioReadChunkBytes, bytesRead, cursor)) {
       result = ESP_FAIL;
@@ -2446,6 +2509,17 @@ esp_err_t audioHandler(httpd_req_t *req) {
   portENTER_CRITICAL(&gRuntimeStateMux);
   if (gRuntimeState.audioClients > 0) {
     gRuntimeState.audioClients = gRuntimeState.audioClients - 1;
+  }
+  if (gRuntimeState.audioSessionsActive > 0) {
+    gRuntimeState.audioSessionsActive = gRuntimeState.audioSessionsActive - 1;
+  }
+  // Bucket the exit reason so we can tell at a glance whether sessions
+  // are dying via keepalive/peek (good — fast cleanup) or via the slower
+  // send_wait_timeout fallback path.
+  if (exitedViaKeepalive) {
+    gRuntimeState.audioSessionsKeepaliveDeath = gRuntimeState.audioSessionsKeepaliveDeath + 1;
+  } else if (result != ESP_OK) {
+    gRuntimeState.audioSessionsTimedOut = gRuntimeState.audioSessionsTimedOut + 1;
   }
   portEXIT_CRITICAL(&gRuntimeStateMux);
 
@@ -2864,6 +2938,21 @@ void registerSpeakerHandlers(httpd_handle_t server) {
 esp_err_t streamServerOpenFn(httpd_handle_t /*hd*/, int sockfd) {
   int nodelay = 1;
   setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+  // T17 zombie-session fix — enable TCP keepalive so the stack auto-detects
+  // dead clients (proxy timeouts, NAT drops, ungraceful disconnects) within
+  // ~9 s instead of waiting for the 30-60 s kernel timeout. Without this,
+  // a hung /audio long-poll session keeps its socket in CLOSE_WAIT and
+  // saturates max_open_sockets, eventually hanging the whole stream server.
+  //   5 s idle + 2 × 2 s probes = ~9 s detection window
+  int keepalive   = 1;
+  int idle        = 5;
+  int intvl       = 2;
+  int cnt         = 2;
+  setsockopt(sockfd, SOL_SOCKET,  SO_KEEPALIVE,  &keepalive, sizeof(keepalive));
+  setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,      sizeof(idle));
+  setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl,     sizeof(intvl));
+  setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,       sizeof(cnt));
   return ESP_OK;
 }
 
@@ -2902,9 +2991,9 @@ esp_err_t systemStreamRestartHandler(httpd_req_t *req) {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port   = kHttpPort + 1 + 1;  // avoid collision with control ctrl_port
   streamConfig.max_uri_handlers  = 6;
-  streamConfig.max_open_sockets  = 4;
+  streamConfig.max_open_sockets  = 4;  // T17 GSD: revert from 6 — peek-probe handles zombies, +16 KB stack risked OOM on Wi-Fi boot
   streamConfig.lru_purge_enable  = true;
-  streamConfig.send_wait_timeout = 10;
+  streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size        = 8192;
   streamConfig.open_fn           = streamServerOpenFn;
 
@@ -2982,9 +3071,9 @@ bool startWebServer() {
   streamConfig.server_port = kStreamPort;
   streamConfig.ctrl_port = controlConfig.ctrl_port + 1;
   streamConfig.max_uri_handlers = 6;
-  streamConfig.max_open_sockets = 4;
+  streamConfig.max_open_sockets = 4;  // T17 GSD: revert from 6 — peek-probe handles zombies, +16 KB stack risked OOM on Wi-Fi boot
   streamConfig.lru_purge_enable = true;
-  streamConfig.send_wait_timeout = 10;
+  streamConfig.send_wait_timeout = 5;   // T17 fix: faster fail-fast on dead clients (was 10)
   streamConfig.stack_size = 8192;
   streamConfig.open_fn = streamServerOpenFn;
 

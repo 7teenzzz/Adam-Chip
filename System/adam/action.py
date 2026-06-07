@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
-Mood = Literal["neutral", "curious", "warm", "irritated", "silent"]
+Mood = Literal["neutral", "curious", "warm", "sharp", "uneasy"]
 ActionKind = Literal["no_action", "scene", "channel"]
 
 
@@ -48,14 +48,14 @@ class ActionLayer:
         text = reply_text.lower()
         context = context or {}
         if not reply_text.strip():
-            return Action(kind="no_action", mood="silent", reason="empty_reply")
+            return Action(kind="no_action", mood="uneasy", reason="empty_reply")
         if self._cooling_down():
             return Action(kind="no_action", mood="neutral", reason="cooldown")
 
         if any(word in text for word in ("рад", "интересно", "вижу", "привет")):
             return self.validate({"kind": "scene", "mood": "warm", "scene": "alternating", "reason": "warm_reply"})
         if any(word in text for word in ("нет", "осторож", "не могу", "не стоит")):
-            return self.validate({"kind": "scene", "mood": "irritated", "scene": "boot_idle", "reason": "boundary_reply"})
+            return self.validate({"kind": "scene", "mood": "sharp", "scene": "boot_idle", "reason": "boundary_reply"})
 
         sensors = context.get("sensors", {})
         if isinstance(sensors, dict) and sensors.get("motion"):
@@ -101,6 +101,6 @@ class ActionLayer:
 
     @staticmethod
     def _mood(value: Any) -> Mood:
-        if value in {"neutral", "curious", "warm", "irritated", "silent"}:
+        if value in {"neutral", "curious", "warm", "sharp", "uneasy"}:
             return value
         return "neutral"

@@ -311,12 +311,13 @@ def main() -> int:
     args = parse_args()
     settings = Settings.load()
     memory = EpisodicMemory(settings.data_dir)
-    tuning_path = ROOT / "Agent Adam Chip" / "Tuning.json"
-    tuning_store = TuningStore(tuning_path)
+    # TuningStore reads from Config.json (section `tuning`); legacy Tuning.json
+    # has been migrated and removed.
+    tuning_store = TuningStore()
     tuning: Tuning = tuning_store.current()
 
     log = setup_logging(memory)
-    # Model: Tuning.json override → Config.json fallback (llama.cpp ignores the field anyway)
+    # Model: tuning override → services.llm fallback (llama.cpp ignores the field anyway).
     llm_base_url = settings.section("services").get("llm", {}).get("base_url", "http://127.0.0.1:8081/v1")
     llm_model = tuning.memory.consolidator.model or settings.section("services").get("llm", {}).get("model", "")
     log.info("starting; data_dir=%s decay=%dd llm=%s model=%s",

@@ -5,7 +5,7 @@
 - **Config:** только `Settings.load()` или `settings.section("name")` — никогда `DEFAULT_CONFIG` напрямую
 - **Сервисы:** только через `inference.py` — не вызывать LLM/TTS/ASR/VLM из других модулей напрямую
 - **События:** `events.EventBus` — не `print()`, не `logging.getLogger()`
-- **Hot-reload:** `tuning.py` значения читать каждый turn, не кешировать в `__init__`
+- **Hot-reload:** `tuning.py` значения читать каждый turn, не кешировать в `__init__`. Backing store — секция `tuning` в `Config.json` (раньше `Agent Adam Chip/Tuning.json`, файл удалён в V-S07.2).
 
 ## Модули (23)
 

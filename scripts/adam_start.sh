@@ -26,6 +26,15 @@
 
 set -euo pipefail
 
+# ─── Proxy hard-clear ───────────────────────────────────────────────────────
+# Adam НИКОГДА не должен идти через v2ray/xray — ESP подключён напрямую через
+# crossover (eno1, 10.10.10.0/24). NO_PROXY="*" гарантирует что любой
+# urllib/httpx/requests вызов идёт direct, даже если что-то забыло trust_env=False.
+unset http_proxy https_proxy ftp_proxy all_proxy socks_proxy
+unset HTTP_PROXY HTTPS_PROXY FTP_PROXY ALL_PROXY SOCKS_PROXY
+export NO_PROXY="*"
+export no_proxy="*"
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PYTHON="${ROOT_DIR}/.venv/bin/python"
 LOG_DIR="${ROOT_DIR}/data/adam"
@@ -343,6 +352,8 @@ if ${START_ORCH}; then
     ADAM_EXPECTED_SERVICES="${EXPECTED_SERVICES}" \
     HF_HOME="${MODELS_DIR}/hf" \
     HF_HUB_CACHE="${MODELS_DIR}/hf/hub" \
+    NO_PROXY="*" no_proxy="*" \
+    http_proxy="" https_proxy="" HTTP_PROXY="" HTTPS_PROXY="" \
     nohup "${VENV_PYTHON}" "${ROOT_DIR}/System/Orchestrator.py" >>"${LOG_FILE}" 2>&1 &
   ORCH_PID=$!
   echo "${ORCH_PID}" > "${PID_FILE}"

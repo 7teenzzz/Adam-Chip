@@ -1,9 +1,14 @@
 # Claude Code local state (plans, memory, local settings) — but commit project MCP config
 .claude/*
 !.claude/settings.json
+!CLAUDE.md
+!**/CLAUDE.md
 PLAN.md
 !.planning/PLAN.md
 .mcp.json
+
+# Microsoft Office temp/lock files
+~$*
 
 # Temp staff
 .tmp/
@@ -226,6 +231,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Graphify temporary and cache files
+Knowledge-graphs/**/.chunk_*.json
+Knowledge-graphs/**/.graphify_uncached.txt
+Knowledge-graphs/**/manifest.json
+Knowledge-graphs/**/cost.json
+
+# Windows shortcuts
+*.lnk
 
 *.[oa]
 *~

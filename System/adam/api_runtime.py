@@ -29,6 +29,8 @@ from .config import Settings, PROJECT_ROOT
 from .events import EventLog
 from .memory import EpisodicMemory, MemoryStore
 from .metrics import MetricsLog
+from .metrics_sessions import SessionsLog
+from .metrics_dashboard import MetricsDashboard
 from .wake_calibration import collect_noise_profile, persist_noise_profile
 from pathlib import Path
 
@@ -98,6 +100,8 @@ class RuntimeDeps:
     run_dialogue_turn: Callable[..., Awaitable[dict[str, Any]]]
     episodic_memory: EpisodicMemory | None = None
     get_voice_loop: Callable[[], Any] | None = None
+    sessions_log: SessionsLog | None = None
+    metrics_dashboard: MetricsDashboard | None = None
 
 
 def build_router(deps: RuntimeDeps) -> APIRouter:
@@ -187,10 +191,11 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             deps.event_log, duration_sec=duration_sec, margin=margin
         )
         vl = deps.get_voice_loop() if deps.get_voice_loop else None
+        mr = getattr(vl, "mic_reader", None)
         audio_cfg = deps.settings.section("media").get("audio", {})
         mic_source = getattr(vl, "mic_source", "local") if vl else "local"
         mic_profile = getattr(vl, "esp32_mic_profile", "") if vl else ""
-        mic_active = getattr(vl, "mic_active_source", mic_source) if vl else mic_source
+        mic_active = getattr(mr, "active_source", mic_source) if mr else mic_source
         input_device = audio_cfg.get("input_device", "")
         profile_key = (
             f"esp32:{mic_profile}" if mic_source == "esp32" else f"local:{input_device}"
@@ -210,8 +215,8 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             "input_device": input_device,
             "profile_key": profile_key,
             "audio_level_stats": {
-                "level_l": getattr(vl, "_raw_level_l", None) if vl else None,
-                "level_r": getattr(vl, "_raw_level_r", None) if vl else None,
+                "level_l": getattr(mr, "raw_level_l", None) if mr else None,
+                "level_r": getattr(mr, "raw_level_r", None) if mr else None,
             },
         }
         try:
@@ -388,6 +393,21 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             "Cache-Control": "no-store",
         }
         return Response(content=data, media_type="application/x-ndjson", headers=headers)
+
+    @router.get("/api/metrics/dashboard")
+    async def metrics_dashboard(window: int = Query(300, ge=50, le=2000)) -> dict[str, Any]:
+        if deps.metrics_dashboard is None:
+            raise HTTPException(status_code=503, detail="metrics_dashboard not initialised")
+        return await asyncio.to_thread(deps.metrics_dashboard.compute, window)
+
+    @router.get("/api/metrics/sessions")
+    async def metrics_sessions(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+        if deps.sessions_log is None:
+            return {"sessions": [], "stats": {}}
+        return {
+            "sessions": deps.sessions_log.tail(limit),
+            "stats": deps.sessions_log.stats(limit),
+        }
 
     @router.get("/api/audio/devices")
     async def audio_devices() -> dict[str, Any]:

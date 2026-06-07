@@ -1,0 +1,28 @@
+{
+  "chunk": 1,
+  "total_chunks": 8,
+  "files": [
+    "F:\\Adam-Chip\\diploma\\consolidate_chapters.py",
+    "F:\\Adam-Chip\\diploma\\convert_pdf.py",
+    "F:\\Adam-Chip\\diploma\\convert_pdf_pymupdf.py",
+    "F:\\Adam-Chip\\diploma\\inspect_structure.py",
+    "F:\\Adam-Chip\\diploma\\split_diploma.py",
+    "F:\\Adam-Chip\\diploma\\00_synthesis.md",
+    "F:\\Adam-Chip\\diploma\\01_ diploma_to_architecture.md",
+    "F:\\Adam-Chip\\diploma\\02_code_to_diploma_verification.md",
+    "F:\\Adam-Chip\\diploma\\03_write_chapter3.md",
+    "F:\\Adam-Chip\\diploma\\chapter_map.md",
+    "F:\\Adam-Chip\\diploma\\Claude.md",
+    "F:\\Adam-Chip\\diploma\\Diploma.md",
+    "F:\\Adam-Chip\\diploma\\Diploma_bibliography.md",
+    "F:\\Adam-Chip\\diploma\\Diploma_figures.md",
+    "F:\\Adam-Chip\\diploma\\evaluation_criteria.md",
+    "F:\\Adam-Chip\\diploma\\IMRAD_DIPLOMA_MAPPING.md",
+    "F:\\Adam-Chip\\diploma\\REVIEW_CHECKPOINT_template.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.1.1_concept_basis.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.1.2_agent_behavior_logic.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.1.3_agent_functions.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.2.1_architecture.md",
+    "F:\\Adam-Chip\\diploma\\chapter-3\\3.2.2_software_stack.md"
+  ]
+}

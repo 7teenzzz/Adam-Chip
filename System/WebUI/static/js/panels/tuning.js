@@ -19,7 +19,7 @@ function el(tag, attrs, children = []) {
   return node;
 }
 
-// Описание полей по группам. Источник истины — Tuning.json + tuning.py.
+// Описание полей по группам. Источник истины — Config.json (секция `tuning`) + tuning.py.
 // Если добавляешь параметр в pydantic — добавь сюда же, иначе он не появится в UI.
 const SPEC = [
   {
@@ -113,7 +113,7 @@ const SPEC = [
     key: "voice", title: "Голос (TTS, runtime)", fields: [
       { k: "speaker",          label: "Диктор",        type: "string", hint: "aidar, baya, kseniya, xenia, eugene, random" },
       { k: "speed_multiplier", label: "Скорость речи", type: "float",  min: 0.5, max: 2, step: 0.05, hint: "1.0 = нормально" },
-      { k: "volume",           label: "Громкость",     type: "float",  min: 0, max: 2, step: 0.05, hint: "1.0 = нормально" },
+      { k: "volume",           label: "Громкость",     type: "float",  min: 0, max: 2, step: 0.05, hint: "0.0 = тишина · 1.0 = норма · 2.0 = максимум · удобнее регулировать слайдером в «Конфигурация → Голос (runtime)»" },
     ],
   },
   {

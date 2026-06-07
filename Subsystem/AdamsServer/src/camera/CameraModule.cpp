@@ -8,6 +8,7 @@
 #include <freertos/task.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
+#include <img_converters.h>
 
 #include "../../config/AdamsConfig.h"
 #include "../core/BootDiagnostics.h"
@@ -48,6 +49,17 @@ bool sLatestFrameReady = false;
 size_t sLatestFrameLength = 0;
 int64_t sLatestFrameTimestampUs = 0;
 uint32_t sLatestFrameSequence = 0;
+
+CameraModel sDetectedCameraModel = CameraModel::Unknown;
+constexpr uint16_t kOv5640Pid = 0x5640;
+constexpr uint16_t kOv7670Pid = 0x7673;
+
+bool isPresetSupportedByCurrentCamera(framesize_t framesize) {
+  if (sDetectedCameraModel == CameraModel::OV7670) {
+    return framesize <= FRAMESIZE_VGA;  // OV7670 max resolution = 640x480
+  }
+  return true;  // OV5640 or Unknown: allow all presets
+}
 
 #define CAMERA_BALANCED_PRESET(FRAME_SIZE, JPEG_QUALITY) { \
   true, FRAME_SIZE, \
@@ -135,7 +147,7 @@ void saveCameraState(const CameraControlState &state) {
   portEXIT_CRITICAL(&gRuntimeStateMux);
 }
 
-camera_config_t buildCameraConfig(const CameraControlState &state) {
+camera_config_t buildCameraConfig(const CameraControlState &state, CameraModel model) {
   camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_1;
   config.ledc_timer = LEDC_TIMER_1;
@@ -155,8 +167,13 @@ camera_config_t buildCameraConfig(const CameraControlState &state) {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = kXclkFrequencyHz;
-  config.pixel_format = PIXFORMAT_JPEG;
+  if (model == CameraModel::OV7670) {
+    config.xclk_freq_hz = kXclkFrequencyHz_OV7670;
+    config.pixel_format = PIXFORMAT_YUV422;  // OV7670 has no HW JPEG encoder
+  } else {
+    config.xclk_freq_hz = kXclkFrequencyHz_OV5640;
+    config.pixel_format = PIXFORMAT_JPEG;    // OV5640 HW JPEG path
+  }
   config.frame_size = static_cast<framesize_t>(state.framesize);
   config.jpeg_quality = constrain(state.quality, 4, 63);
   config.fb_count = 1;
@@ -444,27 +461,70 @@ void cameraProducerTask(void *parameter) {
       continue;
     }
 
-    if (!ensureLatestFrameCapacity(writeIndex, fb->len)) {
-      esp_camera_fb_return(fb);
-      if (sCameraMutex != nullptr) {
-        xSemaphoreGive(sCameraMutex);
-      }
-      portENTER_CRITICAL(&gRuntimeStateMux);
-      gRuntimeState.streamDrops = gRuntimeState.streamDrops + 1;
-      portEXIT_CRITICAL(&gRuntimeStateMux);
-      vTaskDelay(pdMS_TO_TICKS(20));
-      continue;
-    }
+    size_t frameLength = 0;
+    int64_t timestampUs = 0;
 
-    const int64_t copyStartedUs = esp_timer_get_time();
-    memcpy(sLatestFrameBuffers[writeIndex], fb->buf, fb->len);
-    const uint32_t copyUs = static_cast<uint32_t>(esp_timer_get_time() - copyStartedUs);
-    const uint32_t copyMs = copyUs / 1000;
-    videoLatencyRecordProducerCopyMs(copyMs);
-    videoLatencyRecordProducerCopyUs(copyUs);
-    const size_t frameLength = fb->len;
-    const int64_t timestampUs = frameTimestampUs(fb);
-    esp_camera_fb_return(fb);
+    if (sDetectedCameraModel == CameraModel::OV7670) {
+      // OV7670: software JPEG encoding — encode YUV422→JPEG, release raw buffer ASAP
+      uint8_t *jpgBuf = nullptr;
+      size_t jpgLen = 0;
+      const int encQuality = constrain(static_cast<int>(gRuntimeState.cameraQuality), 4, 63);
+      const bool encoded = frame2jpg(fb, encQuality, &jpgBuf, &jpgLen);
+      timestampUs = frameTimestampUs(fb);
+      esp_camera_fb_return(fb);  // release ~614 KB raw buffer immediately
+      if (!encoded || jpgBuf == nullptr || jpgLen == 0) {
+        free(jpgBuf);
+        if (sCameraMutex != nullptr) {
+          xSemaphoreGive(sCameraMutex);
+        }
+        portENTER_CRITICAL(&gRuntimeStateMux);
+        gRuntimeState.streamDrops = gRuntimeState.streamDrops + 1;
+        portEXIT_CRITICAL(&gRuntimeStateMux);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        continue;
+      }
+      if (!ensureLatestFrameCapacity(writeIndex, jpgLen)) {
+        free(jpgBuf);
+        if (sCameraMutex != nullptr) {
+          xSemaphoreGive(sCameraMutex);
+        }
+        portENTER_CRITICAL(&gRuntimeStateMux);
+        gRuntimeState.streamDrops = gRuntimeState.streamDrops + 1;
+        portEXIT_CRITICAL(&gRuntimeStateMux);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        continue;
+      }
+      const int64_t copyStartedUs = esp_timer_get_time();
+      memcpy(sLatestFrameBuffers[writeIndex], jpgBuf, jpgLen);
+      const uint32_t copyUs = static_cast<uint32_t>(esp_timer_get_time() - copyStartedUs);
+      const uint32_t copyMs = copyUs / 1000;
+      videoLatencyRecordProducerCopyMs(copyMs);
+      videoLatencyRecordProducerCopyUs(copyUs);
+      free(jpgBuf);
+      frameLength = jpgLen;
+    } else {
+      // OV5640: HW JPEG path — direct copy, no re-encoding
+      if (!ensureLatestFrameCapacity(writeIndex, fb->len)) {
+        esp_camera_fb_return(fb);
+        if (sCameraMutex != nullptr) {
+          xSemaphoreGive(sCameraMutex);
+        }
+        portENTER_CRITICAL(&gRuntimeStateMux);
+        gRuntimeState.streamDrops = gRuntimeState.streamDrops + 1;
+        portEXIT_CRITICAL(&gRuntimeStateMux);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        continue;
+      }
+      const int64_t copyStartedUs = esp_timer_get_time();
+      memcpy(sLatestFrameBuffers[writeIndex], fb->buf, fb->len);
+      const uint32_t copyUs = static_cast<uint32_t>(esp_timer_get_time() - copyStartedUs);
+      const uint32_t copyMs = copyUs / 1000;
+      videoLatencyRecordProducerCopyMs(copyMs);
+      videoLatencyRecordProducerCopyUs(copyUs);
+      frameLength = fb->len;
+      timestampUs = frameTimestampUs(fb);
+      esp_camera_fb_return(fb);
+    }
 
     sLastFrameSequence = sLastFrameSequence + 1;
     const uint32_t sequence = sLastFrameSequence;
@@ -538,17 +598,55 @@ bool reinitializeCamera(const CameraControlState &state, const char *reason) {
     clearLatestCameraFrameLocked();
   }
 
-  camera_config_t config = buildCameraConfig(state);
-  const esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK) {
-    if (sCameraMutex != nullptr) {
-      xSemaphoreGive(sCameraMutex);
+  bool cameraInitedDuringProbe = false;
+  if (sDetectedCameraModel == CameraModel::Unknown) {
+    // First boot: detect camera model via two-phase probe
+    camera_config_t probeCfg = buildCameraConfig(state, CameraModel::OV5640);
+    if (esp_camera_init(&probeCfg) == ESP_OK) {
+      sensor_t *s = esp_camera_sensor_get();
+      const uint16_t pid = (s != nullptr) ? s->id.PID : 0;
+      if (pid == kOv7670Pid) {
+        // OV7670 accepted JPEG probe (unexpected) — deinit, reinit with correct format below
+        esp_camera_deinit();
+        sDetectedCameraModel = CameraModel::OV7670;
+      } else {
+        sDetectedCameraModel = CameraModel::OV5640;
+        cameraInitedDuringProbe = true;
+      }
+    } else {
+      // JPEG probe failed — try OV7670 (YUV422, 24 MHz XCLK)
+      camera_config_t ov7Cfg = buildCameraConfig(state, CameraModel::OV7670);
+      if (esp_camera_init(&ov7Cfg) == ESP_OK) {
+        sDetectedCameraModel = CameraModel::OV7670;
+        cameraInitedDuringProbe = true;
+      } else {
+        if (sCameraMutex != nullptr) {
+          xSemaphoreGive(sCameraMutex);
+        }
+        bootLog("camera", "reinit failed: no compatible camera detected");
+        portENTER_CRITICAL(&gRuntimeStateMux);
+        gRuntimeState.cameraReady = false;
+        portEXIT_CRITICAL(&gRuntimeStateMux);
+        return false;
+      }
     }
-    bootLogf("camera", "reinit failed: 0x%x", err);
-    portENTER_CRITICAL(&gRuntimeStateMux);
-    gRuntimeState.cameraReady = false;
-    portEXIT_CRITICAL(&gRuntimeStateMux);
-    return false;
+    bootLogf("camera", "detected model: %s (pid=0x%04x)",
+      sDetectedCameraModel == CameraModel::OV7670 ? "OV7670" : "OV5640",
+      sDetectedCameraModel == CameraModel::OV7670 ? kOv7670Pid : kOv5640Pid);
+  }
+  if (!cameraInitedDuringProbe) {
+    camera_config_t config = buildCameraConfig(state, sDetectedCameraModel);
+    const esp_err_t err = esp_camera_init(&config);
+    if (err != ESP_OK) {
+      if (sCameraMutex != nullptr) {
+        xSemaphoreGive(sCameraMutex);
+      }
+      bootLogf("camera", "reinit failed: 0x%x (model=%d)", err, static_cast<int>(sDetectedCameraModel));
+      portENTER_CRITICAL(&gRuntimeStateMux);
+      gRuntimeState.cameraReady = false;
+      portEXIT_CRITICAL(&gRuntimeStateMux);
+      return false;
+    }
   }
 
   sensor_t *sensor = esp_camera_sensor_get();
@@ -679,6 +777,10 @@ sensor_t *getCameraSensor() {
 }
 
 camera_fb_t *captureCameraFrame() {
+  // OV7670 frames are raw YUV422, not JPEG — use copyLatestCameraFrame() which always has JPEG
+  if (sDetectedCameraModel == CameraModel::OV7670) {
+    return nullptr;
+  }
   if (sCameraMutex != nullptr) {
     xSemaphoreTake(sCameraMutex, portMAX_DELAY);
   }
@@ -874,32 +976,38 @@ bool copyLatestCameraFrame(
 }
 
 size_t getCameraPresetCount() {
-  size_t count = kBuiltInCameraPresetCount;
+  size_t count = 0;
+  for (const auto &p : kBuiltInCameraPresets) {
+    if (isPresetSupportedByCurrentCamera(static_cast<framesize_t>(p.update.framesize))) count++;
+  }
   for (size_t i = 0; i < kMaxStoredPresets; ++i) {
-    if (sStoredPresets[i].inUse) {
-      count++;
-    }
+    if (sStoredPresets[i].inUse) count++;
   }
   return count;
 }
 
 bool getCameraPresetDescriptor(size_t index, CameraPresetDescriptor &descriptor) {
-  if (index < kBuiltInCameraPresetCount) {
-    memset(&descriptor, 0, sizeof(descriptor));
-    copyPresetName(descriptor.name, sizeof(descriptor.name), kBuiltInCameraPresets[index].name);
-    descriptor.builtin = true;
-    descriptor.exists = true;
-    descriptor.hasFramesize = kBuiltInCameraPresets[index].update.hasFramesize;
-    descriptor.framesize = kBuiltInCameraPresets[index].update.framesize;
-    return true;
+  // Iterate built-ins, skipping those unsupported by the detected camera model
+  size_t supported = 0;
+  for (size_t i = 0; i < kBuiltInCameraPresetCount; ++i) {
+    const auto &p = kBuiltInCameraPresets[i];
+    if (!isPresetSupportedByCurrentCamera(static_cast<framesize_t>(p.update.framesize))) continue;
+    if (supported == index) {
+      memset(&descriptor, 0, sizeof(descriptor));
+      copyPresetName(descriptor.name, sizeof(descriptor.name), p.name);
+      descriptor.builtin = true;
+      descriptor.exists = true;
+      descriptor.hasFramesize = p.update.hasFramesize;
+      descriptor.framesize = p.update.framesize;
+      return true;
+    }
+    supported++;
   }
 
-  const size_t userIndex = index - kBuiltInCameraPresetCount;
+  const size_t userIndex = index - supported;
   size_t current = 0;
   for (size_t i = 0; i < kMaxStoredPresets; ++i) {
-    if (!sStoredPresets[i].inUse) {
-      continue;
-    }
+    if (!sStoredPresets[i].inUse) continue;
     if (current == userIndex) {
       memset(&descriptor, 0, sizeof(descriptor));
       copyPresetName(descriptor.name, sizeof(descriptor.name), sStoredPresets[i].name);
@@ -961,4 +1069,8 @@ bool deleteCameraPreset(const char *presetName) {
 
 void resetBuiltInCameraPresets() {
   // Built-in presets are immutable flash constants now, so there is no RAM copy to reset.
+}
+
+CameraModel getDetectedCameraModel() {
+  return sDetectedCameraModel;
 }

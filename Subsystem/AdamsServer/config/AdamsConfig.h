@@ -43,11 +43,14 @@ inline constexpr uint8_t kWifiGateway[4] = {192, 168, kWifiSubnetOctet3, kWifiGa
 inline constexpr uint8_t kWifiSubnet[4] = {kWifiSubnetMask[0], kWifiSubnetMask[1], kWifiSubnetMask[2], kWifiSubnetMask[3]};
 
 inline constexpr bool kEthernetUseStaticIp = true;
-inline constexpr uint8_t kEthernetStaticIp[4] = {192, 168, 0, 171};
-inline constexpr uint8_t kEthernetGateway[4] = {192, 168, 0, 1};
+// Crossover-cable point-to-point with Jetson eno1. Isolated subnet 10.10.10.0/24:
+//   Jetson eno1 = 10.10.10.1, ESP W5500 = 10.10.10.171. No gateway (no L3 routing).
+// Wi-Fi config (kWifi*) stays at 192.168.0.171 for setup/OTA on a normal LAN.
+inline constexpr uint8_t kEthernetStaticIp[4] = {10, 10, 10, 171};
+inline constexpr uint8_t kEthernetGateway[4] = {0, 0, 0, 0};
 inline constexpr uint8_t kEthernetSubnet[4] = {255, 255, 255, 0};
-inline constexpr uint8_t kEthernetDns1[4] = {192, 168, 0, 1};
-inline constexpr uint8_t kEthernetDns2[4] = {1, 1, 1, 1};
+inline constexpr uint8_t kEthernetDns1[4] = {0, 0, 0, 0};
+inline constexpr uint8_t kEthernetDns2[4] = {0, 0, 0, 0};
 inline constexpr int32_t kEthernetPhyAddress = 1;
 inline constexpr uint8_t kEthernetSpiFrequencyMhz = 20;
 
@@ -79,7 +82,8 @@ inline constexpr framesize_t kDefaultFrameSize = FRAMESIZE_QVGA;
 inline constexpr pixformat_t kDefaultPixelFormat = PIXFORMAT_JPEG;
 inline constexpr int kDefaultJpegQuality = 18;
 inline constexpr int kPsramJpegQuality = 18;
-inline constexpr uint32_t kXclkFrequencyHz = 20000000;
+inline constexpr uint32_t kXclkFrequencyHz_OV5640 = 20000000;
+inline constexpr uint32_t kXclkFrequencyHz_OV7670 = 24000000;
 inline constexpr uint32_t kCameraProducerFrameIntervalMs = 66;
 inline constexpr uint32_t kCameraProducerWarmFrameIntervalMs = 180;
 inline constexpr uint32_t kCameraProducerFastGraceMs = 4000;
@@ -94,7 +98,7 @@ inline constexpr uint8_t kAudioChannels = 1;
 inline constexpr uint8_t kAudioPreferredSlot = 1;  // 1 = left, 2 = right
 inline constexpr uint8_t kAudioI2sStdFormat = 2;   // 1 = Philips, 2 = MSB
 inline constexpr uint8_t kAudioCaptureShift = 0;
-inline constexpr size_t kAudioRingBufferBytes = 262144;  // 4s stereo @ 16kHz 16-bit
+inline constexpr size_t kAudioRingBufferBytes = 16384;  // 256ms stereo @ 16kHz 16-bit — caps reader lag at ~256ms (drop-oldest on overflow). Was 262144 (4s); equilibrium lag of ~2.3s caused TTS-tail echo into ASR after mic_unmute.
 inline constexpr size_t kAudioReadChunkBytes = 1024;
 inline constexpr size_t kSpeakerRingBufferBytes = 32768;
 inline constexpr size_t kSpeakerReadChunkBytes = 1024;

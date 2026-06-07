@@ -9,6 +9,13 @@ class WakeWordEngine:
     def process_chunk(self, pcm_80ms: bytes) -> bool:
         raise NotImplementedError
 
+    def reset(self) -> None:
+        # Default: no-op. Engines that maintain an internal audio buffer
+        # across predict() calls (e.g. openWakeWord) override this to flush
+        # the buffer with silence so a paused-then-resumed engine doesn't
+        # score stale audio.
+        pass
+
     def close(self) -> None:
         pass
 
@@ -63,6 +70,20 @@ class OpenWakeWordEngine(WakeWordEngine):
             self._consecutive_hits = 0  # reset so re-trigger requires a full new debounce sequence
             return True
         return False
+
+    def reset(self) -> None:
+        # Flush the model's internal ~1.5s mel-spectrogram ring buffer with
+        # silence. Required after the engine was paused (reply / no_reply /
+        # boot_warmup states skip process_chunk) — otherwise the first
+        # predict() on resume evaluates [stale ~1.5s][new 80ms] and the
+        # stale tail (often containing the previous wake word + speech)
+        # produces a false-positive score of 0.78-0.79 ~400 ms after
+        # standby entry. Mirrors the silence-prime in __init__.
+        silence = self._np.zeros(1280, dtype=self._np.int16)
+        for _ in range(20):
+            self._oww.predict(silence)
+        self._consecutive_hits = 0
+        self.last_score = 0.0
 
     # Live tuning — invoked by /api/wake_word/sensitivity PATCH. Clamp to safe
     # ranges and reset the debounce counter so the new threshold cannot "ride"

@@ -12,6 +12,13 @@ WorkingDirectory=/home/i17jet/Agents/Adam-Chip
 EnvironmentFile=-/etc/adam-chip/adam.env
 Environment=PYTHONPATH=/home/i17jet/Agents/Adam-Chip/System
 Environment=ADAM_VENV=/home/i17jet/Agents/Adam-Chip/.venv
+# Bypass system HTTP proxy (v2ray on port 10808 hijacks LAN HTTP via env vars
+# and leaks half-open sockets to ESP32:81, exhausting its 4-slot socket pool).
+# The Python code itself uses _NO_PROXY_OPENER at every ESP32 call site —
+# this env is defence-in-depth so any future urllib/requests/httpx call also
+# bypasses the proxy for LAN and localhost.
+Environment=NO_PROXY=192.168.0.0/24,127.0.0.1,localhost,::1
+Environment=no_proxy=192.168.0.0/24,127.0.0.1,localhost,::1
 # Lets the service push/pull audio through the operator's PulseAudio session.
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native

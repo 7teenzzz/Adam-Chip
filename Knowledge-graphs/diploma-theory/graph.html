@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>graphify - diploma/graphify-out/graph.html</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f0f1a; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; height: 100vh; overflow: hidden; }
+  #graph { flex: 1; }
+  #sidebar { width: 280px; background: #1a1a2e; border-left: 1px solid #2a2a4e; display: flex; flex-direction: column; overflow: hidden; }
+  #search-wrap { padding: 12px; border-bottom: 1px solid #2a2a4e; }
+  #search { width: 100%; background: #0f0f1a; border: 1px solid #3a3a5e; color: #e0e0e0; padding: 7px 10px; border-radius: 6px; font-size: 13px; outline: none; }
+  #search:focus { border-color: #4E79A7; }
+  #search-results { max-height: 140px; overflow-y: auto; padding: 4px 12px; border-bottom: 1px solid #2a2a4e; display: none; }
+  .search-item { padding: 4px 6px; cursor: pointer; border-radius: 4px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .search-item:hover { background: #2a2a4e; }
+  #info-panel { padding: 14px; border-bottom: 1px solid #2a2a4e; min-height: 140px; }
+  #info-panel h3 { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+  #info-content { font-size: 13px; color: #ccc; line-height: 1.6; }
+  #info-content .field { margin-bottom: 5px; }
+  #info-content .field b { color: #e0e0e0; }
+  #info-content .empty { color: #555; font-style: italic; }
+  .neighbor-link { display: block; padding: 2px 6px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid #333; }
+  .neighbor-link:hover { background: #2a2a4e; }
+  #neighbors-list { max-height: 160px; overflow-y: auto; margin-top: 4px; }
+  #legend-wrap { flex: 1; overflow-y: auto; padding: 12px; }
+  #legend-wrap h3 { font-size: 13px; color: #aaa; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; border-radius: 4px; font-size: 12px; }
+  .legend-item:hover { background: #2a2a4e; padding-left: 4px; }
+  .legend-item.dimmed { opacity: 0.35; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .legend-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .legend-count { color: #666; font-size: 11px; }
+  #stats { padding: 10px 14px; border-top: 1px solid #2a2a4e; font-size: 11px; color: #555; }
+  #legend-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 4px 0; }
+  #legend-controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; color: #aaa; user-select: none; }
+  #legend-controls label:hover { color: #e0e0e0; }
+  .legend-cb, #select-all-cb { appearance: none; -webkit-appearance: none; width: 14px; height: 14px; border: 1.5px solid #3a3a5e; border-radius: 3px; background: #0f0f1a; cursor: pointer; position: relative; flex-shrink: 0; }
+  .legend-cb:checked, #select-all-cb:checked { background: #4E79A7; border-color: #4E79A7; }
+  .legend-cb:checked::after, #select-all-cb:checked::after { content: ''; position: absolute; left: 3.5px; top: 1px; width: 4px; height: 7px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  #select-all-cb:indeterminate { background: #4E79A7; border-color: #4E79A7; }
+  #select-all-cb:indeterminate::after { content: ''; position: absolute; left: 2px; top: 5px; width: 8px; height: 2px; background: #fff; border: none; transform: none; }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+<div id="sidebar">
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="Search nodes..." autocomplete="off">
+    <div id="search-results"></div>
+  </div>
+  <div id="info-panel">
+    <h3>Node Info</h3>
+    <div id="info-content"><span class="empty">Click a node to inspect it</span></div>
+  </div>
+  <div id="legend-wrap">
+    <h3>Communities</h3>
+    <div id="legend-controls">
+      <label><input type="checkbox" id="select-all-cb" checked onchange="toggleAllCommunities(!this.checked)">Select All</label>
+    </div>
+    <div id="legend"></div>
+  </div>
+  <div id="stats">41 nodes &middot; 53 edges &middot; 11 communities</div>
+</div>
+<script>
+const RAW_NODES = [{"id": "consolidate_chapters_py", "label": "consolidate_chapters.py", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 16.7, "font": {"size": 12, "color": "#ffffff"}, "title": "consolidate_chapters.py", "community": 5, "community_name": "\u041f\u0430\u043c\u044f\u0442\u044c \u0438 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442", "source_file": "consolidate_chapters.py", "file_type": "code", "degree": 2}, {"id": "diploma_consolidate_chapters_main", "label": "main()", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "main()", "community": 5, "community_name": "\u041f\u0430\u043c\u044f\u0442\u044c \u0438 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442", "source_file": "consolidate_chapters.py", "file_type": "code", "degree": 1}, {"id": "diploma_consolidate_chapters_rationale_1", "label": "Consolidate fragmented chapter files into canonical 4-chapter layout.  PyMuPDF-b", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Consolidate fragmented chapter files into canonical 4-chapter layout.  PyMuPDF-b", "community": 5, "community_name": "\u041f\u0430\u043c\u044f\u0442\u044c \u0438 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442", "source_file": "consolidate_chapters.py", "file_type": "rationale", "degree": 1}, {"id": "convert_pdf_py", "label": "convert_pdf.py", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 23.3, "font": {"size": 12, "color": "#ffffff"}, "title": "convert_pdf.py", "community": 0, "community_name": "\u0414\u0438\u043f\u043b\u043e\u043c - \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u044f", "source_file": "convert_pdf.py", "file_type": "code", "degree": 4}, {"id": "diploma_convert_pdf_extract_figures", "label": "extract_figures()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 20.0, "font": {"size": 12, "color": "#ffffff"}, "title": "extract_figures()", "community": 0, "community_name": "\u0414\u0438\u043f\u043b\u043e\u043c - \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u044f", "source_file": "convert_pdf.py", "file_type": "code", "degree": 3}, {"id": "diploma_convert_pdf_extract_bibliography", "label": "extract_bibliography()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 20.0, "font": {"size": 12, "color": "#ffffff"}, "title": "extract_bibliography()", "community": 0, "community_name": "\u0414\u0438\u043f\u043b\u043e\u043c - \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u044f", "source_file": "convert_pdf.py", "file_type": "code", "degree": 3}, {"id": "diploma_convert_pdf_convert", "label": "convert()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 20.0, "font": {"size": 12, "color": "#ffffff"}, "title": "convert()", "community": 0, "community_name": "\u0414\u0438\u043f\u043b\u043e\u043c - \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u044f", "source_file": "convert_pdf.py", "file_type": "code", "degree": 3}, {"id": "diploma_convert_pdf_rationale_1", "label": "Docling PDF \u2192 Markdown \u043a\u043e\u043d\u0432\u0435\u0440\u0442\u0435\u0440 \u0441 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0439 \u044d\u043a\u0441\u0442\u0440\u0430\u043a\u0446\u0438\u0435\u0439.  \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435:", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Docling PDF \u2192 Markdown \u043a\u043e\u043d\u0432\u0435\u0440\u0442\u0435\u0440 \u0441 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0439 \u044d\u043a\u0441\u0442\u0440\u0430\u043a\u0446\u0438\u0435\u0439.  \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435:", "community": 0, "community_name": "\u0414\u0438\u043f\u043b\u043e\u043c - \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u044f", "source_file": "convert_pdf.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_convert_pdf_rationale_30", "label": "Walk pictures and tables, dump captions to markdown.", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Walk pictures and tables, dump captions to markdown.", "community": 0, "community_name": "\u0414\u0438\u043f\u043b\u043e\u043c - \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u044f", "source_file": "convert_pdf.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_convert_pdf_rationale_73", "label": "Heuristic: take everything from biblio trigger to EOF.", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Heuristic: take everything from biblio trigger to EOF.", "community": 0, "community_name": "\u0414\u0438\u043f\u043b\u043e\u043c - \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u044f", "source_file": "convert_pdf.py", "file_type": "rationale", "degree": 1}, {"id": "convert_pdf_pymupdf_py", "label": "convert_pdf_pymupdf.py", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 30.0, "font": {"size": 12, "color": "#ffffff"}, "title": "convert_pdf_pymupdf.py", "community": 7, "community_name": "\u0412\u044b\u0441\u0442\u0430\u0432\u043e\u0447\u043d\u044b\u0439 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439", "source_file": "convert_pdf_pymupdf.py", "file_type": "code", "degree": 6}, {"id": "diploma_convert_pdf_pymupdf_extract_text_with_pages", "label": "extract_text_with_pages()", "color": {"background": "#9C755F", "border": "#9C755F", "highlight": {"background": "#ffffff", "border": "#9C755F"}}, "size": 20.0, "font": {"size": 12, "color": "#ffffff"}, "title": "extract_text_with_pages()", "community": 8, "community_name": "\u0422\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b", "source_file": "convert_pdf_pymupdf.py", "file_type": "code", "degree": 3}, {"id": "diploma_convert_pdf_pymupdf_looks_like_heading", "label": "looks_like_heading()", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 20.0, "font": {"size": 12, "color": "#ffffff"}, "title": "looks_like_heading()", "community": 3, "community_name": "\u041e\u0446\u0435\u043d\u043a\u0430 \u0438 \u0442\u0435\u0441\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435", "source_file": "convert_pdf_pymupdf.py", "file_type": "code", "degree": 3}, {"id": "diploma_convert_pdf_pymupdf_build_markdown", "label": "build_markdown()", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 23.3, "font": {"size": 12, "color": "#ffffff"}, "title": "build_markdown()", "community": 3, "community_name": "\u041e\u0446\u0435\u043d\u043a\u0430 \u0438 \u0442\u0435\u0441\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435", "source_file": "convert_pdf_pymupdf.py", "file_type": "code", "degree": 4}, {"id": "diploma_convert_pdf_pymupdf_extract_bibliography", "label": "extract_bibliography()", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 20.0, "font": {"size": 12, "color": "#ffffff"}, "title": "extract_bibliography()", "community": 6, "community_name": "\u041c\u043e\u0442\u043e\u0440\u043d\u043e\u0435 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435", "source_file": "convert_pdf_pymupdf.py", "file_type": "code", "degree": 3}, {"id": "diploma_convert_pdf_pymupdf_main", "label": "main()", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 23.3, "font": {"size": 12, "color": "#ffffff"}, "title": "main()", "community": 6, "community_name": "\u041c\u043e\u0442\u043e\u0440\u043d\u043e\u0435 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435", "source_file": "convert_pdf_pymupdf.py", "file_type": "code", "degree": 4}, {"id": "diploma_convert_pdf_pymupdf_rationale_1", "label": "Lightweight PDF \u2192 Markdown fallback using PyMuPDF.  Used when Docling is unavail", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Lightweight PDF \u2192 Markdown fallback using PyMuPDF.  Used when Docling is unavail", "community": 7, "community_name": "\u0412\u044b\u0441\u0442\u0430\u0432\u043e\u0447\u043d\u044b\u0439 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439", "source_file": "convert_pdf_pymupdf.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_convert_pdf_pymupdf_rationale_35", "label": "Return list of (page_number, text) pairs, 1-indexed.", "color": {"background": "#9C755F", "border": "#9C755F", "highlight": {"background": "#ffffff", "border": "#9C755F"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Return list of (page_number, text) pairs, 1-indexed.", "community": 8, "community_name": "\u0422\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b", "source_file": "convert_pdf_pymupdf.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_convert_pdf_pymupdf_rationale_53", "label": "Detect Russian numbered headings. Returns (level, normalized_text) or None.", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Detect Russian numbered headings. Returns (level, normalized_text) or None.", "community": 3, "community_name": "\u041e\u0446\u0435\u043d\u043a\u0430 \u0438 \u0442\u0435\u0441\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435", "source_file": "convert_pdf_pymupdf.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_convert_pdf_pymupdf_rationale_73", "label": "Build markdown with heading detection and page markers.", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Build markdown with heading detection and page markers.", "community": 3, "community_name": "\u041e\u0446\u0435\u043d\u043a\u0430 \u0438 \u0442\u0435\u0441\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435", "source_file": "convert_pdf_pymupdf.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_convert_pdf_pymupdf_rationale_92", "label": "Heuristic: take everything after a bibliography trigger heading.", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Heuristic: take everything after a bibliography trigger heading.", "community": 6, "community_name": "\u041c\u043e\u0442\u043e\u0440\u043d\u043e\u0435 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435", "source_file": "convert_pdf_pymupdf.py", "file_type": "rationale", "degree": 1}, {"id": "inspect_structure_py", "label": "inspect_structure.py", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 26.7, "font": {"size": 12, "color": "#ffffff"}, "title": "inspect_structure.py", "community": 1, "community_name": "\u041a\u0440\u0438\u0442\u0435\u0440\u0438\u0438 \u0438 \u0432\u0435\u0440\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u044f", "source_file": "inspect_structure.py", "file_type": "code", "degree": 5}, {"id": "diploma_inspect_structure_numbered_level", "label": "numbered_level()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 16.7, "font": {"size": 12, "color": "#ffffff"}, "title": "numbered_level()", "community": 1, "community_name": "\u041a\u0440\u0438\u0442\u0435\u0440\u0438\u0438 \u0438 \u0432\u0435\u0440\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u044f", "source_file": "inspect_structure.py", "file_type": "code", "degree": 2}, {"id": "diploma_inspect_structure_analyze", "label": "analyze()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 20.0, "font": {"size": 12, "color": "#ffffff"}, "title": "analyze()", "community": 1, "community_name": "\u041a\u0440\u0438\u0442\u0435\u0440\u0438\u0438 \u0438 \u0432\u0435\u0440\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u044f", "source_file": "inspect_structure.py", "file_type": "code", "degree": 3}, {"id": "diploma_inspect_structure_recommend", "label": "recommend()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 16.7, "font": {"size": 12, "color": "#ffffff"}, "title": "recommend()", "community": 1, "community_name": "\u041a\u0440\u0438\u0442\u0435\u0440\u0438\u0438 \u0438 \u0432\u0435\u0440\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u044f", "source_file": "inspect_structure.py", "file_type": "code", "degree": 2}, {"id": "diploma_inspect_structure_main", "label": "main()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 20.0, "font": {"size": 12, "color": "#ffffff"}, "title": "main()", "community": 1, "community_name": "\u041a\u0440\u0438\u0442\u0435\u0440\u0438\u0438 \u0438 \u0432\u0435\u0440\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u044f", "source_file": "inspect_structure.py", "file_type": "code", "degree": 3}, {"id": "diploma_inspect_structure_rationale_1", "label": "Diploma structure inspector \u2014 read-only \u0432\u0430\u043b\u0438\u0434\u0430\u0446\u0438\u044f Docling output.  \u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u0442 \u043a\u0430\u0447", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Diploma structure inspector \u2014 read-only \u0432\u0430\u043b\u0438\u0434\u0430\u0446\u0438\u044f Docling output.  \u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u0442 \u043a\u0430\u0447", "community": 1, "community_name": "\u041a\u0440\u0438\u0442\u0435\u0440\u0438\u0438 \u0438 \u0432\u0435\u0440\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u044f", "source_file": "inspect_structure.py", "file_type": "rationale", "degree": 1}, {"id": "split_diploma_py", "label": "split_diploma.py", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 40.0, "font": {"size": 12, "color": "#ffffff"}, "title": "split_diploma.py", "community": 2, "community_name": "\u0410\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u044b", "source_file": "split_diploma.py", "file_type": "code", "degree": 9}, {"id": "diploma_split_diploma_slugify", "label": "slugify()", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 20.0, "font": {"size": 12, "color": "#ffffff"}, "title": "slugify()", "community": 10, "community_name": "\u041a\u043e\u043d\u0444\u0438\u0433\u0443\u0440\u0430\u0446\u0438\u044f", "source_file": "split_diploma.py", "file_type": "code", "degree": 3}, {"id": "diploma_split_diploma_numbered_level", "label": "numbered_level()", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 23.3, "font": {"size": 12, "color": "#ffffff"}, "title": "numbered_level()", "community": 4, "community_name": "\u0420\u0435\u0447\u0435\u0432\u043e\u0439 \u043a\u043e\u043d\u0442\u0443\u0440", "source_file": "split_diploma.py", "file_type": "code", "degree": 4}, {"id": "diploma_split_diploma_detect_heading_style", "label": "detect_heading_style()", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 23.3, "font": {"size": 12, "color": "#ffffff"}, "title": "detect_heading_style()", "community": 4, "community_name": "\u0420\u0435\u0447\u0435\u0432\u043e\u0439 \u043a\u043e\u043d\u0442\u0443\u0440", "source_file": "split_diploma.py", "file_type": "code", "degree": 4}, {"id": "diploma_split_diploma_parse_headings", "label": "parse_headings()", "color": {"background": "#BAB0AC", "border": "#BAB0AC", "highlight": {"background": "#ffffff", "border": "#BAB0AC"}}, "size": 23.3, "font": {"size": 12, "color": "#ffffff"}, "title": "parse_headings()", "community": 9, "community_name": "\u041f\u0440\u043e\u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c", "source_file": "split_diploma.py", "file_type": "code", "degree": 4}, {"id": "diploma_split_diploma_extract_block", "label": "extract_block()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 16.7, "font": {"size": 12, "color": "#ffffff"}, "title": "extract_block()", "community": 2, "community_name": "\u0410\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u044b", "source_file": "split_diploma.py", "file_type": "code", "degree": 2}, {"id": "diploma_split_diploma_split_diploma", "label": "split_diploma()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 33.3, "font": {"size": 12, "color": "#ffffff"}, "title": "split_diploma()", "community": 2, "community_name": "\u0410\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u044b", "source_file": "split_diploma.py", "file_type": "code", "degree": 7}, {"id": "diploma_split_diploma_sec_idx_total", "label": "sec_idx_total()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 16.7, "font": {"size": 12, "color": "#ffffff"}, "title": "sec_idx_total()", "community": 2, "community_name": "\u0410\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u044b", "source_file": "split_diploma.py", "file_type": "code", "degree": 2}, {"id": "diploma_split_diploma_sub_idx_total", "label": "sub_idx_total()", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 16.7, "font": {"size": 12, "color": "#ffffff"}, "title": "sub_idx_total()", "community": 2, "community_name": "\u0410\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u044b", "source_file": "split_diploma.py", "file_type": "code", "degree": 2}, {"id": "diploma_split_diploma_rationale_1", "label": "Diploma splitter \u2014 \u0440\u0430\u0437\u0431\u0438\u0432\u0430\u0435\u0442 Diploma.md \u043d\u0430 \u0438\u0435\u0440\u0430\u0440\u0445\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0444\u0440\u0430\u0433\u043c\u0435\u043d\u0442\u044b.  \u041f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Diploma splitter \u2014 \u0440\u0430\u0437\u0431\u0438\u0432\u0430\u0435\u0442 Diploma.md \u043d\u0430 \u0438\u0435\u0440\u0430\u0440\u0445\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0444\u0440\u0430\u0433\u043c\u0435\u043d\u0442\u044b.  \u041f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435", "community": 2, "community_name": "\u0410\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u044b", "source_file": "split_diploma.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_split_diploma_rationale_33", "label": "Translit-friendly slug. Keeps Cyrillic words readable by code.", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Translit-friendly slug. Keeps Cyrillic words readable by code.", "community": 10, "community_name": "\u041a\u043e\u043d\u0444\u0438\u0433\u0443\u0440\u0430\u0446\u0438\u044f", "source_file": "split_diploma.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_split_diploma_rationale_41", "label": "1' \u2192 1, '1.1' \u2192 2, '1.1.1' \u2192 3, '1.1.1.1' \u2192 4.", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "1&#x27; \u2192 1, &#x27;1.1&#x27; \u2192 2, &#x27;1.1.1&#x27; \u2192 3, &#x27;1.1.1.1&#x27; \u2192 4.", "community": 4, "community_name": "\u0420\u0435\u0447\u0435\u0432\u043e\u0439 \u043a\u043e\u043d\u0442\u0443\u0440", "source_file": "split_diploma.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_split_diploma_rationale_46", "label": "Returns one of: markdown, russian_numbered, bold_numbered.     Picks the style y", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Returns one of: markdown, russian_numbered, bold_numbered.     Picks the style y", "community": 4, "community_name": "\u0420\u0435\u0447\u0435\u0432\u043e\u0439 \u043a\u043e\u043d\u0442\u0443\u0440", "source_file": "split_diploma.py", "file_type": "rationale", "degree": 1}, {"id": "diploma_split_diploma_rationale_72", "label": "Returns list of (level, title, line_index) sorted by line_index.", "color": {"background": "#BAB0AC", "border": "#BAB0AC", "highlight": {"background": "#ffffff", "border": "#BAB0AC"}}, "size": 13.3, "font": {"size": 0, "color": "#ffffff"}, "title": "Returns list of (level, title, line_index) sorted by line_index.", "community": 9, "community_name": "\u041f\u0440\u043e\u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c", "source_file": "split_diploma.py", "file_type": "rationale", "degree": 1}];
+const RAW_EDGES = [{"from": "consolidate_chapters_py", "to": "diploma_consolidate_chapters_main", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_consolidate_chapters_rationale_1", "to": "consolidate_chapters_py", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "convert_pdf_py", "to": "diploma_convert_pdf_extract_figures", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "convert_pdf_py", "to": "diploma_convert_pdf_extract_bibliography", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "convert_pdf_py", "to": "diploma_convert_pdf_convert", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_rationale_1", "to": "convert_pdf_py", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_convert", "to": "diploma_convert_pdf_extract_figures", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_rationale_30", "to": "diploma_convert_pdf_extract_figures", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_convert", "to": "diploma_convert_pdf_extract_bibliography", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_rationale_73", "to": "diploma_convert_pdf_extract_bibliography", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "convert_pdf_pymupdf_py", "to": "diploma_convert_pdf_pymupdf_extract_text_with_pages", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "convert_pdf_pymupdf_py", "to": "diploma_convert_pdf_pymupdf_looks_like_heading", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "convert_pdf_pymupdf_py", "to": "diploma_convert_pdf_pymupdf_build_markdown", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "convert_pdf_pymupdf_py", "to": "diploma_convert_pdf_pymupdf_extract_bibliography", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "convert_pdf_pymupdf_py", "to": "diploma_convert_pdf_pymupdf_main", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_pymupdf_rationale_1", "to": "convert_pdf_pymupdf_py", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_pymupdf_main", "to": "diploma_convert_pdf_pymupdf_extract_text_with_pages", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_pymupdf_rationale_35", "to": "diploma_convert_pdf_pymupdf_extract_text_with_pages", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_pymupdf_build_markdown", "to": "diploma_convert_pdf_pymupdf_looks_like_heading", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_pymupdf_rationale_53", "to": "diploma_convert_pdf_pymupdf_looks_like_heading", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_pymupdf_main", "to": "diploma_convert_pdf_pymupdf_build_markdown", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_pymupdf_rationale_73", "to": "diploma_convert_pdf_pymupdf_build_markdown", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_pymupdf_main", "to": "diploma_convert_pdf_pymupdf_extract_bibliography", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_convert_pdf_pymupdf_rationale_92", "to": "diploma_convert_pdf_pymupdf_extract_bibliography", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "inspect_structure_py", "to": "diploma_inspect_structure_numbered_level", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "inspect_structure_py", "to": "diploma_inspect_structure_analyze", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "inspect_structure_py", "to": "diploma_inspect_structure_recommend", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "inspect_structure_py", "to": "diploma_inspect_structure_main", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_inspect_structure_rationale_1", "to": "inspect_structure_py", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_inspect_structure_analyze", "to": "diploma_inspect_structure_numbered_level", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_inspect_structure_main", "to": "diploma_inspect_structure_analyze", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_inspect_structure_main", "to": "diploma_inspect_structure_recommend", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "split_diploma_py", "to": "diploma_split_diploma_slugify", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "split_diploma_py", "to": "diploma_split_diploma_numbered_level", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "split_diploma_py", "to": "diploma_split_diploma_detect_heading_style", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "split_diploma_py", "to": "diploma_split_diploma_parse_headings", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "split_diploma_py", "to": "diploma_split_diploma_extract_block", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "split_diploma_py", "to": "diploma_split_diploma_split_diploma", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "split_diploma_py", "to": "diploma_split_diploma_sec_idx_total", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "split_diploma_py", "to": "diploma_split_diploma_sub_idx_total", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_rationale_1", "to": "split_diploma_py", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_split_diploma", "to": "diploma_split_diploma_slugify", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_rationale_33", "to": "diploma_split_diploma_slugify", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_detect_heading_style", "to": "diploma_split_diploma_numbered_level", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_parse_headings", "to": "diploma_split_diploma_numbered_level", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_rationale_41", "to": "diploma_split_diploma_numbered_level", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_split_diploma", "to": "diploma_split_diploma_detect_heading_style", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_rationale_46", "to": "diploma_split_diploma_detect_heading_style", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_split_diploma", "to": "diploma_split_diploma_parse_headings", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_rationale_72", "to": "diploma_split_diploma_parse_headings", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_split_diploma", "to": "diploma_split_diploma_extract_block", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_split_diploma", "to": "diploma_split_diploma_sec_idx_total", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "diploma_split_diploma_split_diploma", "to": "diploma_split_diploma_sub_idx_total", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}];
+const LEGEND = [{"cid": 0, "color": "#4E79A7", "label": "\u0414\u0438\u043f\u043b\u043e\u043c - \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u044f", "count": 7}, {"cid": 1, "color": "#F28E2B", "label": "\u041a\u0440\u0438\u0442\u0435\u0440\u0438\u0438 \u0438 \u0432\u0435\u0440\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u044f", "count": 6}, {"cid": 2, "color": "#E15759", "label": "\u0410\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u044b", "count": 6}, {"cid": 3, "color": "#76B7B2", "label": "\u041e\u0446\u0435\u043d\u043a\u0430 \u0438 \u0442\u0435\u0441\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435", "count": 4}, {"cid": 4, "color": "#59A14F", "label": "\u0420\u0435\u0447\u0435\u0432\u043e\u0439 \u043a\u043e\u043d\u0442\u0443\u0440", "count": 4}, {"cid": 5, "color": "#EDC948", "label": "\u041f\u0430\u043c\u044f\u0442\u044c \u0438 \u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442", "count": 3}, {"cid": 6, "color": "#B07AA1", "label": "\u041c\u043e\u0442\u043e\u0440\u043d\u043e\u0435 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435", "count": 3}, {"cid": 7, "color": "#FF9DA7", "label": "\u0412\u044b\u0441\u0442\u0430\u0432\u043e\u0447\u043d\u044b\u0439 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439", "count": 2}, {"cid": 8, "color": "#9C755F", "label": "\u0422\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b", "count": 2}, {"cid": 9, "color": "#BAB0AC", "label": "\u041f\u0440\u043e\u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c", "count": 2}, {"cid": 10, "color": "#4E79A7", "label": "\u041a\u043e\u043d\u0444\u0438\u0433\u0443\u0440\u0430\u0446\u0438\u044f", "count": 2}];
+
+// HTML-escape helper — prevents XSS when injecting graph data into innerHTML
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// Build vis datasets
+const nodesDS = new vis.DataSet(RAW_NODES.map(n => ({
+  id: n.id, label: n.label, color: n.color, size: n.size,
+  font: n.font, title: n.title,
+  _community: n.community, _community_name: n.community_name,
+  _source_file: n.source_file, _file_type: n.file_type, _degree: n.degree,
+})));
+
+const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({
+  id: i, from: e.from, to: e.to,
+  label: '',
+  title: e.title,
+  dashes: e.dashes,
+  width: e.width,
+  color: e.color,
+  arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+})));
+
+const container = document.getElementById('graph');
+const network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
+  physics: {
+    enabled: true,
+    solver: 'forceAtlas2Based',
+    forceAtlas2Based: {
+      gravitationalConstant: -60,
+      centralGravity: 0.005,
+      springLength: 120,
+      springConstant: 0.08,
+      damping: 0.4,
+      avoidOverlap: 0.8,
+    },
+    stabilization: { iterations: 200, fit: true },
+  },
+  interaction: {
+    hover: true,
+    tooltipDelay: 100,
+    hideEdgesOnDrag: true,
+    navigationButtons: false,
+    keyboard: false,
+  },
+  nodes: { shape: 'dot', borderWidth: 1.5 },
+  edges: { smooth: { type: 'continuous', roundness: 0.2 }, selectionWidth: 3 },
+});
+
+network.once('stabilizationIterationsDone', () => {
+  network.setOptions({ physics: { enabled: false } });
+});
+
+function showInfo(nodeId) {
+  const n = nodesDS.get(nodeId);
+  if (!n) return;
+  const neighborIds = network.getConnectedNodes(nodeId);
+  const neighborItems = neighborIds.map(nid => {
+    const nb = nodesDS.get(nid);
+    const color = nb ? nb.color.background : '#555';
+    return `<span class="neighbor-link" style="border-left-color:${esc(color)}" onclick="focusNode(${JSON.stringify(nid)})">${esc(nb ? nb.label : nid)}</span>`;
+  }).join('');
+  document.getElementById('info-content').innerHTML = `
+    <div class="field"><b>${esc(n.label)}</b></div>
+    <div class="field">Type: ${esc(n._file_type || 'unknown')}</div>
+    <div class="field">Community: ${esc(n._community_name)}</div>
+    <div class="field">Source: ${esc(n._source_file || '-')}</div>
+    <div class="field">Degree: ${n._degree}</div>
+    ${neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${neighborIds.length})</div><div id="neighbors-list">${neighborItems}</div>` : ''}
+  `;
+}
+
+function focusNode(nodeId) {
+  network.focus(nodeId, { scale: 1.4, animation: true });
+  network.selectNodes([nodeId]);
+  showInfo(nodeId);
+}
+
+// Track hovered node — hover detection is more reliable than click params
+let hoveredNodeId = null;
+network.on('hoverNode', params => {
+  hoveredNodeId = params.node;
+  container.style.cursor = 'pointer';
+});
+network.on('blurNode', () => {
+  hoveredNodeId = null;
+  container.style.cursor = 'default';
+});
+container.addEventListener('click', () => {
+  if (hoveredNodeId !== null) {
+    showInfo(hoveredNodeId);
+    network.selectNodes([hoveredNodeId]);
+  }
+});
+network.on('click', params => {
+  if (params.nodes.length > 0) {
+    showInfo(params.nodes[0]);
+  } else if (hoveredNodeId === null) {
+    document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
+  }
+});
+
+const searchInput = document.getElementById('search');
+const searchResults = document.getElementById('search-results');
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.toLowerCase().trim();
+  searchResults.innerHTML = '';
+  if (!q) { searchResults.style.display = 'none'; return; }
+  const matches = RAW_NODES.filter(n => n.label.toLowerCase().includes(q)).slice(0, 20);
+  if (!matches.length) { searchResults.style.display = 'none'; return; }
+  searchResults.style.display = 'block';
+  matches.forEach(n => {
+    const el = document.createElement('div');
+    el.className = 'search-item';
+    el.textContent = n.label;
+    el.style.borderLeft = `3px solid ${n.color.background}`;
+    el.style.paddingLeft = '8px';
+    el.onclick = () => {
+      network.focus(n.id, { scale: 1.5, animation: true });
+      network.selectNodes([n.id]);
+      showInfo(n.id);
+      searchResults.style.display = 'none';
+      searchInput.value = '';
+    };
+    searchResults.appendChild(el);
+  });
+});
+document.addEventListener('click', e => {
+  if (!searchResults.contains(e.target) && e.target !== searchInput)
+    searchResults.style.display = 'none';
+});
+
+const hiddenCommunities = new Set();
+
+const selectAllCb = document.getElementById('select-all-cb');
+
+function updateSelectAllState() {
+  const total = LEGEND.length;
+  const hidden = hiddenCommunities.size;
+  selectAllCb.checked = hidden === 0;
+  selectAllCb.indeterminate = hidden > 0 && hidden < total;
+}
+
+function toggleAllCommunities(hide) {
+  document.querySelectorAll('.legend-item').forEach(item => {
+    hide ? item.classList.add('dimmed') : item.classList.remove('dimmed');
+  });
+  document.querySelectorAll('.legend-cb').forEach(cb => {
+    cb.checked = !hide;
+  });
+  LEGEND.forEach(c => {
+    if (hide) hiddenCommunities.add(c.cid); else hiddenCommunities.delete(c.cid);
+  });
+  const updates = RAW_NODES.map(n => ({ id: n.id, hidden: hide }));
+  nodesDS.update(updates);
+  updateSelectAllState();
+}
+
+const legendEl = document.getElementById('legend');
+LEGEND.forEach(c => {
+  const item = document.createElement('div');
+  item.className = 'legend-item';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.className = 'legend-cb';
+  cb.checked = true;
+  cb.addEventListener('change', (e) => {
+    e.stopPropagation();
+    if (cb.checked) {
+      hiddenCommunities.delete(c.cid);
+      item.classList.remove('dimmed');
+    } else {
+      hiddenCommunities.add(c.cid);
+      item.classList.add('dimmed');
+    }
+    const updates = RAW_NODES
+      .filter(n => n.community === c.cid)
+      .map(n => ({ id: n.id, hidden: !cb.checked }));
+    nodesDS.update(updates);
+    updateSelectAllState();
+  });
+  item.innerHTML = `<div class="legend-dot" style="background:${c.color}"></div>
+    <span class="legend-label">${c.label}</span>
+    <span class="legend-count">${c.count}</span>`;
+  item.prepend(cb);
+  item.onclick = (e) => {
+    if (e.target === cb) return;
+    cb.checked = !cb.checked;
+    cb.dispatchEvent(new Event('change'));
+  };
+  legendEl.appendChild(item);
+});
+</script>
+<script>
+// Render hyperedges as shaded regions
+const hyperedges = [];
+// afterDrawing passes ctx already transformed to network coordinate space.
+// Draw node positions raw — no manual pan/zoom/DPR math needed.
+network.on('afterDrawing', function(ctx) {
+    hyperedges.forEach(h => {
+        const positions = h.nodes
+            .map(nid => network.getPositions([nid])[nid])
+            .filter(p => p !== undefined);
+        if (positions.length < 2) return;
+        ctx.save();
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = '#6366f1';
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        // Centroid and expanded hull in network coordinates
+        const cx = positions.reduce((s, p) => s + p.x, 0) / positions.length;
+        const cy = positions.reduce((s, p) => s + p.y, 0) / positions.length;
+        const expanded = positions.map(p => ({
+            x: cx + (p.x - cx) * 1.15,
+            y: cy + (p.y - cy) * 1.15
+        }));
+        ctx.moveTo(expanded[0].x, expanded[0].y);
+        expanded.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 0.4;
+        ctx.stroke();
+        // Label
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = '#4f46e5';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(h.label, cx, cy - 5);
+        ctx.restore();
+    });
+});
+</script>
+</body>
+</html>

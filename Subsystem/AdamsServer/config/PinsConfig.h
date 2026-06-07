@@ -1,7 +1,8 @@
 /*************** ESP32S3 N16R8 WROOM CAM РАСПИНОВКА МОДУЛЕЙ *****************/
 
 
-/*********************** КАМЕРА OV5640 **********************/
+/*********************** КАМЕРА OV5640 / OV7670 **********************/
+// PWDN / RESET: -1 = not GPIO-controlled (tied to GND / 3.3V on module)
 
 #define PWDN_GPIO_NUM  -1
 #define RESET_GPIO_NUM -1
@@ -28,19 +29,21 @@
 // Оба микрофона используют одни и те же пины — I2S time-division multiplex:
 //   Mic 1: L/R → GND  (левый канал, выходит на SD когда WS=LOW)
 //   Mic 2: L/R → VDD  (правый канал, выходит на SD когда WS=HIGH)
-// Пин SD не конфликтует — неактивный микрофон переходит в Hi-Z.
 
 #define I2S_MIC_BCLK   48   // SCK / BCLK  — shared mic1 + mic2
 #define I2S_MIC_WS     47   // LRCLK / WS  — shared mic1 + mic2
 #define I2S_MIC_SD     21   // SD / DATA   — shared, time-multiplexed
 
 
-/*********************** I2S DAC PCM5102 / PCM5102A *********************/
+/*********************** I2S DAC MAX98357A x2 ***************************/
+// Оба модуля разделяют одни пины — канал выбирается через SD:
+//   LEFT  module: SD → floating       (left channel)
+//   RIGHT module: SD → VIN (3.3V)     (right channel)
+//   GAIN  both  : floating            (+15 dB)
 
-#define I2S_DAC_BCLK   38   // SCK / BCLK
-#define I2S_DAC_LRCK   39   // LR / LRCK / WS
-#define I2S_DAC_DATA   40   // SD / DATA
-// MCLK → GND
+#define I2S_DAC_BCLK   38   // BCLK — shared left + right
+#define I2S_DAC_LRCK   39   // LRC  — shared left + right
+#define I2S_DAC_DATA   40   // DIN  — shared left + right
 
 
 /*********************** ДАТЧИКИ ****************************************/
@@ -57,7 +60,6 @@
 //both have pull-ups 4.7K resistors
 
 /*********************** W5500 LITE Ethernet ****************************/
-// Шелкография модуля W5500 НОТАЦИЯ ОБРАТНАЯ относительно ESP:
 //   MI (Module Input)  = физически ESP MISO (GPIO 46)
 //   MO (Module Output) = физически ESP MOSI (GPIO 42)
 

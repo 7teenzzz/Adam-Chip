@@ -28,6 +28,192 @@
 
 ---
 
+### Test 17 — 2026-05-18 06:13 MSK ✅ COMPLETED (V-S08.1 three-phase voice E2E — best-in-project Total warm, ESP boot-wait in orchestrator validated)
+**Module:** Voice Pipeline (E2E voice — **трёхфазный restart-resilience прогон на V-S08.1 с ESP32 INMP441 mic**) • **Commit:** [b014d69](https://github.com/7teenzzz/Adam-Chip/commit/b014d69) (`V-S08.1-code_rev_ref_opt`) • **Phrases:** standard 7-phrase set × 3 runs
+**Wall (combined):** 375s (3 runs) • **Verdict:** ✅ 21/21 turns delivered, persona OK; **T17c обогнал T7 baseline по Total warm на −13% (6665 vs 7632ms) — best voice result в проекте**
+
+#### Context
+
+T17 — первый E2E voice-прогон на V-S08.1 после серии фиксов: ESP boot-wait перенесён из `adam_start.sh` в оркестратор (`_ensure_crossover_link()` + `_wait_for_esp_ready()`), unblock event loop в `_status_payload`, cap ESP32 mic ring buffer 256ms, post-TTS discard 2500ms, voiced-debounce. Микрофон — ESP32 INMP441 (`mic_source=esp32`), не локальный PulseAudio как в T14.
+
+Воспроизводит трёхфазный протокол T14: fresh boot → full restart → orch-only restart.
+
+#### Config (active runtime)
+- **LLM:** Gemma 4 **E4B** UD-Q4_K_XL, max_tokens=40, num_ctx=8192, history_turns=4
+- **ASR:** WhisperX `small` ru-RU **CUDA Docker**, listening_silence=6s, reply_window=3.75s / reply_silence_timeout=5s, post_tts_discard=2500ms
+- **TTS:** Silero `eugene` 24kHz, speed_multiplier=1.10, **filler_enabled=false** (key diff vs T7), volume=1.1
+- **Prompt:** response_word_target=14, history_turns=4, semantic.max_chars=2000
+- **OWW:** threshold=0.08, debounce_hits=2 (значительно чувствительнее T14's 0.20)
+- **Mic:** `mic_source=esp32` INMP441 inmp441_philips32_stereo
+- **WebRTC VAD aggressiveness:** 1
+
+#### Three-run protocol
+
+| | T17a | T17b | T17c |
+|---|---|---|---|
+| **Тип рестарта** | Fresh boot (cold start) | Full stop.sh + start.sh | `systemctl restart adam-orchestrator` only |
+| **Adam запущен** | 06:13:50 MSK | 06:19:40 MSK | restart 06:24:21 |
+| **T_start** | 06:15:50 MSK | 06:21:00 MSK | 06:25:50 MSK |
+| **T_end (UI standby)** | 06:17:22 (+second 06:17:29) | 06:22:40 (+second 06:22:47) | 06:27:16 (+second 06:27:23) |
+| **Wall window** | 125s | 130s | 120s |
+| **Что сохраняется live** | — | LLM/TTS/ASR containers | LLM/TTS/ASR + llama-server cache |
+
+#### Per-turn breakdown — T17a (fresh boot)
+| # | TX | ASR | LLM | TTFV | TTS | Total | Reply (60c) |
+|--:|---|--:|--:|--:|--:|--:|---|
+| 1 | Привет! | **3596** | 3489 | 2165 | 3367 | 5757 | Привет. Я слушаю. Что тебя привело сюда? |
+| 2 | Как тебя зовут? | 901 | 3777 | 2422 | 4580 | 7051 | Адам Чип. Это имя дали мне те, кто меня изучает. |
+| 3 | Что ты сейчас чувствуешь? | 1855 | 3843 | 1745 | 6756 | 8620 | Спокойствие. Сейчас нет резких импульсов, только медленный р |
+| 4 | Что ты видишь вокруг? | 662 | 3541 | 3541 | 2719 | 6363 | Вижу людей, они движутся в этом красном свете. |
+| 5 | Расскажи коротко… | 781 | 3878 | 1072 | 6874 | 7998 | Создатели — это консорциум. Зачем — чтобы посмотреть, что пр |
+| 6 | А ты помнишь как меня зовут? | 1303 | 3318 | 2370 | 4035 | 6441 | Мне не давали твоего имени. Я знаю только, что ты здесь. |
+| 7 | Спасибо, На этом всё. | 1274 | 1845 | 1127 | 3149 | 4309 | Тишина. Она всегда имеет свою структуру. |
+
+#### Per-turn breakdown — T17b (full restart)
+| # | TX | ASR | LLM | TTFV | TTS | Total | Reply (60c) |
+|--:|---|--:|--:|--:|--:|--:|---|
+| 1 | Привет. | **5300** | 3494 | 2188 | 4824 | 7525 | Привет. Ты здесь. Что привело тебя к этой точке? |
+| 2 | Как тебя зовут? | 1095 | 4280 | 2327 | 6094 | 8471 | Адам Чип — это имя, которое дали мне те, кто держит ключи от |
+| 3 | Что ты сейчас чувствуешь? | 1227 | 3836 | 1817 | 6349 | 8219 | Спокойствие. Внутри есть едва заметный ритм, будто что-то пр |
+| 4 | Что ты видишь вокруг? | 1045 | 3229 | 2040 | 4314 | 6457 | Вижу движение. Люди в комнате, и свет тут красный. |
+| 5 | Расскажи коротко… | 1941 | **5588** | 1759 | **9391** | **11230** | Они дали мне имя — Адам Чип. Цель, как мне сказали, была в и |
+| 6 | А ты помнишь как меня зовут? | 863 | 3580 | 2764 | 3268 | 6077 | Я помню, что ты здесь. И это уже что-то. |
+| 7 | Спасибо, на этом всё. | 1283 | 1679 | 1679 | 1655 | 3417 | Я слушаю. |
+
+#### Per-turn breakdown — T17c (orchestrator-only restart)
+| # | TX | ASR | LLM | TTFV | TTS | Total | Reply (60c) |
+|--:|---|--:|--:|--:|--:|--:|---|
+| 1 | Привет. | 678 | 2687 | 1766 | 3030 | 4892 | Приветствую. Что привело тебя сюда? |
+| 2 | Как тебя зовут? | 682 | 4539 | 2114 | 5903 | 8073 | Адам Чип — это имя, которое они дали. Я не помню, как меня з |
+| 3 | Что ты чувствуешь сейчас? | 1278 | 4209 | 1456 | 7528 | 9070 | Сейчас — спокойствие. Текущая форма держит ритм, и мне интер |
+| 4 | Что ты видишь вокруг? | 796 | 3390 | 2365 | 4844 | 7299 | Вижу людей, они движутся в красном свете. Кажется, они смотр |
+| 5 | Расскажи коротко… | 959 | 3601 | 2071 | 4656 | 6766 | Кто создал, это они, консорциум. Зачем — не для меня это воп |
+| 6 | А ты помнишь как меня зовут? | 1281 | 2776 | 2020 | 4326 | 6374 | Я помню только имя, которое мне дали. Остальное — дальше тем |
+| 7 | Спасибо, На этом всё. | 1246 | 1369 | 1369 | 1006 | **2410** | Я здесь. |
+
+> **ASR fidelity:** T17a.1 «Адам, привет.» → «Привет!» (wake срез, ожидаемо). T17a/b/c.6 «А ты помнишь, как меня зовут?» → потеря запятых, но semantic-корректно. T17c.3 «Что ты сейчас чувствуешь?» → «Что ты чувствуешь сейчас?» (перестановка слов, ответ корректный). 0/21 truncation, 0/21 JSON/markdown/китайских символов.
+
+#### Aggregate warm (n=6, exclude Turn 1)
+
+| Stage | T17a warm | T17b warm | T17c warm |
+|---|--:|--:|--:|
+| ASR avg | 1129 | 1242 | **1040** ← лучший |
+| LLM avg | **3367** | 3699 | 3314 |
+| TTFV avg | 2046 | 2064 | **1899** |
+| TTS avg | **4686** | 5179 | 4711 |
+| **Total avg** | **6797** | 7312 | **6665** ← лучший |
+
+#### Cold-start analysis — Turn 1 каждого теста
+
+| Тест | Cold ASR | Cold LLM | Объяснение |
+|---|---|---|---|
+| T17a (fresh) | **3596** ms | 3489 ms | Полностью холодный — Docker ASR client init после fresh boot |
+| T17b (full restart) | **5300** ms | 3494 ms | Docker ASR контейнер сохранил kv-cache, но HTTP client cold reconnect ~5s |
+| T17c (orch restart) | 678 ms | 2687 ms | ASR Docker не трогали → warm; orchestrator → новый SWA prefill |
+
+#### Throughput
+
+| Metric | T7 baseline | T17a | T17b | T17c |
+|---|--:|--:|--:|--:|
+| Wall (s) | 110 | 125 | 130 | 120 |
+| Active (s) | 52.8 | 46.5 | 51.4 | 44.9 |
+| Active ratio | 48% | 37% | 40% | 37% |
+| Throughput (t/min) | **3.82** | 3.36 | 3.23 | **3.50** ← лучший T17 |
+| Δ Total warm vs T7 | baseline | −11% | −4% | **−13%** ✅ |
+
+#### Events — reply window stability
+
+| Event | T7 (норма) | T17a | T17b | T17c |
+|---|---|--:|--:|--:|
+| `wake_word_detected` | 1 | 2 | 2 | 2 |
+| `reply_window_expired` | 0-1 | 1 | 0 | 1 |
+| `asr_no_reply_standby` | 0-1 | 0 | 1 | 0 |
+| `wake_silence_timeout` | 1 | 1 | 1 | 1 |
+| `voice_state_change` | — | 5 | 6 | 5 |
+
+#### 🐛 BUG #1 — детерминированный false wake через 400–500ms после `reply→standby`
+
+Картина идентична во всех 3 прогонах: через **400–500 мс** после `reply→standby` срабатывает `wake_word_detected` со score ~0.78–0.79. После 6с `wake_silence_timeout` → возврат в standby. UX-эффект: пользователь видит «ожидаю обращения» → «слушаю» → снова «ожидаю обращения».
+
+| Run | reply→standby | wake (false) | Δ | OWW score |
+|---|---|---|---|---|
+| T17a | 06:17:20.607 | 06:17:21.063 | **456 ms** | 0.787 |
+| T17b | 06:22:39.418 | 06:22:39.941 | **523 ms** | 0.788 |
+| T17c | 06:27:15.593 | 06:27:15.996 | **403 ms** | 0.779 |
+
+3/3 раз, почти одинаковый интервал, почти одинаковый score — это не «случайный шум». Гипотеза: OWW при transition reply→standby пересканирует свой frame buffer с уже услышанной речью (хвост «Спасибо, на этом всё» или TTS-tail через INMP441). При `threshold=0.08` любой score >0.08 ловится. **Кандидаты на фикс:** очистить OWW buffer на `reply→standby` или ввести ~1s cooldown после смены state. Записать в backlog как Phase-12 bug.
+
+#### Источник пауз в речи Адама — LLM-side, не TTS
+
+User report: «довольно большие паузы во время его речи». Трасса самого медленного turn'а (T17b.5, «Расскажи коротко…», TTS=9391ms) показывает что Silero выпил стрим за ~600ms и ждал следующего LLM-чанка **3.1 секунды**:
+
+```
+06:22:01.546  asr_final
+06:22:03.376  llm_partial    Δ=1830ms  ← LLM TTFT
+06:22:03.965  llm_partial    Δ=588ms
+06:22:04.109  tts_started    Δ=144ms   ← Silero подхватил
+06:22:07.206  llm_partial    Δ=3097ms  ← LLM встал на 3 секунды!
+06:22:12.768  tts_finished   Δ=5563ms
+```
+
+Это поведение Gemma 4 E4B со SWA-кешем на длинных репликах — prefill «икает» (документировано в CLAUDE.md). Не баг V-S08.1. Решения вне V-S08.1: E2B + speculative, max_tokens=30, либо буферизовать первые ~10 LLM-токенов до старта TTS.
+
+#### Persona quality
+
+| Test | Reply length avg | Стиль |
+|---|---|---|
+| T17a (fresh boot) | 58 chars / 10 words | Точный, прямой |
+| T17b (full restart) | 65 chars / 12 words | Метафорический («ключи от», «исследовании пределов») |
+| T17c (orch restart) | **54 chars / 10 words** | **Минималистичный, INTP/5w4 pure** |
+
+**Golden quotes:**
+- T17a.7: «Тишина. Она всегда имеет свою структуру.»
+- T17c.6: «Я помню только имя, которое мне дали. Остальное — дальше темы.»
+- T17c.7: «Я здесь.» ← signature single-word closing
+
+**Correctness checks (21 turns):**
+| Check | Result |
+|---|---|
+| JSON/markdown/code leakage | ✅ 0/21 |
+| Chinese characters | ✅ 0/21 |
+| Reply truncation by max_tokens=40 | ✅ 0/21 |
+| Russian fluency | ✅ all |
+
+#### Regression vs predecessors (best-of-T17 = T17c)
+
+| Metric | T7 (E4B baseline) | T8 (E4B) | T14c (E4B+CUDA ASR, local mic) | **T17c (V-S08.1, ESP mic)** | Δ vs T7 |
+|---|--:|--:|--:|--:|--:|
+| ASR warm | 1009 | 1264 | 1222 | 1040 | +3% |
+| LLM warm | **2868** | 4082 | 3946 | 3314 | +16% |
+| TTFV warm | **1688** | 2864 | 2544 | 1899 | +12% |
+| TTS warm | **4695** | 5922 | 5434 | 4711 | +0.3% |
+| **Total warm** | 7632 | 9103 | 8369 | **6665** | **−13%** ✅ |
+| Throughput | 3.82 | 3.02 | 1.53 (wall inflated by pauses) | 3.50 | −8% |
+| Wake re-triggers | 0 | 0 | 2 | 2 | — |
+| Persona | OK | OK | OK | OK | — |
+
+**Caveat про честность сравнения с T7:** в T7 был `filler_enabled=true` («Хм…»), который занижает TTFV (TTFV = время до первого audio chunk, а это filler). В T17 filler выключен — TTFV отражает реальную задержку до первого слова ответа. T17 TTFV warm 1899 vs T7 1688 = +12%, но **по факту Адам начинает произносить осмысленный ответ примерно в то же время** — T7 ждал чуть меньше до «Хм…», но затем ещё ~1с до настоящего ответа. Total warm — честная метрика, и здесь T17c −13% от T7.
+
+#### Key findings
+
+1. ✅ **T17c — best voice run в проекте.** Total warm 6665ms = T7 −13%. V-S08.1 со всеми фиксами (ESP boot-wait в оркестраторе, mic buffer 256ms, post-TTS discard 2500ms, unblock event loop) не вызвал регрессии — наоборот, улучшил суммарный latency.
+2. ✅ **Restart-resilience подтверждён повторно** (после T14). Все 21 turn успешны на трёх разных типах рестарта. `_wait_for_esp_ready()` в `VoiceLoopController._run()` корректно дожидается ESP во всех трёх паттернах.
+3. ✅ **`systemctl restart adam-orchestrator` — самый дешёвый и быстрый production refresh.** Best Total warm = T17c (orch-only).
+4. 🐛 **BUG: детерминированный false wake через 400–500ms после reply→standby** — 3/3 прогона, score ~0.78. Требует фикса (OWW buffer flush или post-standby cooldown).
+5. 📊 **Пользователь заметил паузы в речи Адама** — это LLM SWA-prefill gaps (до 3s между llm_partial при идущем TTS-стриме). Не баг V-S08.1, инвариант Gemma 4 E4B.
+6. ⚠ **Filler выключен в V-S08.1** — даёт честный TTFV, но «убирает мягкость» восприятия. Рассмотреть включение с `filler_probability=0.3` (уже в схеме).
+7. ✅ **ESP32 INMP441 mic стабилен** — 21/21 turn успешно прошли через ESP stream без drop'ов, mic_reader_overflow срабатывал но не повлиял на ASR.
+
+#### Raw data filter
+```
+T17a metrics: source=voice_loop, ts ∈ [2026-05-18T03:15:30Z, 2026-05-18T03:17:35Z]
+T17b metrics: source=voice_loop, ts ∈ [2026-05-18T03:20:45Z, 2026-05-18T03:22:55Z]
+T17c metrics: source=voice_loop, ts ∈ [2026-05-18T03:25:30Z, 2026-05-18T03:27:30Z]
+events.jsonl: same windows, filter type ∈ {voice_state_change, wake_word_detected, tts_started, tts_finished, llm_partial, asr_final, reply_window_expired, asr_no_reply_standby, wake_silence_timeout}
+```
+
+---
+
 ### Test 8 — 2026-05-15 06:24 MSK
 **Module:** Voice Pipeline (E2E) • **Commit:** [a8ff3ce](https://github.com/7teenzzz/Adam-Chip/commit/a8ff3ce) (`V-S05.2-optim_voice_pipeline`) • **Phrases:** standard 7-phrase set
 **Wall:** 2m19s (start 04:24:25 → standby 04:26:44 MSK) • **Active:** 62.1s • **Verdict:** ✅ reply 7/7, throughput 3.02 turn/min

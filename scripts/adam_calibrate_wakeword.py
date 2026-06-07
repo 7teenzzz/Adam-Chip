@@ -126,8 +126,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--duration", type=float, default=20.0,
                     help="Длительность записи шума (с), по умолчанию 20")
-    ap.add_argument("--margin", type=float, default=0.08,
-                    help="Отступ над p99, по умолчанию 0.08")
+    ap.add_argument("--margin", type=float, default=0.03,
+                    help="Отступ над p99, по умолчанию 0.03")
     ap.add_argument("--apply", action="store_true",
                     help="Применить рекомендованный порог без интерактивного подтверждения")
     ap.add_argument("--sse-only", action="store_true",

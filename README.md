@@ -41,7 +41,7 @@ Jetson (inference node)             ESP32-S3 (peripheral node)
 | Компонент | Runtime | Модель | Порт |
 |-----------|---------|--------|------|
 | LLM | llama.cpp (OpenAI-compat) | gemma-4-E4B-it-UD-Q4_K_XL | 8081 |
-| VLM | nano_llm (Docker) | VILA 1.5-3b | 8084 |
+| VLM | nano_llm (Docker) | VILA 1.5-3b | 8050 |
 | ASR | WhisperX (CUDA, Docker) | small (ru-RU) | 8095 |
 | TTS | Silero v5_5_ru | eugene | 8082 |
 | Orchestrator | FastAPI + asyncio | — | 8080 |
@@ -88,7 +88,6 @@ data/
   sounds/success.mp3       Jetson init-cue
 Subsystem/AdamsServer/     Прошивка ESP32-S3 (PlatformIO)
 Agent Adam Chip/About/     Персона: Identity.md, Lore.md, Abilities.md
-Agent Adam Chip/Tuning.json  Hot-reload параметры персоны
 docs/RUNBOOK_JETSON_EXHIBITION.md  Production runbook
 deploy/systemd/            Systemd units для выставочного запуска
 scripts/                   Диагностика, деплой, управление

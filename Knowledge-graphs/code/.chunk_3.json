@@ -1,0 +1,28 @@
+{
+  "chunk": 4,
+  "total_chunks": 8,
+  "files": [
+    "F:\\Adam-Chip\\diploma\\project-analysis\\ch03\\interaction\\interaction_model.md",
+    "F:\\Adam-Chip\\diploma\\project-analysis\\ch03\\memory\\memory_model.md",
+    "F:\\Adam-Chip\\diploma\\project-analysis\\ch03\\requirements\\system_requirements.md",
+    "F:\\Adam-Chip\\diploma\\project-analysis\\ch03\\runtime\\runtime_model.md",
+    "F:\\Adam-Chip\\diploma\\project-analysis\\synthesis\\code_community_labels.md",
+    "F:\\Adam-Chip\\diploma\\project-analysis\\synthesis\\criteria_to_code.md",
+    "F:\\Adam-Chip\\diploma\\project-analysis\\synthesis\\cross_graph_map.md",
+    "F:\\Adam-Chip\\diploma\\project-analysis\\synthesis\\master_concepts.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\REVIEW_CHECKPOINT.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-criterion\\crit_01_autonomy.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-criterion\\crit_02_agency.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-criterion\\crit_03_identity.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-criterion\\crit_04_normativity.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-criterion\\crit_05_temporal.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-criterion\\crit_06_interaction.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-criterion\\crit_07_embodiment.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-criterion\\crit_08_emergence.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-section\\3.1_concept.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-section\\3.2_application.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-section\\3.3_installation.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\by-section\\3.4_testing.md",
+    "F:\\Adam-Chip\\diploma\\project-verification\\chapter3_materials\\final_chapter_blueprint.md"
+  ]
+}
