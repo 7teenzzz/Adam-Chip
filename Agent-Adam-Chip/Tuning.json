@@ -241,6 +241,20 @@
     },
     "include_in_prompt": true,
     "max_intentions_in_ctx": 2,
-    "aspect_change_threshold": 0.03
+    "aspect_change_threshold": 0.03,
+    "humor_reaction": {
+      "enabled": true,
+      "positive_words": [
+        "ха", "хаха", "хахах", "хахаха", "аха", "ахаха", "ахах",
+        "хехе", "лол", "кек", "смешно", "смешной", "смешная",
+        "хорошая шутка", "классная шутка", "хорошо придумал", "умора",
+        "ты смешной", "ты смешная"
+      ],
+      "negative_words": [
+        "не смешно", "это не смешно", "непонятная шутка", "странная шутка"
+      ],
+      "im_positive_delta": 0.06,
+      "im_negative_delta": -0.04
+    }
   }
 }

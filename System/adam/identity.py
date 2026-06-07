@@ -461,3 +461,54 @@ def _get(obj: Any, attr: str, default: Any) -> Any:
     if isinstance(obj, dict):
         return obj.get(attr, default)
     return getattr(obj, attr, default)
+
+
+# ---------------------------------------------------------------------------
+# Humor Reaction
+# ---------------------------------------------------------------------------
+
+
+def apply_humor_reaction(
+    state: AIIMRuntimeState,
+    transcript: str,
+    tuning: "IdentityTuning",
+) -> str:
+    """Detect visitor humor reaction in transcript and adjust im aspect + emotion.
+
+    Positive reaction (laughter, approval) → im↑, nudge toward warm.
+    Negative reaction (dismissal, confusion about joke) → im↓, nudge toward unease.
+
+    Returns: "positive" | "negative" | "" (no humor reaction detected).
+    Mutates state.vector and state.emotion in-place.
+    """
+    hr = tuning.humor_reaction
+    if not hr.enabled:
+        return ""
+
+    t = transcript.lower()
+    mod = tuning.modulation
+    aspect_max = _get(mod, "aspect_max", 0.95)
+    aspect_min = _get(mod, "aspect_min", 0.20)
+
+    def _shift_im(delta: float) -> None:
+        weights = dict(state.vector.weights)
+        if "im" in weights and "im" not in IdentityVector.LOCKED:
+            weights["im"] = max(aspect_min, min(aspect_max, weights["im"] + delta))
+            state.vector = IdentityVector(weights=weights, specs=state.vector.specs)
+
+    # Check negative first — phrases like "не смешно" contain "смешно" (a positive word)
+    if any(w in t for w in hr.negative_words):
+        _shift_im(hr.im_negative_delta)
+        if state.emotion in ("curious", "warm"):
+            state.emotion = "unease"
+            state.emotion_src = "contact"
+        return "negative"
+
+    if any(w in t for w in hr.positive_words):
+        _shift_im(hr.im_positive_delta)
+        if state.emotion in ("curious", "calm"):
+            state.emotion = "warm"
+            state.emotion_src = "contact"
+        return "positive"
+
+    return ""

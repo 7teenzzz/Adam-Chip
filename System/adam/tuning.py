@@ -173,6 +173,23 @@ class EmotionTransitionRule(BaseModel):
     src: str = ""  # semantic source label: "memory", "challenge", "contact", "decay", ""
 
 
+class HumorReactionConfig(BaseModel):
+    """Config for detecting visitor humor reactions and adjusting Adam's im aspect + emotion."""
+
+    enabled: bool = True
+    positive_words: List[str] = Field(default_factory=lambda: [
+        "ха", "хаха", "хахах", "хахаха", "аха", "ахаха", "ахах",
+        "хехе", "лол", "кек", "смешно", "смешной", "смешная",
+        "хорошая шутка", "классная шутка", "хорошо придумал", "умора",
+        "ты смешной", "ты смешная",
+    ])
+    negative_words: List[str] = Field(default_factory=lambda: [
+        "не смешно", "это не смешно", "непонятная шутка", "странная шутка",
+    ])
+    im_positive_delta: float = Field(0.06, ge=0.0, le=0.2)
+    im_negative_delta: float = Field(-0.04, ge=-0.2, le=0.0)
+
+
 class IntentionTriggerConfig(BaseModel):
     """Config for one hidden intention drive."""
 
@@ -321,6 +338,7 @@ class IdentityTuning(BaseModel):
     include_in_prompt: bool = True
     max_intentions_in_ctx: int = Field(2, ge=0, le=5)
     aspect_change_threshold: float = Field(0.03, ge=0.0, le=0.3)
+    humor_reaction: HumorReactionConfig = Field(default_factory=HumorReactionConfig)
 
 
 class Tuning(BaseModel):

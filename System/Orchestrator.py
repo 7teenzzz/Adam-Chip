@@ -61,7 +61,7 @@ from adam.wake_word import create_engine as _create_wake_engine
 from adam.webrtc_vad import WebRtcVadWrapper
 from adam.identity import (
     AIIMRuntimeState, AspectModulator, EmotionMachine, IdentityVector,
-    IntentionTracker, parse_aiim_formula,
+    IntentionTracker, apply_humor_reaction, parse_aiim_formula,
 )
 from adam.identity_drift import DriftAccumulator
 
@@ -2602,6 +2602,11 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             aiim_state.vector = _aspect_modulator.modulate(
                 aiim_state.vector, aiim_state.emotion, tuning.identity,
             )
+            humor_reaction = apply_humor_reaction(aiim_state, transcript, tuning.identity)
+            if humor_reaction:
+                event_log.append("aiim_humor_reaction", {
+                    "reaction": humor_reaction, "turn": aiim_state.turn,
+                }, turn_id=turn_id)
             identity_block = aiim_state.to_ctx_block(tuning.identity)
             aiim_state.record_turn()
             aiim_state.turn += 1
