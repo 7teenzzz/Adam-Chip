@@ -803,6 +803,102 @@
         }
       }
     },
+    "skills": {
+      "type": "object",
+      "description": "Pre-LLM context/utterance providers (Phase 30). Each skill detects intent from the transcript by keyword OUTSIDE the LLM, then either injects context into the prompt (weather) or short-circuits to a verbatim spoken reply (jokes). The LLM-purity invariant (no tool-calls, pure Russian text) is preserved — skills run before the prompt is built. Read via settings.section('skills').",
+      "properties": {
+        "weather": {
+          "type": "object",
+          "description": "Weather skill — answers questions about the weather using live data from a fixed exhibition location. A background worker polls the provider and caches the result; on a weather-intent turn the cached string is injected as a [ctx.weather] block so Adam speaks it in character. Failure is silent-safe: stale/missing cache injects an 'outside sensor offline' note instead of fabricating data (invariant: action failure ≠ silence).",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Master switch for the weather skill. When false, no background polling and weather intents fall through to normal LLM handling.",
+              "default": true
+            },
+            "provider": {
+              "type": "string",
+              "enum": ["open_meteo"],
+              "description": "Weather data provider. 'open_meteo' = api.open-meteo.com, free, no API key, direct egress.",
+              "default": "open_meteo"
+            },
+            "base_url": {
+              "type": "string",
+              "description": "Provider forecast endpoint. The worker appends latitude/longitude and the 'current' field list as query params.",
+              "default": "https://api.open-meteo.com/v1/forecast"
+            },
+            "latitude": {
+              "type": "number",
+              "description": "Fixed exhibition latitude (decimal degrees). Default = Galery A-B, Moscow.",
+              "default": 55.721265
+            },
+            "longitude": {
+              "type": "number",
+              "description": "Fixed exhibition longitude (decimal degrees). Default = Galery A-B, Moscow.",
+              "default": 37.625647
+            },
+            "location_name": {
+              "type": "string",
+              "description": "Human-readable place name used in Adam's spoken reply (e.g. 'в Москве'). Empty string omits the place name.",
+              "default": "Москва"
+            },
+            "poll_interval_sec": {
+              "type": "integer",
+              "minimum": 60,
+              "description": "Seconds between background weather fetches. Lower = fresher data, more outbound requests. 900 (15 min) is ample for ambient weather.",
+              "default": 900
+            },
+            "cache_ttl_sec": {
+              "type": "integer",
+              "minimum": 60,
+              "description": "Seconds a cached reading stays valid. If the cache is older than this when a weather intent fires, it is treated as stale (outside-sensor-offline note injected instead of data). Should be >= poll_interval_sec to tolerate one missed poll.",
+              "default": 1800
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "description": "HTTP timeout for a single provider fetch. The client uses trust_env=False (direct egress, ignores v2ray proxy env vars) — opposite of the ESP32/localhost clients.",
+              "default": 8
+            },
+            "intent_keywords": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Lowercase substrings; if any appears in the transcript the turn is classified as a weather intent. Substring match (not word-boundary) so stems like 'погод' catch 'погода/погоду/погоде'.",
+              "default": ["погод", "на улице", "за окном", "холодно", "тепло", "жарко", "дожд", "снег", "ветер", "градус"]
+            }
+          }
+        },
+        "jokes": {
+          "type": "object",
+          "description": "Jokes skill — on an explicit joke request, picks one anecdote verbatim from a curated pool and speaks it directly (bypassing the LLM so the punchline is exact). Reuses the Echoes pool file format and the EpisodicMemory cooldown store (pool='jokes') to avoid repeats.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Master switch for the jokes skill. When false, joke intents fall through to normal LLM handling.",
+              "default": true
+            },
+            "pool_path": {
+              "type": "string",
+              "description": "Relative path to the joke pool markdown file. Same yaml-frontmatter block format as About/Echoes.md (parsed by echoes_gate.parse_echoes_file).",
+              "default": "Agent-Adam-Chip/About/Jokes.md"
+            },
+            "per_joke_cooldown_days": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Minimum days before the same joke can be told again. Tracked in data/adam/jokes_used.jsonl via EpisodicMemory. 0 disables the per-joke cooldown (repeats allowed).",
+              "default": 3
+            },
+            "intent_keywords": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Lowercase substrings; if any appears in the transcript the turn is classified as a joke intent (takes priority over weather). Substring match for stemming.",
+              "default": ["пошути", "анекдот", "рассмеши", "шутк", "смешн", "развесели"]
+            }
+          }
+        }
+      }
+    },
     "tuning": {
       "type": "object",
       "description": "Runtime persona/behavior parameters — hot-reloadable, editable from WebUI tuning panel via /api/tuning. Previously lived in Agent Adam Chip/Tuning.json; merged here so Config.json is the single source of truth. Validated by pydantic models in System/adam/tuning.py.",

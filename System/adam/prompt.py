@@ -165,6 +165,7 @@ class PromptBuilder:
         recent_episodic: list[str] | None = None,
         recent_scenes: list[str] | None = None,
         echo_hint: Optional[str] = None,
+        weather_ctx: Optional[str] = None,
         history_turns: Optional[int] = None,
         include_scene: bool = True,
         include_sensors: bool = True,
@@ -186,6 +187,7 @@ class PromptBuilder:
             scene_cache=scene_cache,
             include_scene=include_scene,
             include_sensors=include_sensors,
+            weather_ctx=weather_ctx,
         )
 
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
@@ -218,6 +220,7 @@ class PromptBuilder:
         scene_cache: str,
         include_scene: bool,
         include_sensors: bool,
+        weather_ctx: Optional[str] = None,
     ) -> str:
         parts: list[str] = []
 
@@ -249,6 +252,11 @@ class PromptBuilder:
                 parts.append(f"[ctx.sensors]\n{joined}")
             else:
                 parts.append("[ctx.sensors]\n(sensors offline)")
+
+        # Weather is an explicit per-turn injection (only when the user asked),
+        # so it is gated by weather_ctx being non-empty rather than a flag.
+        if weather_ctx and weather_ctx.strip():
+            parts.append(f"[ctx.weather]\n{weather_ctx.strip()}")
 
         return "\n\n".join(parts)
 

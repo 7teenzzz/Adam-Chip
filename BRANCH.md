@@ -1,46 +1,27 @@
-# BRANCH: ESP-Mic-Fix
+# Branch: Extra
 
-**Цель:** устранить ложные срабатывания микрофона INMP441 — постоянный
-низкочастотный фон/всплески уровня в тишине («громкость поднимается, хотя
-ничего не происходит»).
+**Diverged from:** main @ 070ab4b
+**Goal:** Phase 30 — навыки jokes + weather (pre-LLM провайдеры: шутки verbatim, погода Open-Meteo)
+**Status:** ready-for-review
+**Merge target:** main
+**Merge conditions:** smoke-тест на Jetson (`curl .../api/agent/turn` с «пошути» и «погода»), 18/18 тестов зелёные
 
-**Базовая ветка:** ответвлена от `ESP-Audio-Out` (включает durable-фикс
-спикера `:82`), чтобы тестировать mic + speaker вместе.
+**Modified areas:**
 
-## Диагноз (2026-06-02)
+- `System/adam/skills.py` *(новый)* — IntentRouter, WeatherProvider, JokeGate
+- `System/Orchestrator.py` — импорт skills, weather poll-loop в lifespan, intent-врезка в turn
+- `System/adam/prompt.py` — параметр `weather_ctx`, блок `[ctx.weather]`
+- `System/adam/config.py` — DEFAULT_CONFIG секция `skills`
+- `System/Config.json` — секция `skills.weather` (координаты Галереи А-Б) + `skills.jokes`
+- `System/Config.schema.json` — документация `skills.*`
+- `Agent-Adam-Chip/About/Jokes.md` *(новый)* — пул 25 анекдотов для JokeGate
+- `tests/test_skills.py` *(новый)* — 18 тестов
 
-- Сравнение с `8e6f6bb` (Phase 21A): `mic_reader.py` и `webrtc_vad.py` НЕ
-  менялись; Config mic-чувствительность только понижена (`silence_rms_threshold
-  100→200`); изменения Orchestrator/config — speaker-DSP, не mic.
-- **Единственное релевантное изменение — железо: PCM5102A → MAX98357A**
-  (Class-D, +15 дБ, GAIN floating; speaker I2S TX тактируется непрерывно).
-- Реальные данные: фон mic ~0.12–0.16, всплески до 0.76; спектр **пик в
-  80–200 Гц** → электрический гул/EMI, не акустика. Низкочастотная сигнатура.
-- **Корень: EMI от MAX98357A (switching-усилитель + непрерывный I2S TX) в
-  линии INMP441.** Код mic ни при чём.
+**Global changes:** да — добавлена секция `skills` в Config.json; при мёрже убедиться, что `httpx` установлен в venv на Jetson (`pip install httpx`)
 
-## Кандидаты-фиксы (ранжировано)
+**Notes for agents:**
 
-1. **Firmware: гейтить speaker I2S TX на реальное воспроизведение** — не
-   тактировать TX в простое (сейчас задача всегда пишет нули → постоянный EMI).
-   В простое (нет TTS) TX выключен → mic чист. Бьёт в корень «когда ничего не
-   происходит».
-2. **Jetson: HPF на mic-входе (<150–200 Гц)** перед level/VAD/ASR — убирает
-   низкочастотный фантом независимо от источника. Быстро, defence-in-depth,
-   чистит и вход ASR.
-3. **Железо (deferred):** 5 В / отдельное питание усилителей + развязка/
-   экранирование mic-линий; шатдаун MAX98357A в простое (SD-пин).
-
-## Затрагиваемые файлы (план)
-
-- `Subsystem/AdamsServer/src/audio/AudioModule.cpp` — гейт I2S TX (фикс 1)
-- `System/adam/mic_reader.py` — HPF mic (фикс 2)
-- `System/Config.json` + schema — параметры HPF mic, если вводим
-
-## Результат (2026-06-02, commit `496c52d`)
-
-- Фон mic: mean 0.165 → 0.025 (−85%), median 0.
-- OWW ложных срабатываний: 0/1247 (max score 0.001). VAD: 0.
-- Hardware: отдельный 3.3В рельс для динамиков (−78% кондуктивный EMI).
-- Firmware: I2S TX гейт в простое (−25% радиационный EMI).
-- Условия мёржа выполнены ✓
+- Оба навыка работают **до** сборки prompt: joke → verbatim TTS минуя LLM; weather → `[ctx.weather]` блок в prompt
+- WeatherProvider: `trust_env=False` (прямой egress, игнорирует v2ray)
+- JokeGate: переиспользует `EpisodicMemory.record_echo_used(pool="jokes")` для cooldown
+- Pre-existing failure: `tests/test_memory.py::test_semantic_roundtrip` — не наша ветка
