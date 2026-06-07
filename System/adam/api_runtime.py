@@ -227,6 +227,85 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         deps.event_log.append("wake_calibrate_finished", record)
         return result
 
+    @router.post("/api/asr/calibrate/silence_rms")
+    async def calibrate_silence_rms(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """Record ambient noise for N seconds, return recommended silence_rms_threshold.
+
+        Subscribes to audio_level events from the voice loop. Caller should keep
+        the room at normal background level (no speech) for the duration.
+        """
+        duration_sec = max(2.0, min(30.0, float(payload.get("duration_sec", 5.0))))
+        margin_factor = max(1.0, min(3.0, float(payload.get("margin_factor", 1.4))))
+
+        audio_cfg = deps.settings.section("media").get("audio", {})
+        normalize_factor = float(audio_cfg.get("normalize_factor", 8000))
+
+        queue = deps.event_log.subscribe()
+        levels: list[float] = []
+        deadline = asyncio.get_event_loop().time() + duration_sec
+        try:
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+                if ev.get("type") != "audio_level":
+                    continue
+                level = (ev.get("payload") or {}).get("level")
+                if isinstance(level, (int, float)) and level >= 0:
+                    levels.append(float(level))
+        finally:
+            deps.event_log.unsubscribe(queue)
+
+        if not levels:
+            return {
+                "ok": False,
+                "samples": 0,
+                "warning": "no_samples — voice_loop not running or audio_level events not emitting",
+            }
+
+        # Invert normalisation: level = sqrt(rms / normalize_factor) → rms = level² × normalize_factor
+        raw_rms_vals = sorted(round(l * l * normalize_factor) for l in levels)
+        n = len(raw_rms_vals)
+
+        def _pct(pct: float) -> float:
+            k = (n - 1) * pct / 100.0
+            lo = int(k)
+            hi = min(lo + 1, n - 1)
+            return raw_rms_vals[lo] * (1 - (k - lo)) + raw_rms_vals[hi] * (k - lo)
+
+        p95 = _pct(95)
+        p99 = _pct(99)
+        mean_rms = sum(raw_rms_vals) / n
+        max_rms = raw_rms_vals[-1]
+
+        # Round to nearest 50, clamp to schema range 0–2000
+        recommended = int(max(0, min(2000, round(p95 * margin_factor / 50) * 50)))
+
+        warning: str | None = None
+        if p99 > 1000:
+            warning = (
+                f"Очень высокий фоновый шум (p99={round(p99)}). "
+                "Рекомендуется снизить шум в зале или использовать направленный микрофон."
+            )
+
+        return {
+            "ok": True,
+            "duration_sec": duration_sec,
+            "samples": n,
+            "profile": {
+                "mean": round(mean_rms),
+                "p95": round(p95),
+                "p99": round(p99),
+                "max": round(max_rms),
+            },
+            "recommended_threshold": recommended,
+            "warning": warning,
+        }
+
     @router.get("/api/models/llm")
     async def models_llm() -> dict[str, Any]:
         llm_cfg = deps.settings.section("services").get("llm", {})

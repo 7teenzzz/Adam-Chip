@@ -107,7 +107,7 @@
       "wake_word_required": true,
       "reply_window_expired_action": "standby",
       "silence_after_speech_ms": 1000,
-      "silence_rms_threshold": 50,
+      "silence_rms_threshold": 2100,
       "disable_local_fallback": true,
       "esp_open_timeout_sec": 8,
       "esp_probe_after_fails": 2,
@@ -118,7 +118,10 @@
         15
       ],
       "esp_stream_restart_after_fails": 5,
-      "esp_stream_restart_cooldown_sec": 120.0
+      "esp_stream_restart_cooldown_sec": 120.0,
+      "vad_onset": 0.1,
+      "vad_offset": 0.2,
+      "logprob_threshold": -1.7
     },
     "tts": {
       "provider": "silero",
@@ -160,6 +163,81 @@
       "value_max": 4095
     }
   },
+  "flora": {
+    "enabled": true,
+    "light_channels": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "vibro_channels": [
+      11,
+      12,
+      13,
+      14
+    ],
+    "gamma": 2.2,
+    "tick_ms": 20,
+    "crossfade_ms": 200,
+    "speech": {
+      "frame_interval_ms": 80,
+      "hdmi_latency_offset_ms": 150,
+      "base_duty_pct": 25,
+      "peak_duty_pct": 71,
+      "spark_probability": 0.15
+    },
+    "vibro": {
+      "intensity_pct": 30,
+      "silent_states": [
+        "attentive"
+      ]
+    },
+    "states": {
+      "breathe": {
+        "base_pct": 17,
+        "peak_pct": 30,
+        "period_ms": 7000,
+        "vibro": false
+      },
+      "accent": {
+        "peak_pct": 71,
+        "attack_ms": 250,
+        "vibro": true,
+        "vibro_pulse_ms": 120,
+        "base_pct": 10,
+        "period_ms": 1400
+      },
+      "attentive": {
+        "plateau_pct": 40,
+        "vibro": false,
+        "base_pct": 30,
+        "peak_pct": 71,
+        "wave_period_ms": 450
+      },
+      "think_pulse": {
+        "base_pct": 20,
+        "flash_ms": 1750,
+        "vibro": "double_pulse",
+        "peak_pct": 63
+      },
+      "wake_bloom": {
+        "from_dark": true,
+        "settle_to": "breathe",
+        "vibro": true,
+        "base_pct": 0,
+        "peak_pct": 71,
+        "period_ms": 3000
+      }
+    }
+  },
   "sounds": {
     "enabled": true,
     "success_path": "data/sounds/success.wav",
@@ -176,7 +254,7 @@
   "wake_word": {
     "engine": "openwakeword",
     "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.005,
+    "threshold": 0.05,
     "debounce_hits": 1,
     "vad_threshold": 0,
     "wake_silence_timeout_sec": 6

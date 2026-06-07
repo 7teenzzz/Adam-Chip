@@ -111,6 +111,29 @@ else
   [[ "${START_VLM}" == "false" ]] && START_VLM=false
 fi
 
+# --------- port helpers ------------------------------------------------------
+# Wait until a TCP port is free (no listener). Returns 0 when free, 1 on timeout.
+wait_port_free() {
+  local port=$1 tries=${2:-20}
+  for _ in $(seq 1 "${tries}"); do
+    ss -tlnp 2>/dev/null | grep -q ":${port} " || return 0
+    sleep 0.3
+  done
+  echo "  ! порт ${port} всё ещё занят после ожидания" >&2
+  return 1
+}
+
+# Poll a URL until it responds (200-level). Returns 0 when healthy, 1 on timeout.
+wait_port_ready() {
+  local url=$1 tries=${2:-30} label=${3:-"${url}"}
+  for _ in $(seq 1 "${tries}"); do
+    curl --noproxy '*' -fsS -m1 "${url}" >/dev/null 2>&1 && return 0
+    sleep 0.5
+  done
+  echo "  ! ${label} не ответил за $(echo "${tries} * 0.5" | bc)с" >&2
+  return 1
+}
+
 # --------- preflight checks --------------------------------------------------
 has_usb_camera() {
   for d in /dev/video0 /dev/video1 /dev/video2; do [[ -e "$d" ]] && return 0; done
@@ -215,15 +238,15 @@ if ${START_LLM}; then
   else
     if ! systemctl is-active --quiet adam-llm; then
       echo "⏵ Запуск adam-llm.service:"
-      # Kill stray llama-server that might hold port 8051 from a previous session.
+      # Kill stray llama-server that might hold port 8081 from a previous session.
       strays="$(pgrep -f 'llama-server' || true)"
       if [[ -n "${strays}" ]]; then
         echo "  · Убиваю stray llama-server: ${strays}"
         kill ${strays} 2>/dev/null || true
-        sleep 1
+        wait_port_free "${LLM_PORT}" 10 || true
       fi
       sudo systemctl start adam-llm >/dev/null 2>&1 || true
-      sleep 3
+      wait_port_ready "http://127.0.0.1:${LLM_PORT}/health" 40 "llama-server :${LLM_PORT}" || true
     fi
     if systemctl is-active --quiet adam-llm 2>/dev/null; then
       echo "  ✓ adam-llm.service (llama-server :${LLM_PORT})"
@@ -254,7 +277,9 @@ if [[ ${#SPEECH_SERVICES[@]} -gt 0 ]]; then
     if ${need_systemd}; then
       echo "⏵ Запуск speech-сервисов:"
       sudo systemctl start "${SERVICES_AVAILABLE[@]}" >/dev/null 2>&1 || true
-      sleep 2
+      # Wait for TTS port instead of fixed sleep
+      TTS_PORT="$(python3 -c "import json; print(json.load(open('${ROOT_DIR}/System/Config.json'))['services']['tts']['base_url'].split(':')[-1].rstrip('/'))" 2>/dev/null || echo 8082)"
+      wait_port_ready "http://127.0.0.1:${TTS_PORT}/health" 30 "TTS :${TTS_PORT}" || true
     fi
 
     for s in "${SERVICES_AVAILABLE[@]}"; do
@@ -352,6 +377,15 @@ if ${START_ORCH}; then
       kill -9 ${remaining} 2>/dev/null || true
     fi
   fi
+
+  # Wait for port 8080 to be free — race condition: process may be dead but
+  # the kernel socket lingers briefly. Without this, uvicorn crashes immediately
+  # with "Address already in use" on rapid restart.
+  wait_port_free "${PORT}" 20 || {
+    echo "✗ Порт ${PORT} не освободился. Принудительно:" >&2
+    fuser -k "${PORT}/tcp" 2>/dev/null || true
+    sleep 1
+  }
 
   echo
   echo "⏵ Запуск orchestrator…"

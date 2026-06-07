@@ -45,6 +45,7 @@ from adam.device import MCUClient
 from adam.echoes_gate import EchoGate
 from adam.episodic import SessionAccumulator, should_record
 from adam.events import EventLog, utc_now
+from adam.flora import FloraController
 from adam.camera import CameraReader, SceneDescriptionBuffer
 from adam.inference import WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
 from adam.mic_reader import MicReader
@@ -693,7 +694,12 @@ class VoiceLoopController:
             await self._run_via_mic_reader(frame_bytes)
         else:
             frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
-            await self._run_local(frame_bytes)
+            while self.running:
+                await self._run_local(frame_bytes)
+                if self.running:
+                    # Retries in _run_local exhausted (device disconnect/busy).
+                    # Pause 5 s then retry — supports USB mic hot-reconnect.
+                    await asyncio.sleep(5.0)
 
     async def _run_via_mic_reader(self, frame_bytes: int) -> None:
         """Consume chunks from MicReader queue and drive _vad_loop.
@@ -733,8 +739,13 @@ class VoiceLoopController:
                 })
             finally:
                 self._stop_process()
-        self.running = False
-        event_log.append("voice_loop_stopped", self.status())
+        # Don't set running=False here — outer loop in _run() retries for USB
+        # device reconnect. voice_loop_stopped is emitted only by stop().
+        event_log.append("voice_loop_error", {
+            "error": "local mic retries exhausted",
+            "attempt": len(_delays) + 1,
+            "retrying": True,
+        })
 
     # Phase 7: ESP32 stream-open / drain / reconnect logic lives in MicReader
     # (System/adam/mic_reader.py). _make_stereo_reader is a module-level free
@@ -824,6 +835,10 @@ class VoiceLoopController:
                     await asyncio.sleep(0.005)
                     continue
                 _empty_streak = 0
+                # Partial frame: arecord exited mid-buffer; subsequent reads
+                # will be empty and trigger the 3-streak error properly.
+                if len(chunk) < frame_bytes:
+                    continue
                 chunk = self._apply_vad_hpf(chunk)
 
                 _rms = audioop.rms(chunk, 2)
@@ -1022,7 +1037,11 @@ class VoiceLoopController:
                         # vad_state shows speech as soon as voiced is observed —
                         # responsiveness is preserved; only the latch is debounced.
                         self.vad_state = "speech"
-                    elif speech_frames:
+                    elif speech_ms > 0 and speech_frames:
+                        # Only count silence after real speech has started (speech_ms > 0).
+                        # This prevents background noise from triggering the silence endpoint
+                        # before any voiced speech has accumulated, which was causing
+                        # reply_max_segment_ms to never fire (silence endpoint always fired first).
                         silence_ms += self.frame_ms
                         _silence_run_frames += 1
                         _voiced_run_frames = 0
@@ -1393,6 +1412,10 @@ voice_loop.mic_reader = mic_reader
 # does not need an Orchestrator import (would be a cycle).
 mic_reader.set_stereo_reader_factory(_make_stereo_reader)
 scene_worker = SceneWorker(settings.section("media"), vlm, camera_reader, scene_buffer)
+# Technoflora reactive layer (Phase 29, FLORA-03/06): consumes pipeline events
+# and POSTs flora preset transitions to the ESP via the shared MCUClient
+# (_NO_PROXY_OPENER). Shares the same `mcu` + `event_log` singletons.
+flora_controller = FloraController(settings.section("flora"), mcu, event_log)
 
 
 class SessionWatcher:
@@ -1868,6 +1891,10 @@ async def lifespan(_: FastAPI):
     # captured via arecord. _run_local/_vad_loop own the local capture path.
     if voice_loop.mic_source == "esp32":
         await mic_reader.start()
+    # Technoflora event consumer (Phase 29): subscribes to the event log and
+    # drives ESP flora presets. Pure consumer — no pipeline behavior depends on it.
+    # Independent of mic_source: flora reacts to pipeline events, not audio capture.
+    await flora_controller.start()
     services_confirmed = False
     if runtime_state["mode"] == "exhibition" and settings.section("power").get("enforce_in_exhibition", True):
         status_payload = await _status_payload()
@@ -1888,6 +1915,7 @@ async def lifespan(_: FastAPI):
             # before MicReader cancels — otherwise the queue.get() consumer raises
             # CancelledError back at voice_loop after it's already stopped.
             await mic_reader.stop()
+        await flora_controller.stop()
         await esp_audio_health.stop()
         await session_watcher.stop()
         # финальный коммит, если сессия осталась открытой
@@ -2418,6 +2446,38 @@ async def mcu_info() -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="mcu_not_configured")
     result = await mcu.system_info()
     return {"ok": result.ok, "data": result.data}
+
+
+@app.post("/api/flora/state")
+async def flora_state_push(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Push a flora preset immediately using current Config.json values.
+
+    Useful for live tuning: edit Config.json, then POST here to see the change
+    on hardware without waiting for a pipeline event.
+
+    Body: {"state": "breathe"}   # or any preset name
+    """
+    state = str(payload.get("state", "")).strip()
+    if not state:
+        raise HTTPException(status_code=400, detail="state is required")
+    ok = await flora_controller.push_preset(state)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"unknown_flora_state: {state!r}")
+    event_log.append("flora_manual_push", {"state": state})
+    return {"ok": True, "state": state}
+
+
+@app.get("/api/flora/config")
+async def flora_config_preview() -> dict[str, Any]:
+    """Return effective preset params as they would be sent to the ESP.
+
+    Reflects current Config.json values — useful for verifying a config edit
+    before pushing to hardware with POST /api/flora/state.
+    """
+    flora_cfg = settings.section("flora")
+    state_names = list((flora_cfg.get("states") or {}).keys())
+    preview = {s: flora_controller._build_params(s) for s in state_names}
+    return {"ok": True, "presets": preview}
 
 
 @app.post("/api/agent/turn")
@@ -3041,6 +3101,12 @@ async def _stream_llm_and_speak(
                     if filler_playing[0]:
                         await filler_done_event.wait()
                     _mark_speaking_started()
+                    # Feed WAV to flora RMS streamer at playback dispatch (FLORA-04).
+                    # Best-effort: flora failure must never break TTS (Action-failure-≠-silence).
+                    try:
+                        flora_controller.feed_speech_wav(pending_wav)
+                    except Exception as _flora_exc:
+                        event_log.append("flora_feed_error", {"error": str(_flora_exc)})
                     result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                     tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
                 runtime_state["interrupt_tts"] = False
@@ -3066,6 +3132,12 @@ async def _stream_llm_and_speak(
                     if filler_playing[0]:
                         await filler_done_event.wait()
                     _mark_speaking_started()
+                    # Feed WAV to flora RMS streamer at playback dispatch (FLORA-04).
+                    # Best-effort: flora failure must never break TTS (Action-failure-≠-silence).
+                    try:
+                        flora_controller.feed_speech_wav(pending_wav)
+                    except Exception as _flora_exc:
+                        event_log.append("flora_feed_error", {"error": str(_flora_exc)})
                     result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                     tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
                     pending_wav = None
@@ -3094,6 +3166,12 @@ async def _stream_llm_and_speak(
                 if filler_playing[0]:
                     await filler_done_event.wait()
                 _mark_speaking_started()
+                # Feed WAV to flora RMS streamer at playback dispatch (FLORA-04).
+                # Best-effort: flora failure must never break TTS (Action-failure-≠-silence).
+                try:
+                    flora_controller.feed_speech_wav(pending_wav)
+                except Exception as _flora_exc:
+                    event_log.append("flora_feed_error", {"error": str(_flora_exc)})
                 result = await asyncio.to_thread(tts._play_wav_bytes_sync, pending_wav)
                 tts_chunks.append({"ok": pending_ok and bool(result.get("ok"))})
 

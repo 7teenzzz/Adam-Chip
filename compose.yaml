@@ -58,6 +58,7 @@ services:
     runtime: nvidia
     environment:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      ADAM_CONFIG: /app/Config.json
       ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8095}
       ADAM_ASR_WHISPERX_MODEL: ${ADAM_ASR_WHISPERX_MODEL:-small}
       ADAM_ASR_LANGUAGE: ${ADAM_ASR_LANGUAGE:-ru}
@@ -68,6 +69,7 @@ services:
       HF_HOME: /hf_cache
       HF_HUB_CACHE: /hf_cache/hub
     volumes:
+      - ./System/Config.json:/app/Config.json:ro
       - ./Subsystem/Models:/models:ro
       - ./data/hf_cache:/hf_cache
       - /etc/localtime:/etc/localtime:ro

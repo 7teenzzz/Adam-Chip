@@ -126,6 +126,29 @@ inline constexpr Pca9685SceneConfig kPca9685Scenes[] = {
 
 inline constexpr size_t kPca9685SceneCount = sizeof(kPca9685Scenes) / sizeof(kPca9685Scenes[0]);
 
+// ---------------------------------------------------------------------------
+// Technoflora animation engine (Phase 29, FLORA-01 / FLORA-06).
+//
+// The firmware boots and animates independently of the Jetson, so it needs its
+// OWN copy of the structural flora defaults. The Jetson-side source of truth is
+// the `flora` section in System/Config.json (Config.schema.json documents it);
+// these constants are the firmware-tier duplicate of the *structural* defaults
+// (channel masks, gamma, crossfade, vibro ceiling). Keep them consistent with
+// Config.json. Per-preset numeric params (base/peak duty, period) arrive from
+// the Jetson via /api/flora/state and override the in-code preset defaults.
+// ---------------------------------------------------------------------------
+inline constexpr uint32_t kFloraTickMs = 20;            // ~50 Hz animation task period
+inline constexpr uint8_t kFloraLightChannelLo = 0;      // D-02: light = channels 0-10
+inline constexpr uint8_t kFloraLightChannelHi = 10;
+inline constexpr uint8_t kFloraVibroChannelLo = 11;     // D-02: vibro = channels 11-14
+inline constexpr uint8_t kFloraVibroChannelHi = 14;
+inline constexpr float kFloraGamma = 2.2f;              // D-13: perceptual gamma for the light LUT
+inline constexpr uint32_t kFloraDefaultCrossfadeMs = 200;  // D-09: 150-250 ms preset crossfade
+// Vibro is NOT subject to safety.motor_* clamps (D-04/FLORA-06): those guard
+// action.py timed actuations. Flora vibro is continuous low-amplitude presence,
+// so it gets its own intensity ceiling instead (D-12, restrained default ~30%).
+inline constexpr uint16_t kFloraVibroIntensityCeiling = 1228;  // ~30% of 4095
+
 inline constexpr size_t kStatusJsonCapacity = 16384;
 inline constexpr size_t kSensorJsonCapacity = 768;
 inline constexpr size_t kPcaJsonCapacity = 1024;
