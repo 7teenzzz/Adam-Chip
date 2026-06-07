@@ -89,36 +89,21 @@ def _verify_cuda_available() -> None:
         )
 
 
-def _load_model_with_fallback(whisperx: Any, model_size: str, device: str, compute_type: str) -> tuple[Any, str]:
-    """Load whisperx model, falling back to CPU if ctranslate2 lacks CUDA support."""
+def _load_model(whisperx: Any, model_size: str, device: str, compute_type: str) -> Any:
+    """Load whisperx model. Raises on failure — no silent CPU fallback.
+
+    CUDA errors propagate to the caller so the service crashes and Docker
+    restarts it, rather than silently running on CPU at exhibition speed.
+    """
     if device == "cuda":
         _verify_cuda_available()
-    try:
-        model = whisperx.load_model(
-            model_size,
-            device=device,
-            compute_type=compute_type,
-            language=_LANGUAGE,
-            download_root=str(_MODELS_DIR),
-        )
-        return model, device
-    except Exception as exc:
-        exc_str = str(exc)
-        if device == "cuda" and ("CUDA" in exc_str or "cuda" in exc_str.lower() or "CTranslate2" in exc_str):
-            # ctranslate2 installed without CUDA support (common on Jetson with pip wheels)
-            import logging as _logging
-            _logging.getLogger("adam.asr").error(
-                "ctranslate2 CUDA unavailable (%s) — falling back to CPU float32", exc_str[:120]
-            )
-            model = whisperx.load_model(
-                model_size,
-                device="cpu",
-                compute_type="float32",
-                language=_LANGUAGE,
-                download_root=str(_MODELS_DIR),
-            )
-            return model, "cpu"
-        raise
+    return whisperx.load_model(
+        model_size,
+        device=device,
+        compute_type=compute_type,
+        language=_LANGUAGE,
+        download_root=str(_MODELS_DIR),
+    )
 
 
 def _get_model() -> Any:
@@ -137,12 +122,13 @@ def _get_model() -> Any:
         compute_type = _resolve_compute_type(device)
         model_size = _resolve_model_size()
         _ACTUAL_MODEL_SIZE = model_size
+        _ACTUAL_DEVICE = device
 
         # language is a top-level param of load_model(), NOT inside asr_options.
         # asr_options feeds into TranscriptionOptions (beam search params only).
         # Silero VAD is used automatically in whisperx >= 3.x via the internal vad pipeline;
         # pyannote is NOT needed and no HuggingFace token is required for transcription.
-        _MODEL, _ACTUAL_DEVICE = _load_model_with_fallback(whisperx, model_size, device, compute_type)
+        _MODEL = _load_model(whisperx, model_size, device, compute_type)
     return _MODEL
 
 
