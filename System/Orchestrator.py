@@ -1037,7 +1037,11 @@ class VoiceLoopController:
                         # vad_state shows speech as soon as voiced is observed —
                         # responsiveness is preserved; only the latch is debounced.
                         self.vad_state = "speech"
-                    elif speech_frames:
+                    elif speech_ms > 0 and speech_frames:
+                        # Only count silence after real speech has started (speech_ms > 0).
+                        # This prevents background noise from triggering the silence endpoint
+                        # before any voiced speech has accumulated, which was causing
+                        # reply_max_segment_ms to never fire (silence endpoint always fired first).
                         silence_ms += self.frame_ms
                         _silence_run_frames += 1
                         _voiced_run_frames = 0
