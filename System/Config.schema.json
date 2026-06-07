@@ -570,6 +570,27 @@
               "maximum": 3600.0,
               "description": "Phase 21A-08 watchdog: minimum interval (seconds) between two consecutive auto-restart triggers. Prevents restart-loop when ESP firmware takes longer than `esp_retry_backoff_sec` window to bring `:81` server back up — without this gate, fails climb to threshold again before previous restart finished settling. Default 120 sec (2 min) is comfortable for the ~8-15 sec ESP web-stack reboot plus a safety margin. Lower values (60 sec) can be used during exhibition for faster recovery at the risk of restart spam; higher values (300 sec) for conservative maintenance-mode operation.",
               "default": 120.0
+            },
+            "vad_onset": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "pyannote VAD onset threshold passed to whisperX load_model() via vad_options. Controls when speech is detected as starting. whisperX default 0.500 is tuned for clean studio audio; lower values make VAD more sensitive. For ESP32 INMP441 or USB webcam (noisier near-field audio) 0.3 is recommended. Raise if too many false-positive speech detections; lower if speech is not being detected at all. Paired with vad_offset.",
+              "default": 0.3
+            },
+            "vad_offset": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "pyannote VAD offset threshold passed to whisperX load_model() via vad_options. Controls when speech is detected as ending. whisperX default 0.363. Lower values keep speech windows open longer (more tolerant of brief pauses within a sentence). 0.2 recommended for ESP32 INMP441 / USB webcam. Must be <= vad_onset or VAD behaves unexpectedly.",
+              "default": 0.2
+            },
+            "logprob_threshold": {
+              "type": "number",
+              "minimum": -3.0,
+              "maximum": 0.0,
+              "description": "avg_logprob threshold for whisperX segment filtering. Segments with avg_logprob below this value are discarded as low-confidence noise. Default -0.8 tolerates quiet/distant speech (was -0.5, too strict for ESP32 INMP441 / USB webcam). Raise toward 0 to accept only high-confidence segments; lower toward -2.0 to accept everything including noise. Absent avg_logprob key is treated as 0.0 (accepted) — never silently drops valid segments.",
+              "default": -0.8
             }
           }
         },
