@@ -243,6 +243,47 @@ class MemoryLiveTest:
             print(f"[ERROR] Orchestrator не отвечает: {exc}")
             return False
 
+    def wait_for_pipeline_ready(self, timeout: float = 240.0, poll_interval: float = 3.0) -> bool:
+        """Дождаться готовности голосового пайплайна перед отправкой тестовых фраз.
+
+        Сразу после старта оркестратора /api/agent/status уже отвечает (HTTP-сервер
+        поднят), но LLM (llama-server) может ещё грузить веса (~minutes), а
+        voice_loop сидит в состоянии boot_warmup, проигрывая приветственную TTS.
+        Турны, отправленные в этом окне, либо падают в LLM-эксепшен (фоллбек
+        "речевой контур сейчас нестабилен"), либо проигрываются параллельно с
+        warmup-приветствием через колонки. Ждём оба сигнала готовности:
+          - services.llm.ok == True и не loading (модель отвечает на /v1/models)
+          - voice_loop.voice_state != "boot_warmup" (warmup-приветствие закончилось)
+        """
+        print("[wait] жду готовности голосового пайплайна (LLM + voice_loop)…")
+        deadline = time.monotonic() + timeout
+        last_state = ("?", "?")
+        while time.monotonic() < deadline:
+            try:
+                status = _get(f"{self.url}/api/agent/status", timeout=10)
+            except Exception as exc:
+                print(f"  [wait] /api/agent/status недоступен: {exc}")
+                time.sleep(poll_interval)
+                continue
+
+            llm = status.get("services", {}).get("llm", {})
+            llm_ok = bool(llm.get("ok")) and not bool(llm.get("loading"))
+            voice_state = status.get("voice_loop", {}).get("voice_state", "?")
+            voice_ready = voice_state not in ("boot_warmup", "?")
+
+            state = (f"llm_ok={llm_ok}({llm.get('detail', '?')})", f"voice_state={voice_state}")
+            if state != last_state:
+                print(f"  [wait] {state[0]}  {state[1]}")
+                last_state = state
+
+            if llm_ok and voice_ready:
+                print("[wait] пайплайн готов — приступаем к тест-кейсам\n")
+                return True
+            time.sleep(poll_interval)
+
+        print(f"[wait] ТАЙМАУТ {timeout:.0f}с — пайплайн не подтвердил готовность, продолжаем на свой риск\n")
+        return False
+
     def send_turn(self, phrase: str) -> TurnResult:
         """Отправить turn и извлечь результат из событий."""
         resp = _post(f"{self.url}/api/agent/turn", {"transcript": phrase})
@@ -344,6 +385,8 @@ class MemoryLiveTest:
         if not self.check_alive():
             print("[ABORT] Оркестратор недоступен. Запустите его и повторите.")
             return 1
+
+        self.wait_for_pipeline_ready()
 
         print(f"\n{'='*64}")
         print("MEMORY LIVE TEST — Phase 30")
