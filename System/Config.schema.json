@@ -742,14 +742,14 @@
         "light_channels": {
           "type": "array",
           "items": { "type": "integer", "minimum": 0, "maximum": 15 },
-          "description": "PCA9685 channel indices driven as light (D-02). Channels 0-10 (11 lamps). Channel masks live in Config so firmware and Jetson agree.",
-          "default": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+          "description": "PCA9685 channel indices driven as светофлора light (11 lamps). Channels 4-14 — the FIRST 4 channels (0-3) are vibro motors. Channel masks live in Config so firmware and Jetson agree (firmware mirrors via kFloraLightChannelLo/Hi).",
+          "default": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         },
         "vibro_channels": {
           "type": "array",
           "items": { "type": "integer", "minimum": 0, "maximum": 15 },
-          "description": "PCA9685 channel indices driven as vibration motors (D-02). Channels 11-14 (4 motors). Channel 15 is left free. Vibro shares the same PCA9685 burst as light but is NOT subject to safety.motor_* clamps (those are for action.py LLM motor commands; flora vibro is continuous low-amplitude presence, D-04/D-12).",
-          "default": [11, 12, 13, 14]
+          "description": "PCA9685 channel indices driven as vibration motors. Channels 0-3 — the FIRST 4 channels (4 motors). Vibro shares the same PCA9685 burst as light but is NOT subject to safety.motor_* clamps NOR to the flora.max_duty_pct light ceiling — the power ceiling is светофлора-only; vibro power is governed by vibro.intensity_pct (firmware kFloraVibroChannelLo/Hi + kFloraVibroIntensityCeiling).",
+          "default": [0, 1, 2, 3]
         },
         "tick_ms": {
           "type": "integer",
@@ -774,7 +774,7 @@
         },
         "max_duty_pct": {
           "type": "integer",
-          "description": "GLOBAL safe-ceiling for technoflora as a RAW PWM percent (0-100). Every flora channel write — Jetson flora.py preset duties and RMS speech stream, AND the firmware floraTask animation — is clamped to 4095 * max_duty_pct / 100 so the lamps and power supply never exceed this cap, regardless of preset peak_pct or RMS level. Defence-in-depth: clamped on both Jetson and firmware sides (firmware mirrors this ceiling via const kFloraMaxDutyPct in AdamsConfig.h). NOTE: this is RAW PWM (Phase 30 decision A removed perceptual gamma from this ceiling — the % is the PWM signal directly, so 100 = full 4095 counts, 70 = 2867 counts). Default 100 = no clamp (full range allowed); lower it per hardware installation to protect LED strips or power supply.",
+          "description": "GLOBAL safe-ceiling for technoflora as a RAW PWM percent (0-100). Every LIGHT-channel flora write — Jetson flora.py preset duties and RMS speech stream, AND the firmware floraTask animation — is clamped to 4095 * max_duty_pct / 100 so the lamps and power supply never exceed this cap, regardless of preset peak_pct or RMS level. VIBRO channels (flora.vibro_channels, 0-3) are EXEMPT — this ceiling is светофлора-only; vibro power is set by vibro.intensity_pct. Defence-in-depth: clamped on both Jetson and firmware sides (firmware mirrors this ceiling via const kFloraMaxDutyPct in AdamsConfig.h). NOTE: this is RAW PWM (Phase 30 decision A removed perceptual gamma from this ceiling — the % is the PWM signal directly, so 100 = full 4095 counts, 70 = 2867 counts). Default 100 = no clamp (full range allowed); lower it per hardware installation to protect LED strips or power supply.",
           "default": 100,
           "minimum": 0,
           "maximum": 100
@@ -822,12 +822,12 @@
         },
         "vibro": {
           "type": "object",
-          "description": "Vibration-motor policy (channels 11-14, FLORA-06). Thin rhythmic presence linked to the light (D-11). NOT clamped by safety.motor_* (D-04/D-12).",
+          "description": "Vibration-motor policy (channels 0-3, the first 4, FLORA-06). Rhythmic presence linked to the light (D-11). NOT clamped by safety.motor_* NOR by the светофлора flora.max_duty_pct ceiling (D-04/D-12).",
           "properties": {
             "intensity_pct": {
               "type": "integer",
-              "description": "Ceiling on vibro motor amplitude as a percentage of full duty (D-12, restrained default). Acts as the flora-side intensity clamp instead of safety.motor_* (which apply only to action.py motor commands). Firmware should also clamp to this ceiling regardless of requested duty (defence-in-depth, T-29-05).",
-              "default": 30,
+              "description": "Vibro motor amplitude as a percentage of full PWM (0-100). The vibro power dial — vibro is NOT limited by the светофлора flora.max_duty_pct ceiling, so it can run strong (default 95%). Mirrored firmware-side by kFloraVibroIntensityCeiling in AdamsConfig.h.",
+              "default": 95,
               "minimum": 0,
               "maximum": 100
             },

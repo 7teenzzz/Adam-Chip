@@ -166,23 +166,23 @@
   "flora": {
     "enabled": true,
     "light_channels": [
-      0,
-      1,
-      2,
-      3,
       4,
       5,
       6,
       7,
       8,
       9,
-      10
-    ],
-    "vibro_channels": [
+      10,
       11,
       12,
       13,
       14
+    ],
+    "vibro_channels": [
+      0,
+      1,
+      2,
+      3
     ],
     "tick_ms": 20,
     "crossfade_ms": 200,
@@ -196,7 +196,7 @@
       "spark_probability": 0.15
     },
     "vibro": {
-      "intensity_pct": 30,
+      "intensity_pct": 95,
       "silent_states": [
         "attentive"
       ]

@@ -139,11 +139,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "flora": {
         "enabled": True,
-        "light_channels": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-        "vibro_channels": [11, 12, 13, 14],
-        "gamma": 2.2,
+        "light_channels": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+        "vibro_channels": [0, 1, 2, 3],
         "tick_ms": 20,
         "crossfade_ms": 200,
+        "external_timeout_ms": 500,
+        "max_duty_pct": 100,
         "speech": {
             "frame_interval_ms": 80,
             "hdmi_latency_offset_ms": 150,
@@ -152,7 +153,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "spark_probability": 0.15,
         },
         "vibro": {
-            "intensity_pct": 30,
+            "intensity_pct": 95,
             "silent_states": ["attentive"],
         },
         "states": {
