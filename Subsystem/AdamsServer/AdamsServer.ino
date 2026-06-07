@@ -7,6 +7,7 @@
 #include "src/core/NetworkModule.h"
 #include "src/core/OtaModule.h"
 #include "src/camera/CameraModule.h"
+#include "src/io/FloraModule.h"
 #include "src/io/Pca9685Module.h"
 #include "src/core/RuntimeState.h"
 #include "src/io/SensorModule.h"
@@ -124,7 +125,15 @@ void setup() {
   runInitStep("camera", "camera", initCamera, "camera_init_failed");
   runInitStep("mic", "audio-mic", initAudioCapture, "audio_capture_init_failed");
   const bool speakerReady = runInitStep("speaker", "speaker", initSpeakerPlayback, "speaker_init_failed");
-  runInitStep("pca9685", "pca9685", initPca9685, "pca9685_init_failed");
+  if (runInitStep("pca9685", "pca9685", initPca9685, "pca9685_init_failed")) {
+    // FLORA-01: start the autonomous animation task and boot into a quiet
+    // `idle` preset (never dark, never test_all glare) so the installation
+    // breathes before the Jetson connects. test_all stays reachable for
+    // diagnostics via /api/pca9685/scene (RESEARCH Open Question 1).
+    startFloraTask();
+    setFloraState("idle", FloraParams{});
+    bootLog("flora", "flora task started, booted into idle preset");
+  }
   tryStartWebServer();
 
   if (!sWebServerStarted) {

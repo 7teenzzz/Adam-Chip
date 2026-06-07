@@ -160,6 +160,61 @@
       "value_max": 4095
     }
   },
+  "flora": {
+    "enabled": true,
+    "light_channels": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    "vibro_channels": [11, 12, 13, 14],
+    "gamma": 2.2,
+    "tick_ms": 20,
+    "crossfade_ms": 200,
+    "speech": {
+      "frame_interval_ms": 80,
+      "hdmi_latency_offset_ms": 150,
+      "base_duty_pct": 25,
+      "peak_duty_pct": 71,
+      "spark_probability": 0.15
+    },
+    "vibro": {
+      "intensity_pct": 30,
+      "silent_states": ["attentive"]
+    },
+    "states": {
+      "breathe": {
+        "base_pct": 17,
+        "peak_pct": 30,
+        "period_ms": 7000,
+        "vibro": false
+      },
+      "accent": {
+        "base_pct": 10,
+        "peak_pct": 71,
+        "period_ms": 1400,
+        "attack_ms": 250,
+        "vibro": true,
+        "vibro_pulse_ms": 120
+      },
+      "attentive": {
+        "base_pct": 30,
+        "peak_pct": 71,
+        "wave_period_ms": 450,
+        "vibro": false
+      },
+      "think_pulse": {
+        "base_pct": 20,
+        "peak_pct": 63,
+        "flash_ms": 1750,
+        "vibro": "double_pulse"
+      },
+      "wake_bloom": {
+        "base_pct": 0,
+        "peak_pct": 71,
+        "period_ms": 3000,
+        "from_dark": true,
+        "settle_to": "breathe",
+        "vibro": true
+      }
+    }
+  },
   "sounds": {
     "enabled": true,
     "success_path": "data/sounds/success.wav",
