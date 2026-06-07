@@ -3,7 +3,7 @@
 
 if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q "^System/"; then
     echo "[hook] System/ changed — rebuilding graphify graph..."
-    graphify System/ --update
+    graphify update System/
 fi
 
 exit 0

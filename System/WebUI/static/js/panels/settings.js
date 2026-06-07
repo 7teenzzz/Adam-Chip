@@ -182,6 +182,7 @@ const SCHEMA = [
         hint: "Уровень звука, ниже которого аудио считается тишиной (даже если VAD считает иначе). Повысьте, если фоновый шум зала мешает закончить фразу. 0 — отключить фильтр (только WebRTC VAD). Типично 200–500.",
         min: 0, max: 2000, step: 50 },
     ],
+    extras: (ctx) => buildSilenceCalibExtras(ctx),
   },
 
   // ── ASR · WhisperX ───────────────────────────────────────────────────────────
@@ -206,6 +207,15 @@ const SCHEMA = [
         min: 0, max: 3, step: 1 },
       { key: "timeout_sec", label: "Таймаут HTTP-запроса к ASR (с)", type: "number",
         hint: "30 рекомендуется" },
+      { key: "vad_onset", label: "VAD onset (начало речи)", type: "number",
+        min: 0, max: 1, step: 0.05,
+        hint: "0.3 рекомендуется для USB-webcam / ESP32 INMP441 · whisperX default 0.500 (слишком строго для шумных сред) · снизить, если речь не детектируется" },
+      { key: "vad_offset", label: "VAD offset (конец речи)", type: "number",
+        min: 0, max: 1, step: 0.05,
+        hint: "0.2 рекомендуется · whisperX default 0.363 · снизить, чтобы окно речи не закрывалось на коротких паузах внутри фразы" },
+      { key: "logprob_threshold", label: "Порог уверенности сегмента (avg_logprob)", type: "number",
+        min: -3, max: 0, step: 0.05,
+        hint: "-0.8 рекомендуется · сегменты ниже этого порога считаются шумом и отбрасываются · повысить к 0 для строгой фильтрации, понизить к -2 чтобы принимать всё" },
     ],
   },
 
@@ -614,6 +624,91 @@ async function saveTuningField(tuningSectionPath, key, value, status) {
   }
 }
 
+// ── Silence RMS calibration extras ───────────────────────────────────────────
+// Adds a "Калибровать" button below the silence_rms_threshold field.
+// Records 5 s of ambient audio via /api/asr/calibrate/silence_rms, derives
+// the recommended threshold from the p95 RMS level, and applies it on confirm.
+function buildSilenceCalibExtras(ctx) {
+  let busy = false;
+  const status = el("span", {
+    style: "font-size:10px; color:var(--muted); font-family:var(--font-mono)",
+  });
+  const btn = el("button", {
+    class: "btn btn-ghost",
+    style: "font-size:11px; padding:4px 10px",
+    text: "🎙 Калибровать",
+  });
+  btn.addEventListener("click", run);
+
+  async function run() {
+    if (busy) return;
+    if (!confirm(
+      "Калибровка фонового шума.\n\n" +
+      "Адам послушает комнату 5 секунд.\n" +
+      "Не говорите — оставьте обычный фон зала\n" +
+      "(музыка, вентилятор, гул проектора).\n\n" +
+      "Продолжить?"
+    )) return;
+    busy = true;
+    btn.disabled = true;
+    status.textContent = "Запись шума (5 с)…";
+    status.style.color = "var(--warn)";
+    try {
+      const resp = await fetch("/api/asr/calibrate/silence_rms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ duration_sec: 5, margin_factor: 1.4 }),
+      });
+      if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+      const data = await resp.json();
+
+      if (!data.ok) {
+        status.textContent = data.warning || "Нет сэмплов — voice_loop не запущен?";
+        status.style.color = "var(--bad)";
+        return;
+      }
+
+      const p = data.profile;
+      const rec = data.recommended_threshold;
+      const apply = confirm(
+        `Профиль фонового шума (${data.samples} сэмплов, ${data.duration_sec} с):\n` +
+        `  max  = ${p.max}\n` +
+        `  p99  = ${p.p99}\n` +
+        `  p95  = ${p.p95}\n` +
+        `  mean = ${p.mean}\n\n` +
+        `Рекомендуемый порог silence_rms: ${rec}` +
+        (data.warning ? `\n\n⚠ ${data.warning}` : "") +
+        `\n\nПрименить?`
+      );
+      if (apply) {
+        await api.patch("/api/config", { section: "services.asr", patch: { silence_rms_threshold: rec } });
+        status.textContent = `Применено: ${rec}`;
+        status.style.color = "var(--accent)";
+        if (typeof ctx.renderAll === "function") ctx.renderAll();
+      } else {
+        status.textContent = "Отменено.";
+        status.style.color = "var(--muted)";
+      }
+    } catch (e) {
+      status.textContent = "Ошибка: " + (e.message || e);
+      status.style.color = "var(--bad)";
+    } finally {
+      busy = false;
+      btn.disabled = false;
+      setTimeout(() => { status.textContent = ""; }, 8000);
+    }
+  }
+
+  return el("div", {
+    style: "display:flex; align-items:center; gap:8px; margin-top:6px; padding-top:6px; border-top:1px solid var(--border-dim,var(--border))",
+  }, [
+    el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Автокалибровка RMS · фоновый шум"),
+    el("span", { class: "spacer" }),
+    status,
+    btn,
+  ]);
+}
+
 // ── OWW extras ────────────────────────────────────────────────────────────────
 // Adds a draggable wake-word meter + calibration button to the OWW card.
 // The meter widget subscribes to SSE on its own; both the meter and the
@@ -820,7 +915,7 @@ export function mount(target) {
 
     const config  = configRes.value;
     const tuning  = tuningRes.status === "fulfilled" ? tuningRes.value : {};
-    const ctx     = { audioDevices, inputDevices, ttsVoices };
+    const ctx     = { audioDevices, inputDevices, ttsVoices, renderAll };
     container.innerHTML = "";
 
     const cardGrid = el("div", { class: "card-grid" });

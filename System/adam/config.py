@@ -137,6 +137,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "allowed_scenes": ["boot_idle", "all_on", "alternating"],
         "channels": {"min": 0, "max": 15, "value_min": 0, "value_max": 4095},
     },
+    "flora": {
+        "enabled": True,
+        "light_channels": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "vibro_channels": [11, 12, 13, 14],
+        "gamma": 2.2,
+        "tick_ms": 20,
+        "crossfade_ms": 200,
+        "speech": {
+            "frame_interval_ms": 80,
+            "hdmi_latency_offset_ms": 150,
+            "base_duty_pct": 25,
+            "peak_duty_pct": 90,
+            "spark_probability": 0.15,
+        },
+        "vibro": {
+            "intensity_pct": 30,
+            "silent_states": ["attentive"],
+        },
+        "states": {
+            "breathe": {"base_pct": 8, "peak_pct": 30, "period_ms": 7000, "vibro": False},
+            "accent": {"peak_pct": 75, "attack_ms": 250, "vibro": True, "vibro_pulse_ms": 120},
+            "attentive": {"plateau_pct": 40, "vibro": False},
+            "think_pulse": {"base_pct": 20, "flash_ms": 1750, "vibro": "double_pulse"},
+            "wake_bloom": {"from_dark": True, "settle_to": "breathe", "vibro": True},
+        },
+    },
     "sounds": {
         "enabled": True,
         "success_path": "data/sounds/success.wav",

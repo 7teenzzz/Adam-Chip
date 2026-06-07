@@ -114,27 +114,6 @@ bool writeChannelRaw(uint8_t channel, uint16_t duty) {
   return true;
 }
 
-bool writeAllChannelsRaw(const uint16_t *duties) {
-  if (duties == nullptr) {
-    return false;
-  }
-
-  uint8_t payload[16 * 4] = {};
-  for (uint8_t channel = 0; channel < 16; ++channel) {
-    fillChannelPayload(duties[channel], payload + (channel * 4));
-  }
-  if (!writeRegisters(kLed0OnLowReg, payload, sizeof(payload))) {
-    return false;
-  }
-
-  portENTER_CRITICAL(&gRuntimeStateMux);
-  for (uint8_t channel = 0; channel < 16; ++channel) {
-    gRuntimeState.pca9685Channels[channel] = duties[channel];
-  }
-  portEXIT_CRITICAL(&gRuntimeStateMux);
-  return true;
-}
-
 bool resolveDutyFromUpdate(const Pca9685ChannelUpdate &update, uint16_t &duty) {
   if (update.channel >= 16) {
     return false;
@@ -168,6 +147,31 @@ const Pca9685SceneConfig *findScene(const char *name) {
 }
 
 }  // namespace
+
+// Public (declared in Pca9685Module.h) so the flora animation task can write one
+// atomic 16-channel frame per tick. Internal anonymous-namespace helpers
+// (fillChannelPayload / writeRegisters / kLed0OnLowReg) remain visible here
+// because this definition lives in the same translation unit.
+bool writeAllChannelsRaw(const uint16_t *duties) {
+  if (duties == nullptr) {
+    return false;
+  }
+
+  uint8_t payload[16 * 4] = {};
+  for (uint8_t channel = 0; channel < 16; ++channel) {
+    fillChannelPayload(duties[channel], payload + (channel * 4));
+  }
+  if (!writeRegisters(kLed0OnLowReg, payload, sizeof(payload))) {
+    return false;
+  }
+
+  portENTER_CRITICAL(&gRuntimeStateMux);
+  for (uint8_t channel = 0; channel < 16; ++channel) {
+    gRuntimeState.pca9685Channels[channel] = duties[channel];
+  }
+  portEXIT_CRITICAL(&gRuntimeStateMux);
+  return true;
+}
 
 bool initPca9685() {
   uint8_t oldMode = 0;

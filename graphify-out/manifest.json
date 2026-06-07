@@ -1,0 +1,362 @@
+{
+  "System/Config.json": {
+    "mtime": 1780793872.4874527,
+    "ast_hash": "edc7c4e08c20c63cba8b3f54efccf725",
+    "semantic_hash": ""
+  },
+  "System/Config.schema.json": {
+    "mtime": 1780791726.1479144,
+    "ast_hash": "b85c6dd8c2a2e0963861c6aaa70ff452",
+    "semantic_hash": ""
+  },
+  "System/HostUI/server.py": {
+    "mtime": 1777222307.518008,
+    "ast_hash": "c5eb9bf781a0841cb58fe9615c730156",
+    "semantic_hash": ""
+  },
+  "System/Interlayers/Commander.py": {
+    "mtime": 1777230472.5000994,
+    "ast_hash": "991fe1948dd7f1ff0eecb829ae744e24",
+    "semantic_hash": ""
+  },
+  "System/Interlayers/PromtBuilder.py": {
+    "mtime": 1777230472.496099,
+    "ast_hash": "3024cd55a26b925fe6730071c0e19f97",
+    "semantic_hash": ""
+  },
+  "System/Interlayers/__init__.py": {
+    "mtime": 1777230551.381453,
+    "ast_hash": "ce76dfa0e2b4f3d8671eda8dfcac5839",
+    "semantic_hash": ""
+  },
+  "System/Orchestrator.py": {
+    "mtime": 1780793872.4874527,
+    "ast_hash": "edd169879f995a63329c78788308603f",
+    "semantic_hash": ""
+  },
+  "System/Speech/ASR.py": {
+    "mtime": 1777230472.5000994,
+    "ast_hash": "9b96d3c19fa4b490d825d7d0f886d503",
+    "semantic_hash": ""
+  },
+  "System/Speech/ASR_WhisperX.py": {
+    "mtime": 1779078896.5009143,
+    "ast_hash": "a506eeed3320f06e5559f6283dd17e48",
+    "semantic_hash": ""
+  },
+  "System/Speech/TTS.py": {
+    "mtime": 1778850616.7472582,
+    "ast_hash": "2ad606f6bfe6eb005c4855fc0a8c5a34",
+    "semantic_hash": ""
+  },
+  "System/Speech/VLM.py": {
+    "mtime": 1778823762.7854545,
+    "ast_hash": "1e0aee1a937008fabd820f1f0a49a263",
+    "semantic_hash": ""
+  },
+  "System/Speech/__init__.py": {
+    "mtime": 1777230551.381453,
+    "ast_hash": "b08eccc9ff536da4cd2c04a6f88b0964",
+    "semantic_hash": ""
+  },
+  "System/TUI.py": {
+    "mtime": 1776728430.648405,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/api.js": {
+    "mtime": 1777812732.8934193,
+    "ast_hash": "654a1fe5a2ee353e42e5ba4bedf46d54",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/main.js": {
+    "mtime": 1780686086.6133776,
+    "ast_hash": "daebd26ea722b1410cb6fd453b3066fd",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/camera.js": {
+    "mtime": 1777942339.3806195,
+    "ast_hash": "b462868a8458bc07b4353f208e5db39f",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/chat.js": {
+    "mtime": 1780686086.6173778,
+    "ast_hash": "d302539600eeeb62d7c1b9fa16534a8d",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/logs.js": {
+    "mtime": 1778802194.8808582,
+    "ast_hash": "1ebc3ec89003eeeed9f56fa5d428af3b",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/metrics.js": {
+    "mtime": 1780558292.0901942,
+    "ast_hash": "ae5e2762fe3cca4d55e3f0ddb3b1dbef",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/models.js": {
+    "mtime": 1778109238.7482283,
+    "ast_hash": "07a9fa2c344b400daa093da2be747ffa",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/persona.js": {
+    "mtime": 1778102114.7890007,
+    "ast_hash": "09ded06efb4169c28703347597b03d30",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/prompts.js": {
+    "mtime": 1778236393.5965545,
+    "ast_hash": "6b10a1712f394175fb9e4cd2552ab0f4",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/scene.js": {
+    "mtime": 1777812840.2728503,
+    "ast_hash": "e5833dea29ca4ff9ca9c2fb83ee66365",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/services.js": {
+    "mtime": 1778762969.3540673,
+    "ast_hash": "5720976dc24304f9fadb9f45f15fb7a1",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/settings.js": {
+    "mtime": 1780686086.6173778,
+    "ast_hash": "a081a75825cf4132da1dd6a61e77d718",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/subsystem.js": {
+    "mtime": 1778106670.603467,
+    "ast_hash": "44e0663f8b6fa7918a364231379b6b81",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/tuning.js": {
+    "mtime": 1779078896.5009143,
+    "ast_hash": "de5fff2534e19ccb331677d12e22f6cb",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/panels/voice.js": {
+    "mtime": 1778102061.827329,
+    "ast_hash": "c599d52dd1f5f3dd69fa58e147fe5a71",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/router.js": {
+    "mtime": 1778106762.9544241,
+    "ast_hash": "be5f12fb25614c06ad1798db912f371d",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/state.js": {
+    "mtime": 1777812736.293528,
+    "ast_hash": "822be7ec48e3e5567d77d5ee5dccb3e1",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/widgets/statusDot.js": {
+    "mtime": 1778229210.4539783,
+    "ast_hash": "52ff9cd2bb5fdb456151f3996e6e9e03",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/widgets/toast.js": {
+    "mtime": 1777812763.5663996,
+    "ast_hash": "13e60291e0c47303374fb9c3fca2f984",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/widgets/wakeMeter.js": {
+    "mtime": 1780686086.6173778,
+    "ast_hash": "3fd809743af04e2f3a268e75ea10c57b",
+    "semantic_hash": ""
+  },
+  "System/WebUI/static/js/widgets/wav.js": {
+    "mtime": 1777865691.3143263,
+    "ast_hash": "0ef633a15fe00dc3e53099137bd4deb3",
+    "semantic_hash": ""
+  },
+  "System/__init__.py": {
+    "mtime": 1777230297.429119,
+    "ast_hash": "1e36b5b2ec4995b3d914776243790c7f",
+    "semantic_hash": ""
+  },
+  "System/adam/__init__.py": {
+    "mtime": 1777230297.429119,
+    "ast_hash": "014a9c8ac6dc355efb5eb60457f97587",
+    "semantic_hash": ""
+  },
+  "System/adam/action.py": {
+    "mtime": 1779078837.8147135,
+    "ast_hash": "cf9f4a628d084fe8da33b092aea0dd28",
+    "semantic_hash": ""
+  },
+  "System/adam/api_runtime.py": {
+    "mtime": 1780686086.6173778,
+    "ast_hash": "f074a3e4b14dc3a3120ac0da03e656e6",
+    "semantic_hash": ""
+  },
+  "System/adam/audio_dsp.py": {
+    "mtime": 1780686086.6173778,
+    "ast_hash": "f19a582c9114073ac4640da607c843a5",
+    "semantic_hash": ""
+  },
+  "System/adam/camera.py": {
+    "mtime": 1780686086.6173778,
+    "ast_hash": "c248b3fde0a58f42568702c759e607ce",
+    "semantic_hash": ""
+  },
+  "System/adam/config.py": {
+    "mtime": 1780791726.1559148,
+    "ast_hash": "4f0bdd74c379923f38e643e9ff486041",
+    "semantic_hash": ""
+  },
+  "System/adam/device.py": {
+    "mtime": 1780791726.1559148,
+    "ast_hash": "bb0a73e932c174b2d6163b33238b372d",
+    "semantic_hash": ""
+  },
+  "System/adam/echoes_gate.py": {
+    "mtime": 1778851703.6121817,
+    "ast_hash": "2612b29cdd03d18b3f80bf95e6b8b645",
+    "semantic_hash": ""
+  },
+  "System/adam/episodic.py": {
+    "mtime": 1778851703.6121817,
+    "ast_hash": "3dbfb62ed210b9ec013f3cec12e4ecd3",
+    "semantic_hash": ""
+  },
+  "System/adam/events.py": {
+    "mtime": 1780686086.6173778,
+    "ast_hash": "0d7f7619f0759c82dcd7053171bcad48",
+    "semantic_hash": ""
+  },
+  "System/adam/inference.py": {
+    "mtime": 1780686086.6173778,
+    "ast_hash": "25e83120937529123f4b343836e984aa",
+    "semantic_hash": ""
+  },
+  "System/adam/log_viewer.py": {
+    "mtime": 1778802194.8808582,
+    "ast_hash": "8c1301c60f41e663c7fbedc8370cf729",
+    "semantic_hash": ""
+  },
+  "System/adam/media.py": {
+    "mtime": 1780686086.621378,
+    "ast_hash": "b42a1e5ff40da6b5d0206899c356e4cf",
+    "semantic_hash": ""
+  },
+  "System/adam/memory.py": {
+    "mtime": 1778851703.6121817,
+    "ast_hash": "614ec368492d78c02d6f09eb60745294",
+    "semantic_hash": ""
+  },
+  "System/adam/memory_metrics.py": {
+    "mtime": 1778851703.6121817,
+    "ast_hash": "36ddb60da2825e353c083c9acbe5ca43",
+    "semantic_hash": ""
+  },
+  "System/adam/memory_search.py": {
+    "mtime": 1778851703.6121817,
+    "ast_hash": "28e852bca584c91ab6ca8c559849aa2e",
+    "semantic_hash": ""
+  },
+  "System/adam/metrics.py": {
+    "mtime": 1778362219.527728,
+    "ast_hash": "3f1e02c6b85db49ff6dc2f5c2dc80142",
+    "semantic_hash": ""
+  },
+  "System/adam/metrics_dashboard.py": {
+    "mtime": 1780558292.0901942,
+    "ast_hash": "a87576957b8c754fe2c91649f0084a87",
+    "semantic_hash": ""
+  },
+  "System/adam/metrics_sessions.py": {
+    "mtime": 1780558292.0941944,
+    "ast_hash": "f356bd6c2e25014ec42a165237e0f364",
+    "semantic_hash": ""
+  },
+  "System/adam/mic_reader.py": {
+    "mtime": 1780686086.621378,
+    "ast_hash": "d8fe3fd6860f3afb9b71432a5af32676",
+    "semantic_hash": ""
+  },
+  "System/adam/power.py": {
+    "mtime": 1778762969.3540673,
+    "ast_hash": "c931bae24c918fb8399b3772da89b59b",
+    "semantic_hash": ""
+  },
+  "System/adam/prompt.py": {
+    "mtime": 1779078834.014571,
+    "ast_hash": "cbfc73384c231e2c42c07f18f36b007f",
+    "semantic_hash": ""
+  },
+  "System/adam/sound.py": {
+    "mtime": 1777276340.5939264,
+    "ast_hash": "18e1eaea947e0443ca21cb1934cb0ab9",
+    "semantic_hash": ""
+  },
+  "System/adam/system.py": {
+    "mtime": 1778762969.3540673,
+    "ast_hash": "160c34c5581a410995a1378459637c5d",
+    "semantic_hash": ""
+  },
+  "System/adam/tuning.py": {
+    "mtime": 1780686086.621378,
+    "ast_hash": "6dd56431e9078556c053bb40cc205c62",
+    "semantic_hash": ""
+  },
+  "System/adam/ui.py": {
+    "mtime": 1778362079.638622,
+    "ast_hash": "b56783aedd4c4fcfa3976ced3603b519",
+    "semantic_hash": ""
+  },
+  "System/adam/wake_calibration.py": {
+    "mtime": 1779078896.5009143,
+    "ast_hash": "d1ed732165543c421cdaa47c93be8085",
+    "semantic_hash": ""
+  },
+  "System/adam/wake_word.py": {
+    "mtime": 1779078896.5009143,
+    "ast_hash": "f0cb5141c11a5b424be5cbfaf28ba17d",
+    "semantic_hash": ""
+  },
+  "System/adam/webrtc_vad.py": {
+    "mtime": 1779078896.5009143,
+    "ast_hash": "14ace12d1f979163de1c1d7c94252776",
+    "semantic_hash": ""
+  },
+  "System/HostUI/README.md": {
+    "mtime": 1777303919.2326705,
+    "ast_hash": "43339e51068b8ab5d786b9554382cd11",
+    "semantic_hash": ""
+  },
+  "System/WebUI/index.html": {
+    "mtime": 1777813603.1898832,
+    "ast_hash": "8bf991ca0135948974f6cca3fc8d233f",
+    "semantic_hash": ""
+  },
+  "System/WebUI/templates/agent.html": {
+    "mtime": 1778762969.3540673,
+    "ast_hash": "bcf6444cbb8bf8b1b3e306faa0d620d0",
+    "semantic_hash": ""
+  },
+  "System/WebUI/templates/dash.html": {
+    "mtime": 1778764439.097155,
+    "ast_hash": "94588bf620b3e12c32fe5f4d63728d81",
+    "semantic_hash": ""
+  },
+  "System/WebUI/templates/debug.html": {
+    "mtime": 1778362069.0862331,
+    "ast_hash": "a0ff06c1ee433f196a505d376260191f",
+    "semantic_hash": ""
+  },
+  "System/adam/CLAUDE.md": {
+    "mtime": 1779078896.5009143,
+    "ast_hash": "60d97f10a7720ce681d2a660889dcab2",
+    "semantic_hash": ""
+  },
+  "System/requirements-tts.txt": {
+    "mtime": 1777232882.9367404,
+    "ast_hash": "9f1545eaa522298f7791434a6ca3c1be",
+    "semantic_hash": ""
+  },
+  "System/requirements.txt": {
+    "mtime": 1780299629.0201256,
+    "ast_hash": "3677793da08b4b3b635b39a8fafd7271",
+    "semantic_hash": ""
+  }
+}
