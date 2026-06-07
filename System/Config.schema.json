@@ -751,13 +751,6 @@
           "description": "PCA9685 channel indices driven as vibration motors (D-02). Channels 11-14 (4 motors). Channel 15 is left free. Vibro shares the same PCA9685 burst as light but is NOT subject to safety.motor_* clamps (those are for action.py LLM motor commands; flora vibro is continuous low-amplitude presence, D-04/D-12).",
           "default": [11, 12, 13, 14]
         },
-        "gamma": {
-          "type": "number",
-          "description": "Gamma correction exponent applied at frame-write time (duty = round(4095 * (level/255)^gamma)). Edison lamps + human perception are non-linear; gamma ~2.2 linearises perceived brightness (D-13). Firmware precomputes a 256-entry LUT from this value (duplicated in AdamsConfig.h). Calibration-tunable on hardware.",
-          "default": 2.2,
-          "minimum": 1.0,
-          "maximum": 3.0
-        },
         "tick_ms": {
           "type": "integer",
           "description": "Informational mirror of the ESP firmware animation-task tick period in milliseconds (~50 Hz at 20 ms). The real tick lives in the firmware FreeRTOS task; this Config value documents the intended rate and is pushed for reference. Keep <= 50 ms tick (>= 20 Hz) for smooth breathing; do not exceed ~50 Hz to avoid I2C bus contention with the sensor task.",

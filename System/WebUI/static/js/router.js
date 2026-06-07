@@ -10,6 +10,7 @@ const ROUTES = {
   metrics:  { file: "metrics",  label: "Метрики" },
   prompts:  { file: "prompts",  label: "Промты" },
   subsystem: { file: "subsystem", label: "Подсистема" },
+  flora:    { file: "flora",    label: "Технофлора" },
   // backward-compat aliases (not in nav)
   voice:    { file: "voice",    label: "Голос" },
   camera:   { file: "camera",   label: "Камера" },
