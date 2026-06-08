@@ -38,6 +38,27 @@ _VAD_OFFSET = float(os.environ.get("ADAM_ASR_VAD_OFFSET", "0.2"))
 # for tuning — reload the Docker container or systemd unit to pick up the new value.
 _LOGPROB_THRESHOLD = float(os.environ.get("ADAM_ASR_LOGPROB_THRESHOLD", "-0.8"))
 
+# Whisper hallucinates these phrases on near-silence or very short audio clips.
+# They appear in the training data (YouTube subtitles) and have high logprob even
+# on garbage input, so logprob filtering alone doesn't catch them.
+_HALLUCINATION_PATTERNS = {
+    "тревожная музыка",
+    "интригующая музыка",
+    "спокойная музыка",
+    "весёлая музыка",
+    "грустная музыка",
+    "музыка",
+    "субтитры добавлены",
+    "спасибо за просмотр",
+    "подписывайтесь на канал",
+    "продолжение следует",
+    "[тихая музыка]",
+    "[music]",
+    "[applause]",
+    "[blank_audio]",
+    "[inaudible]",
+}
+
 _MODELS_DIR = Path(os.environ.get("ADAM_MODELS_DIR", "Subsystem/Models"))
 
 _MODEL: Any = None
@@ -114,6 +135,7 @@ def _load_model_with_fallback(whisperx: Any, model_size: str, device: str, compu
             compute_type=compute_type,
             language=_LANGUAGE,
             download_root=str(_MODELS_DIR),
+            vad_options={"vad_onset": _VAD_ONSET, "vad_offset": _VAD_OFFSET},
         )
         return model, device
     except Exception as exc:
@@ -130,6 +152,7 @@ def _load_model_with_fallback(whisperx: Any, model_size: str, device: str, compu
                 compute_type="float32",
                 language=_LANGUAGE,
                 download_root=str(_MODELS_DIR),
+                vad_options={"vad_onset": _VAD_ONSET, "vad_offset": _VAD_OFFSET},
             )
             return model, "cpu"
         raise
@@ -163,14 +186,9 @@ def _get_model() -> Any:
 def _transcribe_audio(audio: np.ndarray) -> str:
     """Transcribe a numpy array (float32, 16kHz) directly — used for warmup and internal calls."""
     model = _get_model()
-    # vad_options tuning: onset/offset control the Silero VAD inside whisperx that decides
-    # which audio frames contain speech before sending them to the Whisper encoder.
-    # Without explicit vad_options, whisperx uses its own hardcoded defaults (~0.5/0.35)
-    # which are too conservative for short (<2s) or far-field utterances.
-    result = model.transcribe(
-        audio, language=_LANGUAGE, batch_size=1,
-        vad_options={"vad_onset": _VAD_ONSET, "vad_offset": _VAD_OFFSET},
-    )
+    # vad_options are set at load_model() time (see _load_model_with_fallback).
+    # FasterWhisperPipeline.transcribe() does not accept vad_options directly.
+    result = model.transcribe(audio, language=_LANGUAGE, batch_size=1)
     parts = []
     for seg in result.get("segments", []):
         # avg_logprob: lower = worse quality. Configurable via _LOGPROB_THRESHOLD
@@ -180,7 +198,7 @@ def _transcribe_audio(audio: np.ndarray) -> str:
         if seg.get("avg_logprob", -1.0) < _LOGPROB_THRESHOLD:
             continue
         text = seg.get("text", "").strip()
-        if text:
+        if text and text.lower().strip("[]().,!? ") not in _HALLUCINATION_PATTERNS:
             parts.append(text)
     return " ".join(parts).strip()
 

@@ -59,7 +59,7 @@
         "card_name": "WebCamera",
         "alsa_control": "Mic",
         "alsa_capture_percent": 100,
-        "pulse_source_percent": 100
+        "pulse_source_percent": 105
       },
       "vad_hpf_hz": 220.0,
       "spectrum_bands": 24,
@@ -113,7 +113,14 @@
       "wake_word_required": true,
       "reply_window_expired_action": "standby",
       "silence_after_speech_ms": 1000,
-      "silence_rms_threshold": 1600,
+      "silence_rms_threshold": 750,
+      "silence_keywords": [
+        "стоп",
+        "тихо",
+        "замолчи",
+        "хватит",
+        "молчи"
+      ],
       "disable_local_fallback": true,
       "esp_open_timeout_sec": 8,
       "esp_probe_after_fails": 2,
@@ -125,9 +132,9 @@
       ],
       "esp_stream_restart_after_fails": 5,
       "esp_stream_restart_cooldown_sec": 120.0,
-      "logprob_threshold": 0,
-      "vad_onset": 0.05,
-      "vad_offset": 0.01
+      "logprob_threshold": -1.7,
+      "vad_onset": 0.1,
+      "vad_offset": 0.2
     },
     "tts": {
       "provider": "silero",
@@ -185,8 +192,8 @@
   "wake_word": {
     "engine": "openwakeword",
     "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.05,
-    "debounce_hits": 1,
+    "threshold": 0.02,
+    "debounce_hits": 3,
     "vad_threshold": 0,
     "wake_silence_timeout_sec": 6
   },
@@ -344,7 +351,7 @@
     "voice": {
       "speaker": "eugene",
       "speed_multiplier": 1.0,
-      "volume": 0.95,
+      "volume": 0.1,
       "dsp": {
         "enabled": true,
         "hpf_hz": 240.0,
@@ -362,6 +369,17 @@
         "presence_q": 0.9
       }
     },
+    "prompt": {
+      "history_turns": 4,
+      "include_scene": true,
+      "include_sensors": true
+    },
+    "diagnostics": {
+      "log_level": "info",
+      "metrics_enabled": true,
+      "trace_prompts": false,
+      "trace_post_tts_lag": false
+    },
     "audio_input": {
       "dsp": {
         "enabled": true,
@@ -373,22 +391,22 @@
           {
             "enabled": true,
             "type": "peaking",
-            "freq_hz": 276.0,
-            "gain_db": -0.2,
+            "freq_hz": 285.0,
+            "gain_db": -6.4,
             "q": 1.5
           },
           {
             "enabled": true,
             "type": "peaking",
-            "freq_hz": 803.0,
-            "gain_db": 0.0,
+            "freq_hz": 1067.0,
+            "gain_db": -8.7,
             "q": 0.9
           },
           {
             "enabled": true,
             "type": "highshelf",
             "freq_hz": 4939.0,
-            "gain_db": 0.0,
+            "gain_db": -14.5,
             "q": 0.7
           }
         ],
@@ -484,20 +502,70 @@
               "q": 0.7
             }
           ]
+        },
+        {
+          "name": "A: только HPF (ASR max)",
+          "hpf": {
+            "enabled": true,
+            "hz": 80.0
+          },
+          "bands": []
+        },
+        {
+          "name": "B: шум улицы (ASR рек.)",
+          "hpf": {
+            "enabled": true,
+            "hz": 120.0
+          },
+          "bands": [
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 276.0,
+              "gain_db": -3.0,
+              "q": 1.5
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 450.0,
+              "gain_db": -2.0,
+              "q": 0.8
+            }
+          ]
+        },
+        {
+          "name": "C: highshelf -6dB (компромисс)",
+          "hpf": {
+            "enabled": true,
+            "hz": 80.0
+          },
+          "bands": [
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 276.0,
+              "gain_db": -0.2,
+              "q": 1.5
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 803.0,
+              "gain_db": 0.0,
+              "q": 0.9
+            },
+            {
+              "enabled": true,
+              "type": "highshelf",
+              "freq_hz": 5083.0,
+              "gain_db": -6.0,
+              "q": 0.7
+            }
+          ]
         }
       ],
-      "active_preset": "зал (рекомендуемый)"
-    },
-    "prompt": {
-      "history_turns": 4,
-      "include_scene": true,
-      "include_sensors": true
-    },
-    "diagnostics": {
-      "log_level": "info",
-      "metrics_enabled": true,
-      "trace_prompts": false,
-      "trace_post_tts_lag": false
+      "active_preset": "комната"
     }
   }
 }

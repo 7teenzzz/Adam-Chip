@@ -562,6 +562,12 @@
               "description": "Action when the reply window expires (soft or hard cutoff with no qualifying speech). 'standby' (default) — return voice loop to STANDBY, keep mic running, ready for next wake word. 'stop' — fully stop the voice loop (mic off, no OWW); requires explicit /api/voice/start to resume. Use 'stop' for exhibition power-saving when long idle periods are expected.",
               "default": "standby"
             },
+            "silence_keywords": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of transcript strings that immediately cancel any running LLM/TTS and return the voice loop to STANDBY without processing a dialogue turn. Checked after wake-word stripping so 'адам, стоп' and bare 'стоп' (in REPLY mode) both trigger. Hot-reloadable via /api/config. Match is case-insensitive; leading/trailing punctuation is stripped. A keyword also matches if the transcript starts with it (allows 'стоп пожалуйста' to trigger on keyword 'стоп').",
+              "default": ["стоп", "тихо", "замолчи", "хватит", "молчи"]
+            },
             "disable_local_fallback": {
               "type": "boolean",
               "description": "When true (default and the only supported value in V-S08.1+), MicReader retries the ESP32 stream forever with `esp_retry_backoff_sec`. The legacy local-fallback cascade was removed in Phase 11 — ESP32 INMP441 is the only sanctioned mic. Maintenance-mode debugging on hosts without ESP uses mic_source=\"local\" instead.",

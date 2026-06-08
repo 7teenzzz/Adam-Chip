@@ -14,7 +14,7 @@ input{flex:1;min-width:220px;padding:9px;background:#050505;color:#fff;border:1p
 @media(max-width:980px){.grid{grid-template-columns:1fr}.kv{grid-template-columns:96px 1fr}.turn{flex-direction:column}}
 </style></head><body><div class="wrap">
 <div class="top"><div><h1 style="margin:0">Adam Chip</h1><div class="muted" id="mode">mode</div></div>
-<div class="row"><a href="/dash" style="color:#55d17a">/dash</a><a href="/debug" style="color:#55d17a">/debug</a><button onclick="setMode('maintenance')" class="secondary">maintenance</button><button onclick="setMode('exhibition')">exhibition</button><button onclick="listenStart()">listen start</button><button onclick="listenStop()" class="secondary">listen stop</button><button onclick="stopAgent()" class="secondary">stop/idle</button><button onclick="testVoice()" class="secondary">test voice</button></div></div>
+<div class="row"><a href="/dash" style="color:#55d17a">/dash</a><a href="/debug" style="color:#55d17a">/debug</a><button onclick="setMode('maintenance')" class="secondary">maintenance</button><button onclick="setMode('exhibition')">exhibition</button><button onclick="listenStart()">listen start</button><button onclick="listenStop()" class="secondary">listen stop</button><button onclick="stopAgent()" class="secondary">stop/idle</button><button id="btn-interrupt" onclick="interruptTurn()" class="secondary" style="display:none">⏹ прервать</button><button onclick="testVoice()" class="secondary">test voice</button></div></div>
 <div class="turn"><input id="text" placeholder="Тестовая реплика зрителя"><button onclick="turn()">test turn</button></div>
 <div class="grid">
   <section class="panel"><h3>Power</h3><div class="kv" id="power"></div></section>
@@ -33,7 +33,11 @@ input{flex:1;min-width:220px;padding:9px;background:#050505;color:#fff;border:1p
 async function j(url, opts){const r=await fetch(url, opts); const t=await r.text(); try{return JSON.parse(t)}catch{return t}}
 function yes(v){return v?'<span class="ok">ok</span>':'<span class="bad">fail</span>'}
 function kv(root, rows){document.getElementById(root).innerHTML=rows.map(([k,v])=>`<div class="k">${k}</div><div class="v">${v}</div>`).join('')}
-async function refresh(){const s=await j('/api/agent/status'); mode.textContent=`${s.agent.mode}${s.agent.speaking?' | speaking':''}`;
+async function interruptTurn(){await j('/api/agent/interrupt',{method:'POST'}); refresh()}
+async function refresh(){const s=await j('/api/agent/status');
+const active=s.agent.speaking||s.agent.thinking;
+document.getElementById('btn-interrupt').style.display=active?'':'none';
+mode.textContent=`${s.agent.mode}${s.agent.speaking?' | speaking':''}${s.agent.thinking?' | thinking':''}`;
 kv('power',[['gate',yes(s.power.ok)],['mode',yes(s.power.mode_ok)],['clocks',yes(s.power.clocks_ok)],['errors',(s.power.errors||[]).join(', ')||'none']]);
 kv('media',[['video',`${yes(s.media.video.ready)} ${s.media.video.device||''}`],['input',`${yes(s.media.audio.input_ready)} ${s.media.audio.input_device}`],['output',`${yes(s.media.audio.output_ready)} ${s.media.audio.output_device}`]]);
 kv('llm',[['state',yes(s.services.llm.ok)],['detail',s.services.llm.detail||'']]);

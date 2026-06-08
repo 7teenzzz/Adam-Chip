@@ -539,6 +539,10 @@ class VoiceLoopController:
         self._barge_in_triggered: bool = False
         self._barge_in_q: asyncio.Queue[bytes] | None = None
         self._barge_in_task: asyncio.Task[None] | None = None
+        # Local-mic barge-in feeder: parallel arecord + asyncio task that run
+        # during TTS mute so OWW can scan while _vad_loop is blocked.
+        self._barge_in_proc: "subprocess.Popen[bytes] | None" = None
+        self._barge_in_feed_task: "asyncio.Task[None] | None" = None
         # Pointer to the current LLM streaming producer task — set by
         # _run_dialogue_turn_locked so barge-in monitor can cancel it.
         self._current_producer_task: asyncio.Task[None] | None = None
@@ -887,6 +891,13 @@ class VoiceLoopController:
         (populated by mic_reader._drain_loop regardless of mute state) and feeds
         80ms windows to the OWW model while runtime_state["speaking"] is True.
 
+        Intentionally NOT active during thinking (LLM generating): the ESP32 audio
+        stream has a ~2.3s lag, so chunks arriving during thinking contain the
+        user's own "адам" wake word that triggered this turn. Scanning during
+        thinking would cause OWW to re-trigger on that buffered audio and suppress
+        the reply before it starts. UI-based interruption during thinking is
+        handled by POST /api/agent/interrupt instead.
+
         When the wake word fires: stops TTS immediately, cancels the LLM producer
         task, and sets _barge_in_triggered so _vad_loop transitions to listening
         instead of reply after _transcribe_and_dispatch returns.
@@ -910,11 +921,9 @@ class VoiceLoopController:
                     chunk = await asyncio.wait_for(bq.get(), timeout=0.05)
                 except asyncio.TimeoutError:
                     continue
-                # Apply the same input DSP as _vad_loop so OWW sees processed audio.
-                try:
-                    chunk = self._input_dsp.process(chunk)
-                except Exception:
-                    pass
+                # OWW must see raw (pre-DSP) audio — the model was trained on
+                # natural speech and aggressive EQ (e.g. highshelf cuts) kills
+                # detection. Chunks pushed from _vad_loop are already pre-DSP.
                 _buf.append(chunk)
                 if len(_buf) < self._ww_frames_needed:
                     continue
@@ -999,6 +1008,27 @@ class VoiceLoopController:
                     await asyncio.sleep(0.005)
                     continue
                 _empty_streak = 0
+                # Barge-in: for mic_source=="local" there is no MicReader drain
+                # loop feeding _barge_in_q (that only runs for mic_source=="esp32"),
+                # so without this push _barge_in_monitor_loop scans an eternally
+                # empty queue and OWW never sees audio during TTS — barge-in is
+                # silently dead in maintenance mode. Push the RAW (pre-DSP) chunk,
+                # matching mic_reader._drain_loop — _barge_in_monitor_loop applies
+                # _input_dsp.process itself. Drop-oldest on overflow, never block.
+                if self.mic_source == "local":
+                    _bq = self._barge_in_q
+                    if _bq is not None:
+                        try:
+                            _bq.put_nowait(chunk)
+                        except Exception:
+                            try:
+                                _bq.get_nowait()
+                            except Exception:
+                                pass
+                            try:
+                                _bq.put_nowait(chunk)
+                            except Exception:
+                                pass
                 # Phase 31: streaming input EQ before RMS/VAD/OWW/ASR (D-01/D-02).
                 # Refresh config every ~10 frames (~200 ms) — cheap dict-compare,
                 # rebuilds coefficients only when tuning.audio_input.dsp changed.
@@ -1083,7 +1113,7 @@ class VoiceLoopController:
                         if time.perf_counter() - self._standby_entry_time < self._STANDBY_GUARD_SEC:
                             self.vad_state = "standby_guard"
                             continue
-                        self._ww_buf.append(chunk)
+                        self._ww_buf.append(_raw_chunk_for_monitor)
                         if len(self._ww_buf) >= self._ww_frames_needed:
                             pcm_80ms = b"".join(self._ww_buf)
                             self._ww_buf.clear()
@@ -1293,7 +1323,27 @@ class VoiceLoopController:
                         # in its own task; no per-turn drainer needed. Local
                         # mode also no longer needs special drainer handling.
 
+                        # Local mic barge-in: while _vad_loop is blocked in
+                        # _transcribe_and_dispatch the main arecord is stopped,
+                        # so _barge_in_q receives nothing and OWW goes blind.
+                        # Start a parallel arecord dedicated to OWW-only during
+                        # TTS. Its output never reaches VAD/ASR — only _barge_in_q.
+                        # ESP32 path doesn't need this: _drain_loop feeds the queue.
+                        if _using_process and self._barge_in_q is not None:
+                            self._barge_in_proc = self._start_arecord()
+                            self._barge_in_feed_task = asyncio.create_task(
+                                self._local_barge_in_feed(self._barge_in_proc),
+                                name="adam_local_barge_in_feed",
+                            )
+
                         spoke = await self._transcribe_and_dispatch(pcm)
+
+                        # Stop local barge-in feeder before restarting main arecord.
+                        if self._barge_in_feed_task is not None:
+                            self._barge_in_feed_task.cancel()
+                            await asyncio.gather(self._barge_in_feed_task, return_exceptions=True)
+                            self._barge_in_feed_task = None
+                        self._stop_barge_in_proc()
 
                         # Local mode: restart arecord and update _reader (clean
                         # buffer). ESP32 mode: drainer kept stream live and at
@@ -1402,6 +1452,54 @@ class VoiceLoopController:
         # — see notes/voice-pipeline-vs-ui-layering.md.
         finally:
             self._stop_process()
+            self._stop_barge_in_proc()
+            if self._barge_in_feed_task is not None and not self._barge_in_feed_task.done():
+                self._barge_in_feed_task.cancel()
+            self._barge_in_feed_task = None
+
+    async def _local_barge_in_feed(self, proc: "subprocess.Popen[bytes]") -> None:
+        """Read from a dedicated arecord process and push raw chunks to _barge_in_q.
+
+        Runs only during TTS mute (local mic path) so OWW has audio to scan.
+        The main arecord is stopped separately; this process is for OWW only —
+        its output never reaches VAD/ASR. Cancelled by the caller after TTS ends.
+        """
+        if proc.stdout is None:
+            return
+        read_fn = proc.stdout.read
+        fb = max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
+        try:
+            while True:
+                chunk = await asyncio.to_thread(read_fn, fb)
+                if not chunk:
+                    break
+                bq = self._barge_in_q
+                if bq is None:
+                    break
+                try:
+                    bq.put_nowait(chunk)
+                except Exception:
+                    try:
+                        bq.get_nowait()
+                    except Exception:
+                        pass
+                    try:
+                        bq.put_nowait(chunk)
+                    except Exception:
+                        pass
+        except asyncio.CancelledError:
+            pass
+
+    def _stop_barge_in_proc(self) -> None:
+        """Terminate the local barge-in capture process if running."""
+        proc = self._barge_in_proc
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        self._barge_in_proc = None
 
     def _start_arecord(self) -> subprocess.Popen[bytes]:
         command = [
@@ -1478,6 +1576,27 @@ class VoiceLoopController:
         cleaned = self._wake_re.sub("", transcript).strip() if self._wake_re else transcript
         if not cleaned:
             event_log.append("asr_wake_only", {"raw": transcript, "reason": "only_wake_word"}, turn_id=turn_id)
+            return False
+
+        # Silence-keyword gate: if the transcript matches a stop/silence trigger,
+        # cancel any running LLM/TTS and return to standby without starting a new turn.
+        # Keywords are read live from Config so /api/config patching takes effect instantly.
+        _silence_kws = settings.section("services").get("asr", {}).get("silence_keywords", [])
+        _cleaned_norm = cleaned.lower().strip(".,!?- ")
+        if _silence_kws and any(_cleaned_norm == kw.lower() or _cleaned_norm.startswith(kw.lower())
+                                for kw in _silence_kws):
+            pt = self._current_producer_task
+            if pt and not pt.done():
+                runtime_state["interrupt_tts"] = True
+                pt.cancel()
+            tts.interrupt_playback()
+            event_log.append("silence_command", {
+                "transcript": cleaned, "matched": _cleaned_norm, "action": "standby",
+            }, turn_id=turn_id)
+            self._set_voice_state("standby", "silence_command")
+            self._standby_entry_time = time.perf_counter()
+            if self._wake_engine is not None:
+                self._wake_engine.reset()
             return False
 
         event_log.append("asr_final", {
@@ -2611,6 +2730,26 @@ async def stop() -> dict[str, Any]:
     action = await mcu.idle()
     event_log.append("agent_stop", {"mcu": action.as_dict()})
     return {"ok": True, "mcu": action.as_dict()}
+
+
+@app.post("/api/agent/interrupt")
+async def interrupt_turn() -> dict[str, Any]:
+    """Stop active TTS playback and cancel LLM generation mid-turn.
+
+    Guard: only acts when a turn is actually in progress (thinking or speaking).
+    Without the guard, setting interrupt_tts=True when idle would silently
+    suppress the first TTS chunk of the *next* turn (consumer checks the flag
+    before playing pending_wav and clears it, so the chunk is lost).
+    """
+    if not (runtime_state.get("thinking") or runtime_state.get("speaking")):
+        return {"ok": True, "detail": "no_active_turn"}
+    runtime_state["interrupt_tts"] = True
+    tts.interrupt_playback()
+    pt = voice_loop._current_producer_task
+    if pt is not None and not pt.done():
+        pt.cancel()
+    event_log.append("manual_interrupt", {})
+    return {"ok": True}
 
 
 @app.post("/api/agent/scene")
