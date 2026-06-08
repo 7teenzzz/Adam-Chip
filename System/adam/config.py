@@ -343,6 +343,15 @@ class Settings:
         if not keys:
             raise ValueError("section_path must reference at least one key")
 
+        # Refresh from disk before merging. This `Settings` instance can be
+        # long-lived (e.g. the orchestrator-wide singleton), while other code
+        # paths (TuningStore.apply_patch) persist through their own freshly
+        # loaded Settings instances. Without this reload, save() would dump
+        # this instance's stale in-memory snapshot and silently revert any
+        # changes written elsewhere since it was last loaded — this is what
+        # caused saved EQ presets to disappear after any /api/config PATCH.
+        self.raw = Settings.load().raw
+
         cursor: dict[str, Any] = self.raw
         for key in keys:
             existing = cursor.get(key)

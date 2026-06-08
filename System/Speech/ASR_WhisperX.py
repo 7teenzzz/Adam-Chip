@@ -24,6 +24,20 @@ _DEVICE = os.environ.get("ADAM_ASR_DEVICE", "cuda")
 _COMPUTE_TYPE = os.environ.get("ADAM_ASR_COMPUTE_TYPE", "float16")
 _SAMPLE_RATE = int(os.environ.get("ADAM_ASR_SAMPLE_RATE", "16000"))
 
+# Silero VAD onset/offset thresholds passed to whisperx model.transcribe() via vad_options.
+# vad_onset: probability above which a frame is considered speech start. Lower = more sensitive
+#   to brief/quiet speech (0.1 catches short commands; default ~0.5 misses them).
+# vad_offset: probability below which a frame is considered silence after speech. Lower = more
+#   generous in continuing a speech segment past quiet frames.
+_VAD_ONSET = float(os.environ.get("ADAM_ASR_VAD_ONSET", "0.3"))
+_VAD_OFFSET = float(os.environ.get("ADAM_ASR_VAD_OFFSET", "0.2"))
+
+# Per-segment quality filter: segments with avg_logprob below this are discarded.
+# -0.8 drops many uncertain/quiet segments; -1.7 accepts borderline segments from
+# far-field or brief utterances. Set via env so ASR service doesn't need a restart
+# for tuning — reload the Docker container or systemd unit to pick up the new value.
+_LOGPROB_THRESHOLD = float(os.environ.get("ADAM_ASR_LOGPROB_THRESHOLD", "-0.8"))
+
 _MODELS_DIR = Path(os.environ.get("ADAM_MODELS_DIR", "Subsystem/Models"))
 
 _MODEL: Any = None
@@ -149,13 +163,21 @@ def _get_model() -> Any:
 def _transcribe_audio(audio: np.ndarray) -> str:
     """Transcribe a numpy array (float32, 16kHz) directly — used for warmup and internal calls."""
     model = _get_model()
-    result = model.transcribe(audio, language=_LANGUAGE, batch_size=1)
+    # vad_options tuning: onset/offset control the Silero VAD inside whisperx that decides
+    # which audio frames contain speech before sending them to the Whisper encoder.
+    # Without explicit vad_options, whisperx uses its own hardcoded defaults (~0.5/0.35)
+    # which are too conservative for short (<2s) or far-field utterances.
+    result = model.transcribe(
+        audio, language=_LANGUAGE, batch_size=1,
+        vad_options={"vad_onset": _VAD_ONSET, "vad_offset": _VAD_OFFSET},
+    )
     parts = []
     for seg in result.get("segments", []):
-        # avg_logprob: lower = worse quality. -0.8 tolerates quiet/distant speech
-        # from the ESP32 INMP441 mic; was -0.5, which silently dropped legit utterances.
+        # avg_logprob: lower = worse quality. Configurable via _LOGPROB_THRESHOLD
+        # (env ADAM_ASR_LOGPROB_THRESHOLD). Default -0.8 tolerates quiet/distant speech;
+        # set to -1.7 to also accept brief uncertain segments from the INMP441 mic.
         # NOTE: whisperx uses avg_logprob (NOT no_speech_prob which is faster-whisper only)
-        if seg.get("avg_logprob", -1.0) < -0.8:
+        if seg.get("avg_logprob", -1.0) < _LOGPROB_THRESHOLD:
             continue
         text = seg.get("text", "").strip()
         if text:

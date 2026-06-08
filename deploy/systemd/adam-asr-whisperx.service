@@ -27,6 +27,13 @@ Environment=ADAM_ASR_WHISPERX_MODEL=small
 Environment=ADAM_ASR_LANGUAGE=ru
 Environment=ADAM_ASR_DEVICE=cuda
 Environment=ADAM_ASR_COMPUTE_TYPE=float16
+# Silero VAD thresholds — lower onset/offset = more sensitive to brief/quiet speech.
+# Restored from commit e390d16; default whisperx values (~0.5) miss short commands.
+Environment=ADAM_ASR_VAD_ONSET=0.1
+Environment=ADAM_ASR_VAD_OFFSET=0.2
+# Per-segment logprob filter — segments below this are discarded as noise/hallucination.
+# -1.7 accepts borderline uncertain segments (was hardcoded -0.8, which dropped ~1.5s clips).
+Environment=ADAM_ASR_LOGPROB_THRESHOLD=-1.7
 Environment=HF_HOME=/home/i17jet/Agents/Adam-Chip/data/hf_cache
 ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python -m Speech.ASR_WhisperX
 Restart=always

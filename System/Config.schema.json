@@ -600,6 +600,27 @@
               "maximum": 3600.0,
               "description": "Phase 21A-08 watchdog: minimum interval (seconds) between two consecutive auto-restart triggers. Prevents restart-loop when ESP firmware takes longer than `esp_retry_backoff_sec` window to bring `:81` server back up — without this gate, fails climb to threshold again before previous restart finished settling. Default 120 sec (2 min) is comfortable for the ~8-15 sec ESP web-stack reboot plus a safety margin. Lower values (60 sec) can be used during exhibition for faster recovery at the risk of restart spam; higher values (300 sec) for conservative maintenance-mode operation.",
               "default": 120.0
+            },
+            "vad_onset": {
+              "type": "number",
+              "minimum": 0.01,
+              "maximum": 0.99,
+              "description": "Silero VAD speech-onset probability threshold passed to whisperx model.transcribe() via vad_options. A frame is considered speech start when Silero's probability exceeds this. Lower = more sensitive to brief or quiet speech. Default whisperx value is ~0.5, which misses 1-2s far-field commands. 0.1 restores behavior from commit e390d16. Mirrored in env ADAM_ASR_VAD_ONSET (systemd/Docker service). Changing Config.json has no effect without restarting the WhisperX service.",
+              "default": 0.1
+            },
+            "vad_offset": {
+              "type": "number",
+              "minimum": 0.01,
+              "maximum": 0.99,
+              "description": "Silero VAD speech-offset probability threshold passed to whisperx model.transcribe() via vad_options. Speech segment ends when Silero probability drops below this. Lower = more permissive in continuing a segment through quiet frames (breath gaps, hesitations). Mirrored in env ADAM_ASR_VAD_OFFSET. Changing Config.json has no effect without restarting the WhisperX service.",
+              "default": 0.2
+            },
+            "logprob_threshold": {
+              "type": "number",
+              "minimum": -5.0,
+              "maximum": 0.0,
+              "description": "Per-segment avg_logprob quality filter in ASR_WhisperX.py. Segments with avg_logprob below this are discarded as noise or hallucination. -0.8 (old hardcode) discards most uncertain segments, which silently drops short or far-field utterances. -1.7 (restored from e390d16) keeps borderline segments and significantly improves recognition of brief commands. Mirrored in env ADAM_ASR_LOGPROB_THRESHOLD. Changing Config.json has no effect without restarting the WhisperX service.",
+              "default": -1.7
             }
           }
         },
@@ -830,6 +851,11 @@
           "type": "integer",
           "description": "DEPRECATED — moved to services.asr.listening_silence_timeout_sec in Phase 11. The timer is semantically part of the ASR pipeline (it counts silence within LISTENING phase), not the wake-word engine. Reader prefers the new key; this one is kept as a fallback for backwards compatibility with old Config.json files.",
           "default": 6
+        },
+        "barge_in_enabled": {
+          "type": "boolean",
+          "description": "When true, a second OWW wake-word detection during TTS playback immediately interrupts Adam (stops aplay and cancels the LLM producer) and transitions the voice loop to LISTENING so the user can speak their new request. Requires the OWW engine to be configured (engine != 'none'). Safe to disable (false) if false-positive interrupts are a problem at the exhibition venue.",
+          "default": true
         }
       }
     },
