@@ -997,6 +997,55 @@
             }
           }
         },
+        "audio_input": {
+          "type": "object",
+          "description": "Phase 31 — microphone INPUT tuning panel. Streaming biquad EQ applied to captured PCM in Orchestrator._vad_loop BEFORE WebRTC-VAD/OpenWakeWord/ASR (so suppressing parasitic frequencies actually improves wake-word & transcription), plus named saved presets. Hot-reloadable like voice.dsp; consumed by adam.audio_dsp.InputDSP. The volume slider in the panel drives media.audio.input_gain (separate, durable hardware gain). Fail-safe: any DSP error → raw PCM bypass, voice loop never goes silent.",
+          "properties": {
+            "dsp": {
+              "type": "object",
+              "description": "Live input DSP chain. Generalises the legacy media.audio.vad_hpf_hz 1-pole HPF into a configurable 2nd-order HPF + parametric bands.",
+              "properties": {
+                "enabled": { "type": "boolean", "default": true, "description": "MASTER toggle (D-04). false → pure passthrough (raw captured PCM), bypassing all stages — voice loop behaves as before the panel existed. Use to A/B the whole DSP." },
+                "hpf": {
+                  "type": "object",
+                  "description": "High-pass stage. Replaces legacy media.audio.vad_hpf_hz (no double filtering — D-01). 2nd-order RBJ highpass (~12 dB/oct) vs the old 1-pole.",
+                  "properties": {
+                    "enabled": { "type": "boolean", "default": true, "description": "Independent toggle for the HPF stage (D-04)." },
+                    "hz": { "type": "number", "minimum": 0, "maximum": 2000, "default": 220.0, "description": "Cutoff in Hz. 220 mirrors the legacy vad_hpf_hz default; lower (~90) to keep male fundamentals, raise to cut more hum. 0 disables." }
+                  }
+                },
+                "bands": {
+                  "type": "array",
+                  "description": "Parametric EQ bands applied in order after the HPF. Empty = HPF only (= legacy behaviour). Each band is one RBJ biquad.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": { "type": "boolean", "default": true, "description": "Per-band toggle (D-04) — disable to hear/measure its contribution without deleting it." },
+                      "type": { "type": "string", "enum": ["peaking", "lowshelf", "highshelf", "lowpass", "highpass"], "default": "peaking", "description": "Filter shape. peaking/shelf use gain_db; lowpass/highpass ignore it." },
+                      "freq_hz": { "type": "number", "minimum": 20, "maximum": 8000, "default": 1000.0, "description": "Centre/corner frequency in Hz. Capped at Nyquist (8000 @ 16 kHz)." },
+                      "gain_db": { "type": "number", "minimum": -24, "maximum": 24, "default": 0.0, "description": "Boost(+)/cut(−) in dB for peaking/shelf. Near-zero = section skipped." },
+                      "q": { "type": "number", "minimum": 0.1, "maximum": 10.0, "default": 1.0, "description": "Quality factor (bandwidth). Higher = narrower/surgical, lower = broad." }
+                    }
+                  }
+                },
+                "monitor_tap": { "type": "string", "enum": ["pre_eq", "post_eq"], "default": "post_eq", "description": "What the browser monitor WebSocket streams (D-06/D-07). post_eq = hear the processed signal the model gets (default); pre_eq = raw input for A/B comparison." }
+              }
+            },
+            "presets": {
+              "type": "array",
+              "description": "Named saved EQ curves (D-05). CRUD from the panel via API; stored here in Config.json (single source of truth, hot-reload). Activating a preset copies its hpf/bands into dsp.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64, "description": "Unique preset name (used as the activation key)." },
+                  "hpf": { "type": "object", "description": "Saved HPF stage (same shape as dsp.hpf)." },
+                  "bands": { "type": "array", "description": "Saved band list (same shape as dsp.bands)." }
+                }
+              }
+            },
+            "active_preset": { "type": ["string", "null"], "default": null, "description": "Name of the currently-applied preset, or null for a hand-tuned/ad-hoc dsp curve." }
+          }
+        },
         "prompt": {
           "type": "object",
           "description": "Prompt-builder runtime knobs. NOTE: agent.history_turns is a separate ceiling; tuning.prompt.history_turns is the *effective* value used per turn.",

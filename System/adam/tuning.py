@@ -189,6 +189,54 @@ class DiagnosticsTuning(BaseModel):
     trace_post_tts_lag: bool = False
 
 
+class InputHpfTuning(BaseModel):
+    """Phase 31 — input high-pass stage (generalises legacy media.audio.vad_hpf_hz)."""
+
+    enabled: bool = True
+    hz: float = Field(220.0, ge=0, le=2000)
+
+
+class InputDspBand(BaseModel):
+    """Phase 31 — one parametric EQ band on the microphone INPUT path."""
+
+    enabled: bool = True
+    type: Literal["peaking", "lowshelf", "highshelf", "lowpass", "highpass"] = "peaking"
+    freq_hz: float = Field(1000.0, ge=20, le=8000)
+    gain_db: float = Field(0.0, ge=-24, le=24)
+    q: float = Field(1.0, ge=0.1, le=10.0)
+
+
+class InputDspTuning(BaseModel):
+    """Phase 31 — streaming biquad EQ applied to captured mic PCM BEFORE OWW/ASR.
+
+    Hot-reloadable like voice.dsp. `enabled` is the master toggle (D-04); each
+    band/hpf has its own `enabled` for A/B diagnostics. Consumed by
+    adam.audio_dsp.InputDSP in Orchestrator._vad_loop. monitor_tap selects what
+    the browser monitor WebSocket hears (D-06/D-07).
+    """
+
+    enabled: bool = True
+    hpf: InputHpfTuning = Field(default_factory=InputHpfTuning)
+    bands: list[InputDspBand] = Field(default_factory=list)
+    monitor_tap: Literal["pre_eq", "post_eq"] = "post_eq"
+
+
+class EqPreset(BaseModel):
+    """Phase 31 — named saved EQ curve (D-05). Stored in Config.json, CRUD via API."""
+
+    name: str = Field(..., min_length=1, max_length=64)
+    hpf: InputHpfTuning = Field(default_factory=InputHpfTuning)
+    bands: list[InputDspBand] = Field(default_factory=list)
+
+
+class AudioInputTuning(BaseModel):
+    """Phase 31 — microphone input tuning: live DSP + saved presets."""
+
+    dsp: InputDspTuning = Field(default_factory=InputDspTuning)
+    presets: list[EqPreset] = Field(default_factory=list)
+    active_preset: Optional[str] = None
+
+
 class Tuning(BaseModel):
     """Корневая модель runtime-настроек персоны."""
 
@@ -199,6 +247,7 @@ class Tuning(BaseModel):
     scene_director: SceneDirectorTuning = Field(default_factory=SceneDirectorTuning)
     llm: LLMTuning = Field(default_factory=LLMTuning)
     voice: VoiceTuning = Field(default_factory=VoiceTuning)
+    audio_input: AudioInputTuning = Field(default_factory=AudioInputTuning)
     prompt: PromptTuning = Field(default_factory=PromptTuning)
     diagnostics: DiagnosticsTuning = Field(default_factory=DiagnosticsTuning)
 

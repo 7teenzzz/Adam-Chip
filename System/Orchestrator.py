@@ -502,6 +502,16 @@ class VoiceLoopController:
             self._vad_hpf_alpha = 0.0
         self._vad_hpf_x_prev: float = 0.0
         self._vad_hpf_y_prev: float = 0.0
+        # Phase 31: streaming input EQ (generalises the legacy 1-pole HPF above).
+        # Config lives in tuning.audio_input.dsp (hot-reloadable). When master-enabled
+        # this REPLACES _apply_vad_hpf in _vad_loop; the HPF stage carries the same
+        # default cutoff (220 Hz) so out-of-the-box behaviour is unchanged.
+        try:
+            _idsp_cfg = tuning_store.current().audio_input.dsp.model_dump()
+        except Exception:
+            _idsp_cfg = {}
+        self._input_dsp = audio_dsp.InputDSP(_idsp_cfg, sample_rate=self.sample_rate)
+        self._input_dsp_poll: int = 0
 
     def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
         """Apply audio config changes live. Returns list of fields that require loop restart."""
@@ -824,7 +834,19 @@ class VoiceLoopController:
                     await asyncio.sleep(0.005)
                     continue
                 _empty_streak = 0
-                chunk = self._apply_vad_hpf(chunk)
+                # Phase 31: streaming input EQ before RMS/VAD/OWW/ASR (D-01/D-02).
+                # Refresh config every ~10 frames (~200 ms) — cheap dict-compare,
+                # rebuilds coefficients only when tuning.audio_input.dsp changed.
+                self._input_dsp_poll += 1
+                if self._input_dsp_poll >= 10:
+                    self._input_dsp_poll = 0
+                    try:
+                        self._input_dsp.ensure_config(
+                            tuning_store.current().audio_input.dsp.model_dump()
+                        )
+                    except Exception:
+                        pass
+                chunk = self._input_dsp.process(chunk)
 
                 _rms = audioop.rms(chunk, 2)
                 vad_voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
