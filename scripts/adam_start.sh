@@ -192,6 +192,14 @@ if ! ${EXPLICIT_NODES} && ! ${EMPTY_MODE} && ! ${START_ASR}; then
 fi
 echo
 
+# --------- 0a. Mic input gain (durable across reboot, Config-driven) ---------
+# Mirrors the orchestrator unit's ExecStartPre for manual starts: re-asserts the
+# WebCamera ALSA capture boost + pulse source volume from Config.json so OWW keeps
+# its sensitivity. Best-effort — never blocks the start.
+if [[ -x "${ROOT_DIR}/scripts/adam_audio_input_gain.sh" ]]; then
+  "${ROOT_DIR}/scripts/adam_audio_input_gain.sh" 2>&1 | sed 's/^/  /' || true
+fi
+
 # --------- 0. Log Viewer (always-on, independent of AI services) -------------
 if systemctl cat adam-logviewer.service >/dev/null 2>&1; then
   if ! systemctl is-active --quiet adam-logviewer.service 2>/dev/null; then
@@ -265,24 +273,51 @@ if [[ ${#SPEECH_SERVICES[@]} -gt 0 ]]; then
   fi
 fi
 
-# --------- 2b. ASR (WhisperX — Docker, host network) -------------------------
+# --------- 2b. ASR (WhisperX — Docker CUDA, canonical sole owner of :8095) ----
+# The native adam-asr-whisperx.service is masked (CPU-only, deprecated). Verification
+# is health-based, NOT `docker ps` name: a container can be "running" while its uvicorn
+# server has shut down after failing to bind 8095 (e.g. a stray process squatting the
+# port) — so we poll /health and confirm device=cuda before declaring success.
+asr_verify_health() {  # echoes the /health body; returns 0 if model loaded
+  local d
+  for _ in $(seq 1 40); do
+    d="$(curl --noproxy '*' -fsS http://127.0.0.1:8095/health 2>/dev/null || true)"
+    if echo "${d}" | grep -q '"model_loaded":true'; then echo "${d}"; return 0; fi
+    sleep 2
+  done
+  echo "${d}"; return 1
+}
+asr_report() {  # arg: /health body
+  if echo "$1" | grep -q '"device":"cuda"'; then
+    echo "  ✓ adam-asr-whisperx (Docker, :8095, device=cuda)"
+  elif echo "$1" | grep -q '"model_loaded":true'; then
+    echo "  ⚠ adam-asr-whisperx работает, но device≠cuda — docker logs adam-asr-whisperx"
+  else
+    echo "  ✗ adam-asr-whisperx не ответил на /health — docker logs adam-asr-whisperx"
+  fi
+}
 if ${START_ASR}; then
   if ! command -v docker >/dev/null 2>&1; then
     echo "  ! docker не найден — ASR не запущен"
-  elif docker ps --format '{{.Names}}' | grep -qx "adam-asr-whisperx"; then
-    echo "  ✓ adam-asr-whisperx уже работает (Docker, :8095)"
   else
-    echo "⏵ Запуск ASR (WhisperX Docker):"
-    if (cd "${ROOT_DIR}" && docker compose up -d adam-asr-whisperx >/dev/null 2>&1); then
-      sleep 3
-      if docker ps --format '{{.Names}}' | grep -qx "adam-asr-whisperx"; then
-        echo "  ✓ adam-asr-whisperx (Docker, :8095)"
-      else
-        echo "  ✗ adam-asr-whisperx не стартовал — проверь: docker logs adam-asr-whisperx"
-      fi
+    # Guard: if :8095 is held by a non-container process (masked native somehow alive),
+    # the container will never bind. Surface it instead of failing silently.
+    if ss -ltn 2>/dev/null | grep -q ':8095 ' && \
+       ! docker ps --format '{{.Names}}' | grep -qx "adam-asr-whisperx"; then
+      echo "  ! порт 8095 занят НЕ контейнером — останавливаю native ASR (deprecated)…"
+      sudo systemctl stop adam-asr-whisperx.service 2>/dev/null || true
+      sleep 1
+    fi
+    if docker ps --format '{{.Names}}' | grep -qx "adam-asr-whisperx"; then
+      body="$(asr_verify_health)"; asr_report "${body}"
     else
-      echo "  ✗ docker compose up adam-asr-whisperx failed"
-      echo "    Пересборка: cd ${ROOT_DIR} && docker compose build adam-asr-whisperx"
+      echo "⏵ Запуск ASR (WhisperX Docker, CUDA):"
+      if (cd "${ROOT_DIR}" && docker compose up -d adam-asr-whisperx >/dev/null 2>&1); then
+        body="$(asr_verify_health)"; asr_report "${body}"
+      else
+        echo "  ✗ docker compose up adam-asr-whisperx failed"
+        echo "    Пересборка: cd ${ROOT_DIR} && docker compose build adam-asr-whisperx"
+      fi
     fi
   fi
 fi
@@ -339,47 +374,32 @@ elif [[ "${START_VLM}" == "auto" ]] && [[ ! -e "${LIVE_VLM_CAMERA}" ]]; then
   echo "  · Live VLM пропущен (нет ${LIVE_VLM_CAMERA}). Запусти руками: scripts/adam_live_vlm.sh"
 fi
 
-# --------- 4. Orchestrator ---------------------------------------------------
+# --------- 4. Orchestrator (systemd — единый владелец, Phase 30 Option A) -----
+# Раньше bare-nohup + pkill дрались с systemd-юнитом → дубликаты. Теперь — только
+# systemd (flock-singleton в Orchestrator.py страхует). Динамический
+# ADAM_EXPECTED_SERVICES опущен: юнит берёт env из /etc/adam-chip/adam.env,
+# стартовый звук работает по дефолту (минорно; вынести в файл — отдельный TODO).
 if ${START_ORCH}; then
-  existing_pids="$(pgrep -f 'System/Orchestrator\.py' || true)"
-  if [[ -n "${existing_pids}" ]]; then
-    echo
-    echo "⏵ Останавливаю предыдущий orchestrator: ${existing_pids}"
-    kill ${existing_pids} 2>/dev/null || true
-    sleep 1
-    remaining="$(pgrep -f 'System/Orchestrator\.py' || true)"
-    if [[ -n "${remaining}" ]]; then
-      kill -9 ${remaining} 2>/dev/null || true
-    fi
-  fi
-
   echo
-  echo "⏵ Запуск orchestrator…"
-  cd "${ROOT_DIR}"
-  PYTHONPATH="${ROOT_DIR}/System" \
-    ADAM_MODE="${MODE}" \
-    ADAM_ORCHESTRATOR_PORT="${PORT}" \
-    ADAM_MODELS_DIR="${MODELS_DIR}" \
-    ADAM_EXPECTED_SERVICES="${EXPECTED_SERVICES}" \
-    HF_HOME="${MODELS_DIR}/hf" \
-    HF_HUB_CACHE="${MODELS_DIR}/hf/hub" \
-    NO_PROXY="*" no_proxy="*" \
-    http_proxy="" https_proxy="" HTTP_PROXY="" HTTPS_PROXY="" \
-    nohup "${VENV_PYTHON}" "${ROOT_DIR}/System/Orchestrator.py" >>"${LOG_FILE}" 2>&1 &
-  ORCH_PID=$!
-  echo "${ORCH_PID}" > "${PID_FILE}"
-  disown "${ORCH_PID}" 2>/dev/null || true
+  echo "⏵ orchestrator → systemd (единый владелец)…"
+  if [[ "${EUID}" -ne 0 ]]; then sudo systemctl stop adam-orchestrator.service 2>/dev/null || true
+  else systemctl stop adam-orchestrator.service 2>/dev/null || true; fi
+  strays="$(pgrep -f 'System/Orchestrator\.py' || true)"
+  if [[ -n "${strays}" ]]; then kill ${strays} 2>/dev/null || true; sleep 1; kill -9 ${strays} 2>/dev/null || true; fi
+  rm -f "${PID_FILE}"
+  if [[ "${EUID}" -ne 0 ]]; then sudo systemctl start adam-orchestrator.service
+  else systemctl start adam-orchestrator.service; fi
 
-  for i in $(seq 1 40); do
+  for i in $(seq 1 60); do
     if curl --noproxy '*' -fsS "http://127.0.0.1:${PORT}/api/agent/status" >/dev/null 2>&1; then
       break
     fi
-    sleep 0.3
+    sleep 0.5
   done
 
-  if ! kill -0 "${ORCH_PID}" 2>/dev/null; then
-    echo "✗ Orchestrator упал. Последние строки лога:" >&2
-    tail -n 30 "${LOG_FILE}" >&2 || true
+  if ! systemctl is-active --quiet adam-orchestrator.service 2>/dev/null; then
+    echo "✗ Orchestrator не поднялся (systemd). journalctl -u adam-orchestrator.service -n 30:" >&2
+    journalctl -u adam-orchestrator.service -n 30 --no-pager >&2 2>/dev/null || true
     exit 1
   fi
 else

@@ -19,7 +19,7 @@ ADAM_CONFIG=${ROOT_DIR}/System/Config.json
 ADAM_DATA_DIR=${ROOT_DIR}/data/adam
 ADAM_ORCHESTRATOR_HOST=0.0.0.0
 ADAM_ORCHESTRATOR_PORT=8080
-ESP_BASE_URL=http://192.168.0.171
+ESP_BASE_URL=http://10.10.10.171
 ADAM_LLM_PROVIDER=openai
 ADAM_LLM_BASE_URL=http://127.0.0.1:8081/v1
 ADAM_LLM_MODEL=gemma-4-E4B-it-UD-Q4_K_XL
@@ -81,6 +81,11 @@ ensure_env_line "ADAM_VLM_MODEL" "Efficient-Large-Model/VILA1.5-3b"
 ensure_env_line "ADAM_AUDIO_INPUT_DEVICE" "pulse"
 ensure_env_line "ADAM_AUDIO_OUTPUT_DEVICE" "default"
 
+# Prune deprecated ASR env keys: ADAM_ASR_WHISPER_* (singular, no X) were superseded
+# by ADAM_ASR_WHISPERX_*. The stale ADAM_ASR_WHISPER_BASE_URL even pointed at :8083
+# (the logviewer port). The regex matches WHISPER_ but NOT WHISPERX_ (X follows WHISPER).
+sed -i '/^ADAM_ASR_WHISPER_/d' "${ENV_FILE}"
+
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-orchestrator.service" /etc/systemd/system/adam-orchestrator.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-tts-silero.service" /etc/systemd/system/adam-tts-silero.service
 # NOTE: adam-asr-whisperx.service (native) is NOT installed — ASR runs via Docker.
@@ -95,7 +100,26 @@ install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-exhibition.target" /etc/systemd
 ensure_env_line "ADAM_LOG_VIEWER_PORT" "8083"
 
 systemctl daemon-reload
-systemctl enable adam-orchestrator.service adam-tts-silero.service adam-llm.service adam-vlm.service adam-logviewer.service adam-exhibition.target
+# adam-vlm НЕ авто-стартует: VILA Docker ест ~5.6 GB и OOM-ит llama.cpp на 16 GB
+# Jetson после ребута (Phase 30 durability). Вернуть: sudo systemctl enable --now adam-vlm.service
+systemctl enable adam-orchestrator.service adam-tts-silero.service adam-llm.service adam-logviewer.service adam-exhibition.target
+systemctl disable adam-vlm.service 2>/dev/null || true
+
+# Native adam-asr-whisperx.service is DEPRECATED — it uses pip ctranslate2 which is
+# CPU-only on aarch64, so it transcribes on CPU (~9.8s/utterance) AND squats on port
+# 8095, blocking the canonical Docker container (dustynv faster-whisper, CUDA ctranslate2)
+# from binding → "address already in use" → ASR silently falls back to CPU.
+# We STOP it, REMOVE the orphan unit file (this installer never (re)installs it — there is
+# no `install` line for it above), daemon-reload, then MASK so any `systemctl start
+# adam-asr-whisperx.service` (NOPASSWD wildcard lets any script call it) hard-fails.
+# `mask` can only overlay a unit with no real file in /etc/systemd/system — hence the rm
+# first. After this, Docker is the single ASR owner of 8095, always on CUDA.
+# To revert on a non-Docker host: sudo systemctl unmask adam-asr-whisperx.service &&
+#   sudo install -m0644 deploy/systemd/adam-asr-whisperx.service /etc/systemd/system/
+systemctl stop adam-asr-whisperx.service 2>/dev/null || true
+rm -f /etc/systemd/system/adam-asr-whisperx.service
+systemctl daemon-reload
+systemctl mask adam-asr-whisperx.service 2>/dev/null || true
 
 echo "Installed Adam Chip systemd units."
 echo "Edit ${ENV_FILE} for device/service overrides."

@@ -3558,7 +3558,39 @@ if _WEBUI_DIR.exists():
     app.mount("/ui", StaticFiles(directory=str(_WEBUI_DIR), html=True), name="ui")
 
 
+_singleton_lock_fd = None
+
+
+def _acquire_singleton_lock() -> None:
+    """Enforce a single orchestrator instance (Phase 30, Option A — systemd is the
+    sole owner; this flock is defence-in-depth against stray bare/manual launches
+    that historically duplicated the orchestrator and fought over :8080 + the mic).
+
+    Any second instance — regardless of launcher (systemd / scripts / manual) —
+    exits cleanly with code 0 so systemd's `Restart=on-failure` treats it as
+    success and does NOT relaunch it into a churn loop.
+    """
+    global _singleton_lock_fd
+    import fcntl
+
+    lock_path = PROJECT_ROOT / "data" / "adam" / "orchestrator.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = open(lock_path, "w")
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.stderr.write(
+            f"[orchestrator] another instance already holds the singleton lock "
+            f"({lock_path}) — exiting cleanly (exit 0).\n"
+        )
+        raise SystemExit(0)
+    fd.write(f"{os.getpid()}\n")
+    fd.flush()
+    _singleton_lock_fd = fd  # keep fd open for the whole process lifetime
+
+
 def main() -> None:
+    _acquire_singleton_lock()
     try:
         import uvicorn
     except ImportError as exc:
