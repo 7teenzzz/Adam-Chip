@@ -1,46 +1,31 @@
-# BRANCH: ESP-Mic-Fix
+# Branch: voice-loop-recovery
 
-**Цель:** устранить ложные срабатывания микрофона INMP441 — постоянный
-низкочастотный фон/всплески уровня в тишине («громкость поднимается, хотя
-ничего не происходит»).
+**Diverged from:** 9da07f9 («Стабильная работа всего аудио-тракта с esp динамиками и usb cam&mic»)
+**Goal:** Восстановить корректную работу голосового цикла ПО ФАКТУ (mic→VAD→wake→ASR→LLM→TTS→выход на ESP), затем интегрировать технофлору из коммита 47fd0c5 без повторной поломки голоса.
+**Status:** experimenting
+**Merge target:** main
+**Phase:** 30 — см. `.planning/phases/30-voice-loop-recovery-flora-integration/30-CONTEXT.md` (решения D-01..D-05)
 
-**Базовая ветка:** ответвлена от `ESP-Audio-Out` (включает durable-фикс
-спикера `:82`), чтобы тестировать mic + speaker вместе.
+**Merge conditions:**
+1. Голосовой цикл работает end-to-end по живому тесту через ESP-динамик: wake «адам» → ASR → llama.cpp(:8081) ответ → Silero TTS(:8082) → звук слышен из ESP.
+2. Ollama ПОЛНОСТЬЮ удалена (apt purge + бинарь + модели + systemd unit) — D-04. НИКОГДА не использовать Ollama.
+3. Коммит **47fd0c5** (`fix(flora)`, `origin/LuxFlora-modes_V1.1`, автор 7teenzzz) влит, ВСЕ конфликты разрешены через глубокий анализ; flora-gate ПЕРЕРАБОТАН на сосуществование (моторика Адама overlay поверх флоры, флора фон) — D-03, НЕ полное подавление action-layer.
+4. ESP перепрошит под итог (47fd0c5 firmware: вибро 0-3 / свет 4-14, vibro cap ~95% — «Прошивка обязательна»).
+5. Jetson введён в проводную сеть 10.10.10.x (eno1 / W5500 Ethernet), ESP доступен на `10.10.10.171` — IP в Config ВЕРНЫЙ, менять не нужно (D-01). Выход TTS — только `esp32_speaker` (D-02).
 
-## Диагноз (2026-06-02)
+**Modified areas (ожидаемо):**
+- `System/Config.json`, `System/Config.schema.json` — TTS routing, флора-параметры (HIGH conflict с 47fd0c5; ESP IP НЕ трогаем)
+- `System/adam/config.py`, `System/adam/flora.py` — DEFAULT_CONFIG, RMS stream (HIGH conflict с 47fd0c5)
+- `System/Orchestrator.py` — flora-gate → сосуществование (D-03), FLORA-04 feed_speech_wav consumer
+- `System/adam/mic_reader.py` — локальный OWW-feed (только если живой тест докажет поломку фида)
+- сеть Jetson (eno1 на 10.10.10.x), `deploy/systemd/` — восстановление сервисов LLM/TTS, purge Ollama
+- `Subsystem/AdamsServer/` (FloraModule.cpp, AdamsConfig.h) — приходят с 47fd0c5, требуют reflash
 
-- Сравнение с `8e6f6bb` (Phase 21A): `mic_reader.py` и `webrtc_vad.py` НЕ
-  менялись; Config mic-чувствительность только понижена (`silence_rms_threshold
-  100→200`); изменения Orchestrator/config — speaker-DSP, не mic.
-- **Единственное релевантное изменение — железо: PCM5102A → MAX98357A**
-  (Class-D, +15 дБ, GAIN floating; speaker I2S TX тактируется непрерывно).
-- Реальные данные: фон mic ~0.12–0.16, всплески до 0.76; спектр **пик в
-  80–200 Гц** → электрический гул/EMI, не акустика. Низкочастотная сигнатура.
-- **Корень: EMI от MAX98357A (switching-усилитель + непрерывный I2S TX) в
-  линии INMP441.** Код mic ни при чём.
+**Global changes:** ДА — Config.json (TTS routing, флора), Orchestrator action-layer (flora-сосуществование), ESP firmware, сетевая конфигурация. Нужна координация перед мёржем в main.
 
-## Кандидаты-фиксы (ранжировано)
-
-1. **Firmware: гейтить speaker I2S TX на реальное воспроизведение** — не
-   тактировать TX в простое (сейчас задача всегда пишет нули → постоянный EMI).
-   В простое (нет TTS) TX выключен → mic чист. Бьёт в корень «когда ничего не
-   происходит».
-2. **Jetson: HPF на mic-входе (<150–200 Гц)** перед level/VAD/ASR — убирает
-   низкочастотный фантом независимо от источника. Быстро, defence-in-depth,
-   чистит и вход ASR.
-3. **Железо (deferred):** 5 В / отдельное питание усилителей + развязка/
-   экранирование mic-линий; шатдаун MAX98357A в простое (SD-пин).
-
-## Затрагиваемые файлы (план)
-
-- `Subsystem/AdamsServer/src/audio/AudioModule.cpp` — гейт I2S TX (фикс 1)
-- `System/adam/mic_reader.py` — HPF mic (фикс 2)
-- `System/Config.json` + schema — параметры HPF mic, если вводим
-
-## Результат (2026-06-02, commit `496c52d`)
-
-- Фон mic: mean 0.165 → 0.025 (−85%), median 0.
-- OWW ложных срабатываний: 0/1247 (max score 0.001). VAD: 0.
-- Hardware: отдельный 3.3В рельс для динамиков (−78% кондуктивный EMI).
-- Firmware: I2S TX гейт в простое (−25% радиационный EMI).
-- Условия мёржа выполнены ✓
+**Notes for agents:**
+- Корневая причина поломки голоса — runtime/host-слой ВНЕ git: мёртвые llama.cpp(:8081) и Silero(:8082), Ollama держит VRAM, конфликт порта 8095 (нативный ASR vs Docker), оркестратор запущен вручную без сервисов-соседей, Jetson не в сети ESP (eno1 DOWN, 10.10.10.x не поднят — IP в Config ВЕРНЫЙ). **Откат коммитов это НЕ лечит** — поэтому поломка переживала смену даже стабильных коммитов.
+- **Порядок обязателен (D-05):** СНАЧАЛА recovery-коммиты (диверг от 9da07f9), ПОТОМ мёрж 47fd0c5. 9da07f9 — предок 47fd0c5, поэтому мёрж до recovery-коммитов = fast-forward на всю LuxFlora_V1.1.
+- 47fd0c5 тянет ВСЮ линию флоры: flora-gate глушит `_execute_action`/`/api/agent/scene`/`/api/agent/stop`; FLORA-04 врезает feed_speech_wav в `Orchestrator._consumer`. При мёрже — переработать на сосуществование (D-03).
+- `oww_score≈0.001` в standby — НОРМАЛЬНЫЙ idle-пол OWW (прецедент ESP-Mic-Fix: 0/1247 ложных, max 0.001 при чистом mic). Проверять wake word живым голосом.
+- ESP сейчас прошит из 070ab4b (no-flora); firmware-исходник идентичен 9da07f9, рассинхрона нет. После мёржа 47fd0c5 — обязательный reflash под флору.
