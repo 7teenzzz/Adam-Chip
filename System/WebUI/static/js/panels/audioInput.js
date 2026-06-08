@@ -14,7 +14,7 @@
 // subscribeEvents (owned by sub-widgets). UI strings in Russian, comments in
 // English — matches the rest of System/WebUI.
 
-import { api } from "../api.js";
+import { api, subscribeEvents } from "../api.js";
 import { toast } from "../widgets/toast.js";
 import { createWakeMeter, createCalibrateButton } from "../widgets/wakeMeter.js";
 import { createEqEditor } from "../widgets/eqEditor.js";
@@ -265,23 +265,163 @@ function buildEqSection(initialDsp, opts) {
 function buildOwwSection() {
   const meter = createWakeMeter({ draggable: true, height: 88 });
   const { btn: calibrateBtn, status: calibStatus } = createCalibrateButton({});
+
+  // ── Trigger badge: flashes "⚡ АДАМ!" on wake_word_detected, then fades ──
+  const triggerBadge = el("span", {
+    class: "badge",
+    style: "font-size:10px; padding:1px 7px",
+  });
+  let lastTriggerTs = 0;
+
+  function updateTriggerBadge() {
+    if (!lastTriggerTs) return;
+    const sec = Math.round((Date.now() - lastTriggerTs) / 1000);
+    if (sec < 2) {
+      triggerBadge.textContent = "⚡ АДАМ!";
+      triggerBadge.className = "badge ok";
+      triggerBadge.style.opacity = "1";
+    } else if (sec < 60) {
+      triggerBadge.textContent = `${sec}с назад`;
+      triggerBadge.className = "badge";
+      triggerBadge.style.opacity = Math.max(0.35, 1 - sec / 60).toFixed(2);
+    } else {
+      triggerBadge.textContent = `${Math.floor(sec / 60)}м назад`;
+      triggerBadge.className = "badge";
+      triggerBadge.style.opacity = "0.35";
+    }
+  }
+  const clockInterval = setInterval(updateTriggerBadge, 1000);
+
+  // ── Score ruler: horizontal bar 0.0→1.0 with cyan fill + orange threshold
+  // Makes the numeric value legible at a glance (the vertical meter above shows
+  // the bar spectogram; the ruler shows the exact score number per frame).
+  const rulerCanvas = document.createElement("canvas");
+  rulerCanvas.style.cssText =
+    "width:100%; height:38px; display:block; border-radius:4px; background:var(--bg-2)";
+
+  let rulerScore = 0;
+  let rulerThreshold = 0.25;
+  let rulerRAF = null;
+  let rulerDisposed = false;
+
+  function drawRuler() {
+    if (rulerDisposed) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = rulerCanvas.getBoundingClientRect();
+    if (rect.width > 0) {
+      const cw = Math.round(rect.width * dpr), ch = Math.round(rect.height * dpr);
+      if (rulerCanvas.width !== cw || rulerCanvas.height !== ch) {
+        rulerCanvas.width = cw;
+        rulerCanvas.height = ch;
+      }
+      const ctx = rulerCanvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const w = rect.width, h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const trackY = 6, trackH = 10;
+
+      // Fine tick marks every 0.05 (every 5%) above the track
+      ctx.strokeStyle = "rgba(160,160,190,0.20)";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 20; i++) {
+        const x = Math.round((i / 20) * w);
+        const isMain = (i % 5 === 0);
+        ctx.beginPath();
+        ctx.moveTo(x, isMain ? 0 : 2);
+        ctx.lineTo(x, trackY);
+        ctx.stroke();
+      }
+
+      // Track background
+      ctx.fillStyle = "rgba(100,100,130,0.22)";
+      ctx.fillRect(0, trackY, w, trackH);
+
+      // Score fill — cyan gradient, brighter near the tip
+      const scoreX = Math.max(0, Math.min(1, rulerScore)) * w;
+      if (scoreX > 0.5) {
+        const grad = ctx.createLinearGradient(0, 0, scoreX, 0);
+        grad.addColorStop(0, "rgba(96,165,250,0.30)");
+        grad.addColorStop(1, "rgba(96,165,250,0.88)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, trackY, scoreX, trackH);
+      }
+
+      // Threshold marker — orange vertical needle spanning from ticks through track
+      const threshX = Math.round(Math.max(0, Math.min(1, rulerThreshold)) * w);
+      ctx.strokeStyle = "rgba(240,184,74,0.92)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(threshX, 0);
+      ctx.lineTo(threshX, trackY + trackH + 5);
+      ctx.stroke();
+
+      // Labels row below the track
+      const labelY = trackY + trackH + 5;
+      ctx.font = "10px ui-monospace,monospace";
+      ctx.textBaseline = "top";
+
+      // Score value — cyan, left-aligned
+      ctx.fillStyle = "rgba(96,165,250,0.92)";
+      ctx.textAlign = "left";
+      ctx.fillText(`score: ${rulerScore.toFixed(3)}`, 3, labelY);
+
+      // Threshold label — orange, centred below its needle; clamped to canvas edges
+      const thLabel = `▲ ${rulerThreshold.toFixed(2)}`;
+      ctx.fillStyle = "rgba(240,184,74,0.92)";
+      ctx.textAlign = "center";
+      const thW = ctx.measureText(thLabel).width;
+      const thLX = Math.max(thW / 2 + 2, Math.min(w - thW / 2 - 2, threshX));
+      ctx.fillText(thLabel, thLX, labelY);
+
+      // Reset alignment
+      ctx.textAlign = "start";
+    }
+    rulerRAF = requestAnimationFrame(drawRuler);
+  }
+  rulerRAF = requestAnimationFrame(drawRuler);
+
+  // ── SSE subscription: oww_score → ruler; wake_word_detected → badge ───
+  const unsub = subscribeEvents((ev) => {
+    if (ev.type === "oww_score") {
+      const p = ev.payload || {};
+      if (typeof p.score === "number") rulerScore = p.score;
+      if (typeof p.threshold === "number") rulerThreshold = p.threshold;
+    } else if (ev.type === "wake_word_detected") {
+      lastTriggerTs = Date.now();
+      updateTriggerBadge();
+    } else if (ev.type === "wake_sensitivity_updated") {
+      const p = ev.payload || {};
+      if (typeof p.threshold === "number") rulerThreshold = p.threshold;
+    }
+  }, () => {});
+
   const wrapper = el("div", { class: "col", style: "gap:6px" }, [
     el("div", { style: "display:flex; align-items:center; gap:8px" }, [
       el("span", { class: "caps", style: "font-size:10px; color:var(--muted)" }, "Линия порога OWW · живой score"),
+      triggerBadge,
       el("span", { class: "spacer" }),
       calibrateBtn,
     ]),
     meter.canvas,
+    rulerCanvas,
     el("div", { style: "display:flex; align-items:center; gap:8px" }, [
       el("span", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.3" },
         "Перетащи оранжевую линию — порог wake-word «адам» (wake_word.threshold). " +
-        "Циан — текущий score движка OpenWakeWord. Удобно калибровать порог одновременно с настройкой EQ выше — " +
-        "оба используют тот же спектр входа."),
+        "Полоска ниже: голубой fill = текущий score, оранжевая метка = порог. " +
+        "Значок «⚡ АДАМ!» загорается при каждом реальном срабатывании."),
       el("span", { class: "spacer" }),
       calibStatus,
     ]),
   ]);
-  wrapper._dispose = () => { try { meter.dispose(); } catch (_) {} };
+  wrapper._dispose = () => {
+    rulerDisposed = true;
+    if (rulerRAF) cancelAnimationFrame(rulerRAF);
+    clearInterval(clockInterval);
+    if (typeof unsub === "function") try { unsub(); } catch (_) {}
+    try { meter.dispose(); } catch (_) {}
+  };
   return wrapper;
 }
 

@@ -58,8 +58,8 @@
       "input_gain": {
         "card_name": "WebCamera",
         "alsa_control": "Mic",
-        "alsa_capture_percent": 5,
-        "pulse_source_percent": 10
+        "alsa_capture_percent": 100,
+        "pulse_source_percent": 100
       },
       "vad_hpf_hz": 220.0,
       "spectrum_bands": 24,
@@ -370,22 +370,50 @@
           {
             "enabled": true,
             "type": "peaking",
-            "freq_hz": 101.0,
-            "gain_db": -11.4,
-            "q": 1.0
+            "freq_hz": 245.0,
+            "gain_db": -12.8,
+            "q": 1.5
           },
           {
             "enabled": true,
             "type": "peaking",
-            "freq_hz": 106.0,
+            "freq_hz": 1115.0,
             "gain_db": -0.2,
+            "q": 0.9
+          },
+          {
+            "enabled": true,
+            "type": "highshelf",
+            "freq_hz": 4616.0,
+            "gain_db": -19.4,
+            "q": 0.7
+          },
+          {
+            "enabled": true,
+            "type": "peaking",
+            "freq_hz": 382.0,
+            "gain_db": -24.0,
             "q": 1.0
           },
           {
             "enabled": true,
             "type": "peaking",
-            "freq_hz": 95.0,
-            "gain_db": -0.7,
+            "freq_hz": 470.0,
+            "gain_db": 6.2,
+            "q": 1.0
+          },
+          {
+            "enabled": true,
+            "type": "peaking",
+            "freq_hz": 308.0,
+            "gain_db": 18.5,
+            "q": 1.0
+          },
+          {
+            "enabled": true,
+            "type": "peaking",
+            "freq_hz": 1303.0,
+            "gain_db": -11.6,
             "q": 1.0
           }
         ],
@@ -394,11 +422,83 @@
       "presets": [
         {
           "name": "зал (рекомендуемый)",
-          "hpf": { "enabled": true, "hz": 200 },
+          "hpf": {
+            "enabled": true,
+            "hz": 200.0
+          },
           "bands": [
-            { "enabled": true, "type": "peaking",   "freq_hz": 250,  "gain_db": -5.0, "q": 1.5 },
-            { "enabled": true, "type": "peaking",   "freq_hz": 3000, "gain_db":  3.0, "q": 0.9 },
-            { "enabled": true, "type": "highshelf", "freq_hz": 5000, "gain_db": -5.0, "q": 0.7 }
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 250.0,
+              "gain_db": -5.0,
+              "q": 1.5
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 3000.0,
+              "gain_db": 3.0,
+              "q": 0.9
+            },
+            {
+              "enabled": true,
+              "type": "highshelf",
+              "freq_hz": 5000.0,
+              "gain_db": -5.0,
+              "q": 0.7
+            }
+          ]
+        },
+        {
+          "name": "комната",
+          "hpf": {
+            "enabled": true,
+            "hz": 102.0
+          },
+          "bands": [
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 245.0,
+              "gain_db": -12.8,
+              "q": 1.5
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 1139.0,
+              "gain_db": 2.0,
+              "q": 0.9
+            },
+            {
+              "enabled": true,
+              "type": "highshelf",
+              "freq_hz": 4616.0,
+              "gain_db": -19.4,
+              "q": 0.7
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 388.0,
+              "gain_db": -24.0,
+              "q": 1.0
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 470.0,
+              "gain_db": 6.2,
+              "q": 1.0
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 308.0,
+              "gain_db": 18.5,
+              "q": 1.0
+            }
           ]
         }
       ],
