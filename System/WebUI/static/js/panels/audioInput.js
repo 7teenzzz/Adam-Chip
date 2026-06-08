@@ -64,54 +64,38 @@ function flashBusy(badge, text = "…") {
 
 function buildVolumeSection(inputGain) {
   const badge = statusBadge();
-  // The durable hardware gain is two numbers (ALSA capture boost + PulseAudio
-  // soft gain on top). We expose ALSA capture (the dominant control per
-  // Phase 30 — "100% = max hardware boost") as the primary slider and the
-  // pulse soft-gain as a secondary fine-trim — matches what
-  // adam_audio_input_gain.sh actually drives (see Config.schema.json).
   const alsaVal = inputGain.alsa_capture_percent ?? 100;
-  const pulseVal = inputGain.pulse_source_percent ?? 100;
 
-  function makeSlider(key, label, value, min, max, hint) {
-    const slider = el("input", {
-      type: "range", class: "input slider", min, max, step: "1",
-      style: "flex:1; min-width:120px; cursor:pointer",
-    });
-    slider.value = value;
-    const valueLabel = el("span", {
-      class: "mono", style: "min-width:42px; text-align:right; color:var(--accent); font-size:12px; font-weight:600",
-    }, `${value}%`);
-    slider.addEventListener("input", () => { valueLabel.textContent = `${slider.value}%`; });
-    slider.addEventListener("change", async () => {
-      const v = parseInt(slider.value, 10);
-      flashBusy(badge);
-      try {
-        await api.patch("/api/config", { section: "media.audio.input_gain", patch: { [key]: v } });
-        // Apply immediately so the monitor stream reflects the change without restart.
-        await api.post("/api/audio/input_gain/apply", {});
-        flashOk(badge, "применено");
-      } catch (e) {
-        flashBad(badge);
-        toast(`input_gain.${key}: ${e.message}`, "bad", 5000);
-      }
-    });
-    return el("label", { style: "display:flex; flex-direction:column; gap:4px" }, [
-      el("div", { style: "display:flex; align-items:center; gap:6px" }, [
-        el("span", { style: "color:var(--text); font-size:12px; font-weight:500" }, label),
-        badge,
-      ]),
-      hint ? el("span", { style: "color:var(--muted); font-size:10px; line-height:1.3" }, hint) : null,
-      el("div", { style: "display:flex; align-items:center; gap:10px" }, [slider, valueLabel]),
-    ]);
-  }
+  const slider = el("input", {
+    type: "range", class: "input slider", min: "0", max: "100", step: "1",
+    style: "flex:1; min-width:120px; cursor:pointer",
+  });
+  slider.value = alsaVal;
+  const valueLabel = el("span", {
+    class: "mono", style: "min-width:42px; text-align:right; color:var(--accent); font-size:12px; font-weight:600",
+  }, `${alsaVal}%`);
+  slider.addEventListener("input", () => { valueLabel.textContent = `${slider.value}%`; });
+  slider.addEventListener("change", async () => {
+    const v = parseInt(slider.value, 10);
+    flashBusy(badge);
+    try {
+      await api.patch("/api/config", { section: "media.audio.input_gain", patch: { alsa_capture_percent: v } });
+      await api.post("/api/audio/input_gain/apply", {});
+      flashOk(badge, "применено");
+    } catch (e) {
+      flashBad(badge);
+      toast(`input_gain: ${e.message}`, "bad", 5000);
+    }
+  });
 
-  return el("div", { class: "col", style: "gap:14px" }, [
-    makeSlider("alsa_capture_percent", "Громкость входа · ALSA capture (аппаратный буст)", alsaVal, 0, 100,
-      "Главный регулятор. 100% = максимальный аппаратный буст микрофона (+24 дБ на WebCamera). " +
-      "Применяется durable — переживает перезагрузку (Phase 30)."),
-    makeSlider("pulse_source_percent", "Громкость входа · PulseAudio (мягкая подстройка)", pulseVal, 0, 150,
-      "Дополнительный программный буст поверх аппаратного. 100% = 0 дБ. " +
-      "Осторожно с превышением 100% — возможен клиппинг."),
+  return el("label", { style: "display:flex; flex-direction:column; gap:4px" }, [
+    el("div", { style: "display:flex; align-items:center; gap:6px" }, [
+      el("span", { style: "color:var(--text); font-size:12px; font-weight:500" }, "Громкость микрофона"),
+      badge,
+    ]),
+    el("span", { style: "color:var(--muted); font-size:10px; line-height:1.3" },
+      "Аппаратный буст ALSA. 100% = +24 дБ на WebCamera. Сохраняется после перезагрузки."),
+    el("div", { style: "display:flex; align-items:center; gap:10px" }, [slider, valueLabel]),
   ]);
 }
 
@@ -203,11 +187,19 @@ function buildEqSection(initialDsp, opts) {
         el("button", {
           class: "btn btn-ghost", style: "font-size:10px; padding:1px 6px",
           onclick: async () => {
+            const savedBands = dsp.eqBands.map((b) => ({ ...b }));
             const bands = dsp.eqBands.filter((_, j) => j !== i);
             editor.setCurve({ hpf: dsp.hpf, bands });
             flashBusy(badge);
-            try { await onRemoveBand(i, bands); flashOk(badge, "удалена"); renderToggleList(); }
-            catch (e) { flashBad(badge); toast(`удаление полосы: ${e.message}`, "bad", 5000); }
+            try {
+              await onRemoveBand(i, bands);
+              flashOk(badge, "удалена");
+            } catch (e) {
+              editor.setCurve({ hpf: dsp.hpf, bands: savedBands });
+              flashBad(badge);
+              toast(`удаление полосы: ${e.message}`, "bad", 5000);
+            }
+            renderToggleList();
           },
         }, "✕ удалить"),
       ));
@@ -256,6 +248,7 @@ function buildEqSection(initialDsp, opts) {
   ]);
 
   wrapper._editor = editor;
+  wrapper._refreshToggles = renderToggleList;
   wrapper._dispose = () => { try { editor.dispose(); } catch (_) {} };
   return wrapper;
 }
@@ -649,7 +642,7 @@ function buildMonitorSection(initialTap) {
 
 // ── Section 5: Preset CRUD (D-05) ────────────────────────────────────────────
 
-function buildPresetSection(eqEditor) {
+function buildPresetSection(eqEditor, onActivated) {
   const badge = statusBadge();
   const list = el("div", { class: "col", style: "gap:6px" });
   const nameInput = el("input", { class: "input", type: "text", placeholder: "имя пресета", style: "max-width:220px" });
@@ -687,6 +680,7 @@ function buildPresetSection(eqEditor) {
           try {
             const res = await api.post(`/api/audio/presets/${encodeURIComponent(p.name)}/activate`);
             if (eqEditor) eqEditor.setCurve({ hpf: res.dsp.hpf, bands: res.dsp.bands });
+            if (typeof onActivated === "function") onActivated();
             activePreset = res.active_preset;
             flashOk(rowBadge, "активен");
             render();
@@ -869,7 +863,10 @@ export function mount(target) {
     if (typeof monitorWrapper._dispose === "function") disposables.push(monitorWrapper._dispose);
 
     // ── Card 5: Presets ─────────────────────────────────────────────────────
-    const presetWrapper = buildPresetSection(eqWrapper._editor);
+    const presetWrapper = buildPresetSection(
+      eqWrapper._editor,
+      () => { if (eqWrapper._refreshToggles) eqWrapper._refreshToggles(); },
+    );
     grid.appendChild(el("section", { class: "card card-full" }, [
       el("div", { class: "card-header" }, [
         el("span", { class: "card-title" }, "Пресеты EQ (D-05)"),
