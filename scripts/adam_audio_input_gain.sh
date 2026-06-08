@@ -69,7 +69,8 @@ if command -v pactl >/dev/null 2>&1; then
   if [[ -n "${src}" ]] && pactl get-source-volume "${src}" >/dev/null 2>&1; then
     if pactl set-source-volume "${src}" "${PULSE_PCT}%" >/dev/null 2>&1; then
       pactl set-source-mute "${src}" 0 >/dev/null 2>&1 || true
-      log "PULSE ${src} → ${PULSE_PCT}%"
+      pactl set-default-source "${src}" >/dev/null 2>&1 || true
+      log "PULSE ${src} → ${PULSE_PCT}% (default)"
     else
       log "WARN: failed to set pulse volume on ${src}"
     fi
