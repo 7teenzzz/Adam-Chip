@@ -196,6 +196,36 @@
               "description": "Active microphone source. 'esp32' fetches WAV clips from ESP32 HTTP API (/api/audio/clip). 'local' captures from input_device directly.",
               "default": "esp32"
             },
+            "input_gain": {
+              "type": "object",
+              "description": "Microphone input gain re-asserted on every start by scripts/adam_audio_input_gain.sh (wired as ExecStartPre of adam-orchestrator.service and called from adam_start.sh). USB capture cards lose their ALSA capture boost across a cold boot, which silently deafens wake-word detection after an unattended reboot — this block restores it deterministically from config. Will later be driven live by the audio-tuning UI panel's volume slider.",
+              "properties": {
+                "card_name": {
+                  "type": "string",
+                  "description": "ALSA card name (as in /proc/asound/cards) of the capture device. amixer addresses it by name so it survives USB index reshuffling. Update if the mic is replaced.",
+                  "default": "WebCamera"
+                },
+                "alsa_control": {
+                  "type": "string",
+                  "description": "Simple-mixer capture control name on that card (from `amixer -c <card> scontrols`). For the WebCamera USB mic this is 'Mic' (range 0–6144, 100% = +24 dB).",
+                  "default": "Mic"
+                },
+                "alsa_capture_percent": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "Target ALSA capture gain as a percentage of the control's range. 100 = max hardware boost (+24 dB on WebCamera). This is the value that actually resets on reboot. Lower it if the mic clips/distorts (Phase 30 found 180% pulse over-gain made OWW WORSE via clipping).",
+                  "default": 100
+                },
+                "pulse_source_percent": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 150,
+                  "description": "Target PulseAudio source volume percentage for the matching source (pinned via PULSE_SOURCE env, else first source whose name contains card_name). Soft gain stacked on top of the ALSA boost; usually persists in pulse's own DB but re-asserted here for completeness. 100 = 0 dB.",
+                  "default": 100
+                }
+              }
+            },
             "esp32_mic_profile": {
               "type": "string",
               "description": "ESP32 microphone hardware profile name. Used by audio normalisation and format parsing.",
