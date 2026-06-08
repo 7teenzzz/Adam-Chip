@@ -531,6 +531,22 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             "stats": deps.sessions_log.stats(limit),
         }
 
+    @router.post("/api/audio/input_gain/apply")
+    async def apply_input_gain() -> dict[str, Any]:
+        """Apply media.audio.input_gain to ALSA + PulseAudio immediately (live, no restart).
+        Called by the volume slider in the Audio Input panel after saving config so the
+        monitor stream reflects the change without waiting for an orchestrator restart."""
+        gain = deps.settings.section("media").get("audio", {}).get("input_gain", {})
+        result = await asyncio.to_thread(
+            _apply_input_gain_now,
+            str(gain.get("card_name", "WebCamera")),
+            str(gain.get("alsa_control", "Mic")),
+            int(gain.get("alsa_capture_percent", 100)),
+            int(gain.get("pulse_source_percent", 100)),
+        )
+        deps.event_log.append("input_gain_applied", result)
+        return {"ok": True, **result}
+
     @router.get("/api/audio/devices")
     async def audio_devices() -> dict[str, Any]:
         return await asyncio.to_thread(_aplay_devices)
@@ -749,6 +765,44 @@ def _docker_inspect(name: str) -> dict[str, Any]:
         "image": image,
         "name": name,
     }
+
+
+def _apply_input_gain_now(card: str, control: str, alsa_pct: int, pulse_pct: int) -> dict[str, str]:
+    """Apply ALSA capture gain + PulseAudio source volume from Python (mirrors adam_audio_input_gain.sh).
+    Called live from /api/audio/input_gain/apply so the monitor stream reflects slider changes."""
+    results: dict[str, str] = {}
+    # ALSA
+    if shutil.which("amixer"):
+        try:
+            r = subprocess.run(
+                ["amixer", "-c", card, "sset", control, f"{alsa_pct}%", "cap"],
+                capture_output=True, timeout=4,
+            )
+            results["alsa"] = "ok" if r.returncode == 0 else f"err:{r.stderr.decode(errors='replace')[:80]}"
+        except Exception as exc:
+            results["alsa"] = f"skip:{exc}"
+    else:
+        results["alsa"] = "skip:amixer not found"
+    # PulseAudio
+    if shutil.which("pactl"):
+        try:
+            ls = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, timeout=4)
+            src = next(
+                (line.split()[1] for line in ls.stdout.decode(errors="replace").splitlines()
+                 if card.lower() in line.lower()),
+                None,
+            )
+            if src:
+                subprocess.run(["pactl", "set-source-volume", src, f"{pulse_pct}%"], timeout=4)
+                subprocess.run(["pactl", "set-source-mute", src, "0"], timeout=4)
+                results["pulse"] = f"ok:{src}"
+            else:
+                results["pulse"] = f"skip:no source matching '{card}'"
+        except Exception as exc:
+            results["pulse"] = f"skip:{exc}"
+    else:
+        results["pulse"] = "skip:pactl not found"
+    return results
 
 
 _USEFUL_OUTPUT_PREFIXES = ("pulse", "default", "hw:", "plughw:", "sysdefault:", "dmix:", "hdmi:", "iec958:", "front:", "rear:", "surround")

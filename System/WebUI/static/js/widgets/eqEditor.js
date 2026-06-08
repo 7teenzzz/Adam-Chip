@@ -72,6 +72,70 @@ function yToGain(y) {
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
+// ── RBJ biquad frequency response (same formulas as audio_dsp.py) ────────────
+// Returns magnitude in dB at the given normalised radian frequency omega = 2πf/Fs.
+function _biquadMagDB(b0, b1, b2, a1, a2, omega) {
+  const c1 = Math.cos(omega), c2 = Math.cos(2 * omega);
+  const s1 = Math.sin(omega), s2 = Math.sin(2 * omega);
+  const nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
+  const dr = 1  + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+  const mag2 = (nr * nr + ni * ni) / Math.max(dr * dr + di * di, 1e-30);
+  return 10 * Math.log10(Math.max(mag2, 1e-30));
+}
+
+// Compute RBJ normalised coefficients (b0,b1,b2,a1,a2) for one filter.
+// Returns null if the filter has negligible effect.
+function _rbjCoeffs(sr, type, f0, gainDb, q) {
+  if (f0 <= 0 || f0 >= sr * 0.5 || q <= 0) return null;
+  const w0 = 2 * Math.PI * f0 / sr;
+  const cw = Math.cos(w0), sw = Math.sin(w0);
+  const alpha = sw / (2 * Math.max(q, 1e-3));
+  const A = Math.pow(10, gainDb / 40);
+  let b0, b1, b2, a0, a1, a2;
+  if (type === "peaking") {
+    if (Math.abs(gainDb) < 0.01) return null;
+    b0 = 1 + alpha * A; b1 = -2 * cw; b2 = 1 - alpha * A;
+    a0 = 1 + alpha / A; a1 = -2 * cw; a2 = 1 - alpha / A;
+  } else if (type === "highpass") {
+    b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = (1 + cw) / 2;
+    a0 = 1 + alpha;    a1 = -2 * cw;   a2 = 1 - alpha;
+  } else if (type === "lowpass") {
+    b0 = (1 - cw) / 2; b1 = 1 - cw;   b2 = (1 - cw) / 2;
+    a0 = 1 + alpha;    a1 = -2 * cw;   a2 = 1 - alpha;
+  } else if (type === "lowshelf") {
+    if (Math.abs(gainDb) < 0.01) return null;
+    const sa = 2 * Math.sqrt(A) * alpha;
+    b0 = A * ((A + 1) - (A - 1) * cw + sa); b1 = 2 * A * ((A - 1) - (A + 1) * cw); b2 = A * ((A + 1) - (A - 1) * cw - sa);
+    a0 = (A + 1) + (A - 1) * cw + sa;       a1 = -2 * ((A - 1) + (A + 1) * cw);    a2 = (A + 1) + (A - 1) * cw - sa;
+  } else if (type === "highshelf") {
+    if (Math.abs(gainDb) < 0.01) return null;
+    const sa = 2 * Math.sqrt(A) * alpha;
+    b0 = A * ((A + 1) + (A - 1) * cw + sa); b1 = -2 * A * ((A - 1) + (A + 1) * cw); b2 = A * ((A + 1) + (A - 1) * cw - sa);
+    a0 = (A + 1) - (A - 1) * cw + sa;       a1 = 2 * ((A - 1) - (A + 1) * cw);      a2 = (A + 1) - (A - 1) * cw - sa;
+  } else {
+    return null;
+  }
+  return { b0: b0/a0, b1: b1/a0, b2: b2/a0, a1: a1/a0, a2: a2/a0 };
+}
+
+// Compute combined EQ response (dB) at frequency f for the current HPF + bands.
+// sr = sample rate (16000). Returns total gain dB.
+function _eqResponseDB(state, f, sr) {
+  let total = 0;
+  // HPF stage
+  if (state.hpf && state.hpf.enabled) {
+    const c = _rbjCoeffs(sr, "highpass", state.hpf.hz, 0, 0.707);
+    if (c) total += _biquadMagDB(c.b0, c.b1, c.b2, c.a1, c.a2, 2 * Math.PI * f / sr);
+  }
+  // Parametric bands
+  for (const band of (state.eqBands || [])) {
+    if (!band.enabled) continue;
+    const c = _rbjCoeffs(sr, band.type, band.freq_hz, band.gain_db, band.q);
+    if (c) total += _biquadMagDB(c.b0, c.b1, c.b2, c.a1, c.a2, 2 * Math.PI * f / sr);
+  }
+  return total;
+}
+
 export function createEqEditor({ height = 180 } = {}) {
   const canvas = document.createElement("canvas");
   canvas.style.cssText =
@@ -172,6 +236,46 @@ export function createEqEditor({ height = 180 } = {}) {
       ctx.moveTo(0, Math.round(yZero) + 0.5);
       ctx.lineTo(w, Math.round(yZero) + 0.5);
       ctx.stroke();
+
+      // EQ frequency response curve — composite of all active filters (HPF + bands).
+      // Uses RBJ biquad formulas at 16 kHz sample rate (matches the backend).
+      // Drawn as a filled gradient + stroke so the operator can see the shape clearly.
+      {
+        const SR = 16000;
+        const N_CURVE = Math.max(80, Math.round(w));
+        // Pre-compute y-coords for the curve at N_CURVE evenly-spaced x positions.
+        const pts = new Float32Array(N_CURVE);
+        for (let i = 0; i < N_CURVE; i++) {
+          const xNorm = i / (N_CURVE - 1);
+          const freq = xToFreq(xNorm, state.minHz, state.maxHz);
+          const db = _eqResponseDB(state, freq, SR);
+          pts[i] = gainToY(clamp(db, -GAIN_RANGE_DB, GAIN_RANGE_DB)) * h;
+        }
+        // Filled area above/below the zero line.
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0,   "rgba(96,165,250,0.22)");
+        grad.addColorStop(0.5, "rgba(96,165,250,0.04)");
+        grad.addColorStop(1,   "rgba(96,165,250,0.10)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(0, yZero);
+        for (let i = 0; i < N_CURVE; i++) {
+          ctx.lineTo(i * w / (N_CURVE - 1), pts[i]);
+        }
+        ctx.lineTo(w, yZero);
+        ctx.closePath();
+        ctx.fill();
+        // Stroke on top.
+        ctx.strokeStyle = "rgba(96,165,250,0.75)";
+        ctx.lineWidth = 1.5;
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(0, pts[0]);
+        for (let i = 1; i < N_CURVE; i++) {
+          ctx.lineTo(i * w / (N_CURVE - 1), pts[i]);
+        }
+        ctx.stroke();
+      }
 
       // HPF cutoff — vertical dashed line + draggable handle at the bottom.
       {

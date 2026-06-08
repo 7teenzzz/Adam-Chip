@@ -43,12 +43,6 @@
       "min_speech_ms": 200,
       "max_segment_ms": 9000,
       "mic_source": "local",
-      "input_gain": {
-        "card_name": "WebCamera",
-        "alsa_control": "Mic",
-        "alsa_capture_percent": 100,
-        "pulse_source_percent": 100
-      },
       "esp32_mic_profile": "inmp441_philips32_right",
       "esp_health": {
         "poll_interval_s": 60,
@@ -61,6 +55,12 @@
       "max_command_segment_ms": 15000,
       "reply_max_segment_ms": 10000,
       "normalize_factor": 8000,
+      "input_gain": {
+        "card_name": "WebCamera",
+        "alsa_control": "Mic",
+        "alsa_capture_percent": 5,
+        "pulse_source_percent": 10
+      },
       "vad_hpf_hz": 220.0,
       "spectrum_bands": 24,
       "spectrum_min_hz": 80.0,
@@ -364,12 +364,44 @@
         "enabled": true,
         "hpf": {
           "enabled": true,
-          "hz": 220.0
+          "hz": 80.0
         },
-        "bands": [],
+        "bands": [
+          {
+            "enabled": true,
+            "type": "peaking",
+            "freq_hz": 101.0,
+            "gain_db": -11.4,
+            "q": 1.0
+          },
+          {
+            "enabled": true,
+            "type": "peaking",
+            "freq_hz": 106.0,
+            "gain_db": -0.2,
+            "q": 1.0
+          },
+          {
+            "enabled": true,
+            "type": "peaking",
+            "freq_hz": 95.0,
+            "gain_db": -0.7,
+            "q": 1.0
+          }
+        ],
         "monitor_tap": "post_eq"
       },
-      "presets": [],
+      "presets": [
+        {
+          "name": "зал (рекомендуемый)",
+          "hpf": { "enabled": true, "hz": 200 },
+          "bands": [
+            { "enabled": true, "type": "peaking",   "freq_hz": 250,  "gain_db": -5.0, "q": 1.5 },
+            { "enabled": true, "type": "peaking",   "freq_hz": 3000, "gain_db":  3.0, "q": 0.9 },
+            { "enabled": true, "type": "highshelf", "freq_hz": 5000, "gain_db": -5.0, "q": 0.7 }
+          ]
+        }
+      ],
       "active_preset": null
     },
     "prompt": {

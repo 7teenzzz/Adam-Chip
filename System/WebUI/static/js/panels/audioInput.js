@@ -87,7 +87,9 @@ function buildVolumeSection(inputGain) {
       flashBusy(badge);
       try {
         await api.patch("/api/config", { section: "media.audio.input_gain", patch: { [key]: v } });
-        flashOk(badge);
+        // Apply immediately so the monitor stream reflects the change without restart.
+        await api.post("/api/audio/input_gain/apply", {});
+        flashOk(badge, "применено");
       } catch (e) {
         flashBad(badge);
         toast(`input_gain.${key}: ${e.message}`, "bad", 5000);
