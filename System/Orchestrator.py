@@ -786,7 +786,20 @@ class VoiceLoopController:
                 stdout = self._process.stdout
                 if stdout is None:
                     raise RuntimeError("arecord stdout unavailable")
-                await self._vad_loop(stdout.read, frame_bytes)
+                # PipeWire delivers audio in smaller quanta than PulseAudio
+                # (e.g. 80 samples = 5 ms instead of 320 = 20 ms), so a single
+                # read() may return fewer bytes than requested. Accumulate
+                # fragments until a full VAD frame is available.
+                _raw_read = stdout.read
+                def _read_exact(n: int) -> bytes:
+                    buf = _raw_read(n)
+                    while buf and len(buf) < n:
+                        tail = _raw_read(n - len(buf))
+                        if not tail:
+                            return buf
+                        buf += tail
+                    return buf
+                await self._vad_loop(_read_exact, frame_bytes)
                 return
             except asyncio.CancelledError:
                 raise
