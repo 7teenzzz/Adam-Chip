@@ -13,6 +13,7 @@ import shutil
 import sys
 import asyncio
 import subprocess
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -362,6 +363,16 @@ def _make_stereo_reader(
     return _read
 
 
+# Phase 31 Wave 2 (D-06): bound on the per-client monitor fan-out queue. Each
+# slot holds one ~20 ms stereo-tagged frame pair (raw, processed PCM bytes) —
+# 64 slots ≈ 1.28 s of audio, enough to absorb a brief WS/network stall without
+# unbounded memory growth. This is a structural ring-buffer-depth constant
+# (implementation detail of the fan-out, not a tunable persona/runtime
+# parameter), so it stays a module constant rather than a Config.json knob —
+# see Config-First guidance in CLAUDE.md ("real" parameters vs structural sizes.
+_MONITOR_QUEUE_MAXSIZE = 64
+
+
 class VoiceLoopController:
     # Phase 7 D-13/D-14: boot_warmup is the canonical entry state when
     # voice_loop.start() is called (before warmup TTS completes). After
@@ -512,6 +523,53 @@ class VoiceLoopController:
             _idsp_cfg = {}
         self._input_dsp = audio_dsp.InputDSP(_idsp_cfg, sample_rate=self.sample_rate)
         self._input_dsp_poll: int = 0
+        # Phase 31 Wave 2 (D-06/D-07): browser monitor fan-out. _vad_loop pushes
+        # BOTH the raw (pre-EQ) and processed (post-EQ) PCM for every frame into
+        # a small registry of bounded queues — one per connected /api/audio/monitor
+        # WebSocket client. Bounded + drop-oldest so a slow browser client can
+        # NEVER stall the live voice-processing hot path (D-02 WYSIWYG contract
+        # requires the SAME buffer feeding OWW/ASR to also feed the monitor, but
+        # the fan-out itself must be non-blocking). Mirrors EventLog.subscribe()/
+        # unsubscribe() for symmetry.
+        self._monitor_subscribers: list[asyncio.Queue[tuple[bytes, bytes]]] = []
+        self._monitor_lock = threading.Lock()
+
+    # Phase 31 Wave 2 — monitor fan-out subscribe/unsubscribe (mirrors EventLog).
+    def subscribe_monitor(self, max_queue: int = _MONITOR_QUEUE_MAXSIZE) -> "asyncio.Queue[tuple[bytes, bytes]]":
+        """Register a new monitor client. Returns a bounded queue of (raw, processed) PCM tuples."""
+        queue: asyncio.Queue[tuple[bytes, bytes]] = asyncio.Queue(maxsize=max_queue)
+        with self._monitor_lock:
+            self._monitor_subscribers.append(queue)
+        return queue
+
+    def unsubscribe_monitor(self, queue: "asyncio.Queue[tuple[bytes, bytes]]") -> None:
+        with self._monitor_lock:
+            self._monitor_subscribers = [q for q in self._monitor_subscribers if q is not queue]
+
+    def _publish_monitor_frame(self, raw_chunk: bytes, processed_chunk: bytes) -> None:
+        """Fan out one frame to all monitor subscribers. Non-blocking, drop-oldest on overflow.
+
+        Called from _vad_loop's hot path — must never block or raise. Pushes both
+        pre-EQ and post-EQ PCM so the WS handler can honour a live monitor_tap
+        change (D-07) without resubscribing.
+        """
+        with self._monitor_lock:
+            subscribers = list(self._monitor_subscribers)
+        if not subscribers:
+            return
+        frame = (raw_chunk, processed_chunk)
+        for queue in subscribers:
+            try:
+                queue.put_nowait(frame)
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    queue.put_nowait(frame)
+                except asyncio.QueueFull:
+                    pass
 
     def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
         """Apply audio config changes live. Returns list of fields that require loop restart."""
@@ -846,7 +904,12 @@ class VoiceLoopController:
                         )
                     except Exception:
                         pass
+                _raw_chunk_for_monitor = chunk
                 chunk = self._input_dsp.process(chunk)
+                # Phase 31 Wave 2 (D-02/D-06): fan out BOTH pre- and post-EQ PCM to
+                # any connected /api/audio/monitor WebSocket clients. Non-blocking —
+                # publish is a no-op when nobody is subscribed (fast list-empty check).
+                self._publish_monitor_frame(_raw_chunk_for_monitor, chunk)
 
                 _rms = audioop.rms(chunk, 2)
                 vad_voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
