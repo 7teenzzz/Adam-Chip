@@ -65,21 +65,27 @@ function flashBusy(badge, text = "…") {
 function buildVolumeSection(inputGain) {
   const badge = statusBadge();
   const alsaVal = inputGain.alsa_capture_percent ?? 100;
+  const pulseVal = inputGain.pulse_source_percent ?? 100;
+  // Effective value: 0-100 = ALSA range; 100-150 = PulseAudio soft boost on top of max ALSA.
+  const initVal = alsaVal < 100 ? alsaVal : pulseVal;
 
   const slider = el("input", {
-    type: "range", class: "input slider", min: "0", max: "100", step: "1",
+    type: "range", class: "input slider", min: "0", max: "150", step: "1",
     style: "flex:1; min-width:120px; cursor:pointer",
   });
-  slider.value = alsaVal;
+  slider.value = initVal;
   const valueLabel = el("span", {
     class: "mono", style: "min-width:42px; text-align:right; color:var(--accent); font-size:12px; font-weight:600",
-  }, `${alsaVal}%`);
+  }, `${initVal}%`);
   slider.addEventListener("input", () => { valueLabel.textContent = `${slider.value}%`; });
   slider.addEventListener("change", async () => {
     const v = parseInt(slider.value, 10);
+    // 0-100: hardware ALSA gain; above 100: ALSA stays at max, PulseAudio adds soft boost.
+    const alsa = Math.min(v, 100);
+    const pulse = v <= 100 ? 100 : v;
     flashBusy(badge);
     try {
-      await api.patch("/api/config", { section: "media.audio.input_gain", patch: { alsa_capture_percent: v } });
+      await api.patch("/api/config", { section: "media.audio.input_gain", patch: { alsa_capture_percent: alsa, pulse_source_percent: pulse } });
       await api.post("/api/audio/input_gain/apply", {});
       flashOk(badge, "применено");
     } catch (e) {
@@ -94,7 +100,7 @@ function buildVolumeSection(inputGain) {
       badge,
     ]),
     el("span", { style: "color:var(--muted); font-size:10px; line-height:1.3" },
-      "Аппаратный буст ALSA. 100% = +24 дБ на WebCamera. Сохраняется после перезагрузки."),
+      "0–100% = аппаратный буст ALSA (+24 дБ на WebCamera). 100–150% = дополнительный программный буст PulseAudio поверх максимального ALSA. Сохраняется после перезагрузки."),
     el("div", { style: "display:flex; align-items:center; gap:10px" }, [slider, valueLabel]),
   ]);
 }

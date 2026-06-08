@@ -24,6 +24,7 @@
 import { subscribeEvents } from "../api.js";
 
 const N_BANDS = 24;
+const OWW_STRIP_H = 20; // px reserved at canvas bottom for the OWW score overlay
 
 const GREEN = [67, 209, 122];
 const YELLOW = [234, 200, 80];
@@ -142,7 +143,8 @@ export function createEqEditor({ height = 180 } = {}) {
     `width:100%; height:${height}px; border-radius:4px; display:block; ` +
     `background:var(--bg-2); cursor:default; touch-action:none`;
 
-  const bands = new Float32Array(N_BANDS);
+  const bands    = new Float32Array(N_BANDS); // post-DSP (what the model hears)
+  const preBands = new Float32Array(N_BANDS); // pre-DSP (raw mic input)
   const state = {
     minHz: DEFAULT_MIN_HZ,
     maxHz: DEFAULT_MAX_HZ,
@@ -154,6 +156,8 @@ export function createEqEditor({ height = 180 } = {}) {
     hpf: { enabled: true, hz: 220 },
     eqBands: /** @type {Array<{enabled:boolean,type:string,freq_hz:number,gain_db:number,q:number}>} */ ([]),
     dragging: /** @type {null | {kind:'band'|'hpf', index:number, pointerId:number}} */ (null),
+    owwScore: 0.0,
+    owwThreshold: 0.25,
   };
 
   let onChange = null;
@@ -193,6 +197,9 @@ export function createEqEditor({ height = 180 } = {}) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       const w = rect.width;
       const h = rect.height;
+      // chartH: area used by spectrum bars + EQ curve + handles.
+      // Bottom OWW_STRIP_H+1 pixels are reserved for the OWW score overlay.
+      const chartH = h - OWW_STRIP_H - 1;
       ctx.clearRect(0, 0, w, h);
 
       if (!state.pipelineReady) {
@@ -206,30 +213,48 @@ export function createEqEditor({ height = 180 } = {}) {
         return;
       }
 
-      // Spectrum bars — log-frequency placement (Phase 21A bands are
-      // log-spaced between spectrum_min_hz/_max_hz, so even-width bars
-      // are a reasonable approximation; precise per-bin freq is not emitted).
+      // Spectrum bars — log-frequency placement.
+      // Pre-DSP (raw mic) drawn first as gray/dim background bars,
+      // then post-DSP (what the model hears) drawn on top in colour.
       const gap = 2;
       const barW = (w - (N_BANDS - 1) * gap) / N_BANDS;
+
+      // Floor ticks (baseline markers)
       ctx.fillStyle = "rgba(67,209,122,0.08)";
       for (let i = 0; i < N_BANDS; i++) {
-        ctx.fillRect(Math.round(i * (barW + gap)), h - 2, Math.max(1, Math.round(barW)), 2);
+        ctx.fillRect(Math.round(i * (barW + gap)), chartH - 2, Math.max(1, Math.round(barW)), 2);
       }
+
+      // Pre-DSP bars: gray, narrower, no colour coding — shows raw input shape
+      for (let i = 0; i < N_BANDS; i++) {
+        const v = preBands[i];
+        if (v < 0.01) continue;
+        const bh = v * (chartH - 3);
+        ctx.fillStyle = `rgba(140,150,170,${(0.10 + v * 0.18).toFixed(2)})`;
+        ctx.fillRect(
+          Math.round(i * (barW + gap)) + 1,
+          Math.round(chartH - 2 - bh),
+          Math.max(1, Math.round(barW) - 2),
+          Math.max(1, Math.round(bh)),
+        );
+      }
+
+      // Post-DSP bars: full colour (what the model hears)
       for (let i = 0; i < N_BANDS; i++) {
         const v = bands[i];
         if (v < 0.01) continue;
-        const bh = v * (h - 3);
+        const bh = v * (chartH - 3);
         ctx.fillStyle = colorForLevel(v, state.colorYellowAt, state.colorRedAt);
         ctx.fillRect(
           Math.round(i * (barW + gap)),
-          Math.round(h - 2 - bh),
+          Math.round(chartH - 2 - bh),
           Math.max(1, Math.round(barW)),
           Math.max(1, Math.round(bh)),
         );
       }
 
       // Zero-gain reference line.
-      const yZero = gainToY(0) * h;
+      const yZero = gainToY(0) * chartH;
       ctx.strokeStyle = "rgba(255,255,255,0.10)";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -237,22 +262,18 @@ export function createEqEditor({ height = 180 } = {}) {
       ctx.lineTo(w, Math.round(yZero) + 0.5);
       ctx.stroke();
 
-      // EQ frequency response curve — composite of all active filters (HPF + bands).
-      // Uses RBJ biquad formulas at 16 kHz sample rate (matches the backend).
-      // Drawn as a filled gradient + stroke so the operator can see the shape clearly.
+      // EQ frequency response curve — composite of all active filters.
       {
         const SR = 16000;
         const N_CURVE = Math.max(80, Math.round(w));
-        // Pre-compute y-coords for the curve at N_CURVE evenly-spaced x positions.
         const pts = new Float32Array(N_CURVE);
         for (let i = 0; i < N_CURVE; i++) {
           const xNorm = i / (N_CURVE - 1);
           const freq = xToFreq(xNorm, state.minHz, state.maxHz);
           const db = _eqResponseDB(state, freq, SR);
-          pts[i] = gainToY(clamp(db, -GAIN_RANGE_DB, GAIN_RANGE_DB)) * h;
+          pts[i] = gainToY(clamp(db, -GAIN_RANGE_DB, GAIN_RANGE_DB)) * chartH;
         }
-        // Filled area above/below the zero line.
-        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        const grad = ctx.createLinearGradient(0, 0, 0, chartH);
         grad.addColorStop(0,   "rgba(96,165,250,0.22)");
         grad.addColorStop(0.5, "rgba(96,165,250,0.04)");
         grad.addColorStop(1,   "rgba(96,165,250,0.10)");
@@ -265,7 +286,6 @@ export function createEqEditor({ height = 180 } = {}) {
         ctx.lineTo(w, yZero);
         ctx.closePath();
         ctx.fill();
-        // Stroke on top.
         ctx.strokeStyle = "rgba(96,165,250,0.75)";
         ctx.lineWidth = 1.5;
         ctx.lineJoin = "round";
@@ -277,7 +297,7 @@ export function createEqEditor({ height = 180 } = {}) {
         ctx.stroke();
       }
 
-      // HPF cutoff — vertical dashed line + draggable handle at the bottom.
+      // HPF cutoff — vertical dashed line + draggable handle at the chart bottom.
       {
         const hpf = state.hpf || { enabled: true, hz: 220 };
         const xH = freqToX(hpf.hz, state.minHz, state.maxHz) * w;
@@ -287,29 +307,28 @@ export function createEqEditor({ height = 180 } = {}) {
         ctx.setLineDash([5, 4]);
         ctx.beginPath();
         ctx.moveTo(Math.round(xH) + 0.5, 0);
-        ctx.lineTo(Math.round(xH) + 0.5, h);
+        ctx.lineTo(Math.round(xH) + 0.5, chartH);
         ctx.stroke();
         ctx.setLineDash([]);
-        // Handle (triangle at bottom edge).
         const isDrag = state.dragging && state.dragging.kind === "hpf";
         ctx.fillStyle = isDrag ? "rgba(240,184,74,1.0)" : (dim ? HPF_COLOR_DIM : "rgba(240,184,74,0.92)");
         ctx.beginPath();
-        ctx.moveTo(xH, h - 12);
-        ctx.lineTo(xH - 6, h - 2);
-        ctx.lineTo(xH + 6, h - 2);
+        ctx.moveTo(xH, chartH - 12);
+        ctx.lineTo(xH - 6, chartH - 2);
+        ctx.lineTo(xH + 6, chartH - 2);
         ctx.closePath();
         ctx.fill();
         ctx.font = "10px ui-monospace,monospace";
         ctx.fillStyle = dim ? "rgba(200,190,160,0.5)" : "rgba(240,210,150,0.9)";
         ctx.textAlign = "center";
-        ctx.fillText(`HPF ${Math.round(hpf.hz)}Hz`, clamp(xH, 28, w - 28), h - 16);
+        ctx.fillText(`HPF ${Math.round(hpf.hz)}Hz`, clamp(xH, 28, w - 28), chartH - 16);
         ctx.textAlign = "start";
       }
 
-      // Parametric band points — diamonds, size encodes Q (narrower Q = smaller marker).
+      // Parametric band points — diamonds, size encodes Q.
       (state.eqBands || []).forEach((band, i) => {
         const x = freqToX(band.freq_hz, state.minHz, state.maxHz) * w;
-        const y = gainToY(band.gain_db) * h;
+        const y = gainToY(band.gain_db) * chartH;
         const dim = !band.enabled;
         const isDrag = state.dragging && state.dragging.kind === "band" && state.dragging.index === i;
         const r = clamp(5 + band.q * 1.2, 5, 14);
@@ -324,17 +343,61 @@ export function createEqEditor({ height = 180 } = {}) {
         ctx.strokeStyle = "rgba(0,0,0,0.45)";
         ctx.lineWidth = 1;
         ctx.stroke();
-        // Label: freq / gain / Q — shown on hover/drag for the active point.
         if (isDrag) {
           ctx.font = "10px ui-monospace,monospace";
           ctx.fillStyle = "rgba(220,230,255,0.95)";
           ctx.textAlign = "center";
           const label = `${Math.round(band.freq_hz)}Hz · ${band.gain_db >= 0 ? "+" : ""}${band.gain_db.toFixed(1)}dB · Q${band.q.toFixed(2)}`;
-          const ly = y < h / 2 ? y + r + 12 : y - r - 6;
+          const ly = y < chartH / 2 ? y + r + 12 : y - r - 6;
           ctx.fillText(label, clamp(x, 50, w - 50), ly);
           ctx.textAlign = "start";
         }
       });
+
+      // ── OWW score strip (bottom OWW_STRIP_H px) ──────────────────────────
+      {
+        const oy = chartH + 1;          // top of strip
+        const oh = h - oy;              // strip height
+
+        // Thin separator
+        ctx.fillStyle = "rgba(255,255,255,0.07)";
+        ctx.fillRect(0, chartH, w, 1);
+
+        // Strip background
+        ctx.fillStyle = "rgba(18,18,30,0.75)";
+        ctx.fillRect(0, oy, w, oh);
+
+        // Score fill — cyan, or green when above threshold
+        const sx = clamp(state.owwScore, 0, 1) * w;
+        if (sx > 0.5) {
+          const aboveThresh = state.owwScore >= state.owwThreshold;
+          ctx.fillStyle = aboveThresh ? "rgba(80,220,110,0.55)" : "rgba(96,165,250,0.40)";
+          ctx.fillRect(0, oy + 1, sx, oh - 2);
+        }
+
+        // Threshold tick (orange vertical needle)
+        const tx = Math.round(clamp(state.owwThreshold, 0, 1) * w);
+        ctx.strokeStyle = "rgba(240,184,74,0.88)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(tx + 0.5, oy);
+        ctx.lineTo(tx + 0.5, oy + oh);
+        ctx.stroke();
+
+        // Labels
+        ctx.font = "9px ui-monospace,monospace";
+        ctx.textBaseline = "middle";
+        const midY = oy + oh / 2;
+        ctx.fillStyle = "rgba(120,130,160,0.75)";
+        ctx.textAlign = "left";
+        ctx.fillText("oww", 3, midY);
+        ctx.fillStyle = "rgba(96,165,250,0.88)";
+        ctx.textAlign = "right";
+        ctx.fillText(state.owwScore.toFixed(3), w - 3, midY);
+        ctx.textBaseline = "alphabetic";
+        ctx.textAlign = "start";
+      }
     }
     rafId = requestAnimationFrame(draw);
   }
@@ -347,13 +410,14 @@ export function createEqEditor({ height = 180 } = {}) {
     const py = ev.clientY - rect.top;
     const w = rect.width;
     const h = rect.height;
+    const chartH = h - OWW_STRIP_H - 1;
 
     // Bands first (they're visually on top).
     let best = null;
     let bestDist = Infinity;
     (state.eqBands || []).forEach((band, i) => {
       const x = freqToX(band.freq_hz, state.minHz, state.maxHz) * w;
-      const y = gainToY(band.gain_db) * h;
+      const y = gainToY(band.gain_db) * chartH;
       const d = Math.hypot(px - x, py - y);
       const r = clamp(5 + band.q * 1.2, 5, 14);
       if (d <= r + 6 && d < bestDist) {
@@ -377,8 +441,9 @@ export function createEqEditor({ height = 180 } = {}) {
     const rect = rectOf();
     const w = rect.width;
     const h = rect.height;
+    const chartH = h - OWW_STRIP_H - 1;
     const px = clamp(ev.clientX - rect.left, 0, w);
-    const py = clamp(ev.clientY - rect.top, 0, h);
+    const py = clamp(ev.clientY - rect.top, 0, chartH); // clamp to chart area only
     const drag = state.dragging;
     if (!drag) return;
     if (drag.kind === "hpf") {
@@ -388,7 +453,7 @@ export function createEqEditor({ height = 180 } = {}) {
       const band = state.eqBands[drag.index];
       if (!band) return;
       const freq = clamp(xToFreq(px / w, state.minHz, state.maxHz), 20, Math.min(state.maxHz, 8000));
-      const gain = clamp(yToGain(py / h), -GAIN_RANGE_DB, GAIN_RANGE_DB);
+      const gain = clamp(yToGain(py / chartH), -GAIN_RANGE_DB, GAIN_RANGE_DB);
       state.eqBands[drag.index] = {
         ...band,
         freq_hz: Math.round(freq),
@@ -447,12 +512,26 @@ export function createEqEditor({ height = 180 } = {}) {
   }, { passive: false });
 
   const unsub = subscribeEvents((ev) => {
-    if (ev.type === "audio_level") {
+    if (ev.type === "audio_level_eq") {
+      // Primary spectrum source for the EQ canvas: post-DSP bands + pre-DSP background.
       const p = ev.payload || {};
       if (Array.isArray(p.bands) && p.bands.length === N_BANDS) {
         for (let i = 0; i < N_BANDS; i++) bands[i] = +p.bands[i] || 0;
       }
-      const vs = p.state;
+      if (Array.isArray(p.pre_bands) && p.pre_bands.length === N_BANDS) {
+        for (let i = 0; i < N_BANDS; i++) preBands[i] = +p.pre_bands[i] || 0;
+      }
+      if (typeof p.oww_score === "number") state.owwScore = p.oww_score;
+      if (typeof p.oww_threshold === "number") state.owwThreshold = p.oww_threshold;
+    } else if (ev.type === "oww_score") {
+      // Also update oww state from the dedicated oww_score events (fire even when
+      // audio_level_eq is throttled) so the strip stays responsive in standby.
+      const p = ev.payload || {};
+      if (typeof p.score === "number") state.owwScore = p.score;
+      if (typeof p.threshold === "number") state.owwThreshold = p.threshold;
+    } else if (ev.type === "audio_level") {
+      // Keep for pipelineReady state updates only — spectrum is fed via audio_level_eq.
+      const vs = (ev.payload || {}).state;
       if (vs === "standby" || vs === "listening" || vs === "reply") state.pipelineReady = true;
       else if (vs === "boot_warmup") state.pipelineReady = false;
     } else if (ev.type === "voice_state_change") {
@@ -462,6 +541,8 @@ export function createEqEditor({ height = 180 } = {}) {
     } else if (ev.type === "voice_loop_stopped") {
       state.pipelineReady = false;
       bands.fill(0);
+      preBands.fill(0);
+      state.owwScore = 0;
     }
   }, () => {});
 

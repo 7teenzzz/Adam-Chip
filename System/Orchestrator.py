@@ -87,9 +87,6 @@ tts = TTSClient(
     settings.section("services").get("tts", {}),
     mcu_speaker_url=mcu.speaker_endpoint_url(),
 )
-# Surface barge-in attempts that cannot stop ESP32 audio (PCM5102A has no stop
-# endpoint today). Lets operators see why interrupt didn't take effect.
-tts._barge_in_event_emitter = lambda t, p: event_log.append(t, p)
 scene_cache = SceneCache()
 _media_cfg = settings.section("media")
 _video_cfg = dict(_media_cfg.get("video", {}))
@@ -523,6 +520,9 @@ class VoiceLoopController:
             _idsp_cfg = {}
         self._input_dsp = audio_dsp.InputDSP(_idsp_cfg, sample_rate=self.sample_rate)
         self._input_dsp_poll: int = 0
+        # Phase 31+ EQ-overlay: cached OWW state for audio_level_eq events.
+        self._oww_last_score: float = 0.0
+        self._oww_last_threshold: float = 0.25
         # Phase 31 Wave 2 (D-06/D-07): browser monitor fan-out. _vad_loop pushes
         # BOTH the raw (pre-EQ) and processed (post-EQ) PCM for every frame into
         # a small registry of bounded queues — one per connected /api/audio/monitor
@@ -533,6 +533,15 @@ class VoiceLoopController:
         # unsubscribe() for symmetry.
         self._monitor_subscribers: list[asyncio.Queue[tuple[bytes, bytes]]] = []
         self._monitor_lock = threading.Lock()
+        # Barge-in interrupt: OWW scanning during TTS playback lets user cut Adam off.
+        # Queue lives on voice_loop; mic_reader reads it via getattr(_voice_loop, "_barge_in_q").
+        self._barge_in_enabled: bool = bool(ww_cfg.get("barge_in_enabled", True))
+        self._barge_in_triggered: bool = False
+        self._barge_in_q: asyncio.Queue[bytes] | None = None
+        self._barge_in_task: asyncio.Task[None] | None = None
+        # Pointer to the current LLM streaming producer task — set by
+        # _run_dialogue_turn_locked so barge-in monitor can cancel it.
+        self._current_producer_task: asyncio.Task[None] | None = None
 
     # Phase 31 Wave 2 — monitor fan-out subscribe/unsubscribe (mirrors EventLog).
     def subscribe_monitor(self, max_queue: int = _MONITOR_QUEUE_MAXSIZE) -> "asyncio.Queue[tuple[bytes, bytes]]":
@@ -701,6 +710,17 @@ class VoiceLoopController:
         # Cancelled in stop(); restarted on every start(). Survives _vad_loop
         # blocks on ASR/TTS, so loop liveness is always visible in events.jsonl.
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="adam_voice_heartbeat")
+        # Barge-in queue: created fresh each start so stale chunks from a previous
+        # session never leak into a new one. mic_reader accesses it via
+        # getattr(voice_loop, "_barge_in_q", None) — no direct wiring needed.
+        if self._barge_in_enabled and self._wake_engine is not None:
+            self._barge_in_q = asyncio.Queue(maxsize=40)
+        else:
+            self._barge_in_q = None
+        self._barge_in_triggered = False
+        self._barge_in_task = asyncio.create_task(
+            self._barge_in_monitor_loop(), name="adam_barge_in_monitor"
+        )
         await asyncio.sleep(0.2)
         if self._task.done():
             self.running = False
@@ -719,6 +739,16 @@ class VoiceLoopController:
 
     async def stop(self) -> dict[str, Any]:
         self.running = False
+        # Cancel barge-in monitor first — it references mic/tts/wake objects.
+        if self._barge_in_task and not self._barge_in_task.done():
+            self._barge_in_task.cancel()
+            try:
+                await self._barge_in_task
+            except asyncio.CancelledError:
+                pass
+        self._barge_in_task = None
+        self._barge_in_q = None
+        self._barge_in_triggered = False
         # Phase 9 (REQ-HEARTBEAT-INDEPENDENT): cancel the heartbeat ticker too.
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
@@ -850,6 +880,70 @@ class VoiceLoopController:
         except asyncio.CancelledError:
             raise
 
+    async def _barge_in_monitor_loop(self) -> None:
+        """Scans mic audio for wake word during TTS playback to allow barge-in.
+
+        Runs as a separate background task. Reads chunks from self._barge_in_q
+        (populated by mic_reader._drain_loop regardless of mute state) and feeds
+        80ms windows to the OWW model while runtime_state["speaking"] is True.
+
+        When the wake word fires: stops TTS immediately, cancels the LLM producer
+        task, and sets _barge_in_triggered so _vad_loop transitions to listening
+        instead of reply after _transcribe_and_dispatch returns.
+        """
+        if not self._barge_in_enabled or self._wake_engine is None:
+            return
+        _buf: list[bytes] = []
+        try:
+            while self.running:
+                # Only scan when Adam is actually speaking (TTS playing).
+                if not runtime_state.get("speaking"):
+                    _buf.clear()
+                    await asyncio.sleep(0.05)
+                    continue
+                bq = self._barge_in_q
+                if bq is None:
+                    await asyncio.sleep(0.05)
+                    continue
+                # Wait for the next chunk (up to 50ms).
+                try:
+                    chunk = await asyncio.wait_for(bq.get(), timeout=0.05)
+                except asyncio.TimeoutError:
+                    continue
+                # Apply the same input DSP as _vad_loop so OWW sees processed audio.
+                try:
+                    chunk = self._input_dsp.process(chunk)
+                except Exception:
+                    pass
+                _buf.append(chunk)
+                if len(_buf) < self._ww_frames_needed:
+                    continue
+                pcm_80ms = b"".join(_buf)
+                _buf.clear()
+                triggered = self._wake_engine.process_chunk(pcm_80ms)
+                score = getattr(self._wake_engine, "last_score", None)
+                if triggered and not self._barge_in_triggered:
+                    event_log.append("barge_in_detected", {
+                        "score": round(float(score), 3) if score is not None else None,
+                    })
+                    self._barge_in_triggered = True
+                    runtime_state["interrupt_tts"] = True
+                    tts.interrupt_playback()
+                    # Cancel the LLM producer — _producer() always puts the None
+                    # sentinel in its finally block, so _consumer() drains cleanly.
+                    pt = self._current_producer_task
+                    if pt is not None and not pt.done():
+                        pt.cancel()
+                    # Flush queue so we don't re-trigger on the same audio.
+                    _buf.clear()
+                    while True:
+                        try:
+                            bq.get_nowait()
+                        except Exception:
+                            break
+        except asyncio.CancelledError:
+            pass
+
     async def _vad_loop(self, read_fn: Callable[[int], bytes] | None, frame_bytes: int) -> None:
         """VAD + endpointing + ASR dispatch.
 
@@ -955,6 +1049,24 @@ class VoiceLoopController:
                             _level_payload["bands"] = _bands
                         event_log.append("audio_level", _level_payload)
 
+                # audio_level_eq: feeds the EQ canvas with pre-DSP (gray background)
+                # and post-DSP (coloured) bands side-by-side for both mic paths.
+                # Fires at the same cadence as audio_level regardless of mic_source.
+                self._eq_level_tick = getattr(self, "_eq_level_tick", 0) + 1
+                if self._eq_level_tick >= mic_reader._audio_level_emit_every_n:
+                    self._eq_level_tick = 0
+                    _pre_b = mic_reader._compute_bands(_raw_chunk_for_monitor)
+                    _post_b = mic_reader._compute_bands(chunk)
+                    _eq_payload: dict[str, Any] = {
+                        "oww_score": round(self._oww_last_score, 3),
+                        "oww_threshold": round(self._oww_last_threshold, 3),
+                    }
+                    if _pre_b is not None:
+                        _eq_payload["pre_bands"] = _pre_b
+                    if _post_b is not None:
+                        _eq_payload["bands"] = _post_b
+                    event_log.append("audio_level_eq", _eq_payload)
+
                 # D-13/D-14: boot_warmup is a drain-only state. We keep
                 # get_chunk()/read_fn() pumping so MicReader's queue doesn't
                 # fill up (drop_oldest would stay silent but still wastes CPU),
@@ -982,6 +1094,10 @@ class VoiceLoopController:
                                 # dynamics, and noise calibration uses the low tail of
                                 # the distribution as baseline. Includes current threshold
                                 # so UI does not need a separate poll.
+                                self._oww_last_score = float(score)
+                                _thr = getattr(self._wake_engine, "_threshold", None)
+                                if _thr is not None:
+                                    self._oww_last_threshold = float(_thr)
                                 event_log.append("oww_score", {
                                     "score": round(float(score), 3),
                                     "hits": getattr(self._wake_engine, "_consecutive_hits", None),
@@ -1231,6 +1347,25 @@ class VoiceLoopController:
                             )
                             if _diag_on:
                                 self.mic_reader.begin_lag_diag(4000.0, "post_transcribe")
+                        # Barge-in: wake word fired during TTS → skip reply window,
+                        # go directly to listening for the user's new request.
+                        if self._barge_in_triggered:
+                            self._barge_in_triggered = False
+                            self._current_producer_task = None
+                            self._utterance_id = str(uuid4())[:8]
+                            speech_frames.clear()
+                            speech_ms = 0
+                            silence_ms = 0
+                            self._ww_buf.clear()
+                            if self._wake_engine is not None:
+                                self._wake_engine.reset()
+                            self._wake_detected_at = time.perf_counter()
+                            event_log.append("barge_in_listening", {
+                                "utterance_id": self._utterance_id,
+                                "silence_timeout_sec": self._listening_silence_timeout_sec,
+                            })
+                            self._set_voice_state("listening", "barge_in")
+                            continue
                         if spoke:
                             self._set_voice_state("reply", "agent_spoke")
                             self._reply_start = time.perf_counter()
@@ -3158,6 +3293,9 @@ async def _stream_llm_and_speak(
     # чтобы статус "Говорю" в UI появлялся только когда TTS реально звучит,
     # а не на стадии генерации LLM-токенов (статус "Думаю").
     producer_task = asyncio.create_task(_producer(), name="llm_producer")
+    # Expose producer to barge-in monitor so it can cancel LLM generation mid-stream.
+    if voice_loop is not None:
+        voice_loop._current_producer_task = producer_task
     consumer_task = asyncio.create_task(_consumer(), name="tts_consumer")
     filler_task = asyncio.create_task(_filler_task(), name="tts_filler")
     try:
@@ -3181,6 +3319,8 @@ async def _stream_llm_and_speak(
     finally:
         runtime_state["speaking"] = False
         runtime_state["last_tts_finished_at"] = time.perf_counter()
+        if voice_loop is not None:
+            voice_loop._current_producer_task = None
     # Re-raise exceptions from child tasks (producer error → caller handles gracefully).
     # Filler errors are non-fatal — already logged inside _filler_task.
     for _task in (producer_task, consumer_task):
@@ -3556,7 +3696,6 @@ def _rebuild_clients(section_path: str) -> list[str]:
         restarted.append("vlm")
     if section_path.startswith("services.tts") or section_path == "services":
         tts = TTSClient(services.get("tts", {}), mcu_speaker_url=mcu.speaker_endpoint_url())
-        tts._barge_in_event_emitter = lambda t, p: event_log.append(t, p)
         restarted.append("tts")
     if section_path.startswith("wake_word"):
         ww_cfg = settings.section("wake_word") or {}
