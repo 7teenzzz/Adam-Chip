@@ -304,6 +304,56 @@ function buildOwwSection() {
   let rulerRAF = null;
   let rulerDisposed = false;
 
+  // ── Numeric threshold input — keeps in sync with the drag handle ──────
+  const threshInput = el("input", {
+    type: "number",
+    class: "input",
+    min: "0.01", max: "0.95", step: "0.01",
+    style: "width:72px; font-size:12px; text-align:center; padding:2px 6px",
+    title: "Порог OWW (0.01–0.95) — Enter или Tab для применения",
+  });
+  threshInput.value = rulerThreshold.toFixed(2);
+  const threshBadge = statusBadge();
+
+  async function applyThreshInput() {
+    const v = parseFloat(threshInput.value);
+    if (isNaN(v) || v < 0.01 || v > 0.95) {
+      threshInput.value = rulerThreshold.toFixed(2);
+      return;
+    }
+    flashBusy(threshBadge);
+    try {
+      await fetch("/api/wake_word/sensitivity", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threshold: v, persist: true }),
+      });
+      rulerThreshold = v;
+      flashOk(threshBadge);
+    } catch (e) {
+      flashBad(threshBadge);
+      toast(`порог OWW: ${e.message}`, "bad", 5000);
+    }
+  }
+  threshInput.addEventListener("change", applyThreshInput);
+  // Also apply on Enter without leaving the field
+  threshInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); applyThreshInput(); }
+  });
+
+  // Initial load — populate before the first SSE event arrives
+  fetch("/api/wake_word/sensitivity")
+    .then((r) => r.json())
+    .then((d) => {
+      if (d && d.ok && typeof d.threshold === "number") {
+        rulerThreshold = d.threshold;
+        if (document.activeElement !== threshInput) {
+          threshInput.value = d.threshold.toFixed(2);
+        }
+      }
+    })
+    .catch(() => {});
+
   function drawRuler() {
     if (rulerDisposed) return;
     const dpr = window.devicePixelRatio || 1;
@@ -383,17 +433,24 @@ function buildOwwSection() {
   rulerRAF = requestAnimationFrame(drawRuler);
 
   // ── SSE subscription: oww_score → ruler; wake_word_detected → badge ───
+  function syncThreshFromSse(v) {
+    rulerThreshold = v;
+    // Don't overwrite while the user is actively editing the field.
+    if (document.activeElement !== threshInput) {
+      threshInput.value = v.toFixed(2);
+    }
+  }
   const unsub = subscribeEvents((ev) => {
     if (ev.type === "oww_score") {
       const p = ev.payload || {};
       if (typeof p.score === "number") rulerScore = p.score;
-      if (typeof p.threshold === "number") rulerThreshold = p.threshold;
+      if (typeof p.threshold === "number") syncThreshFromSse(p.threshold);
     } else if (ev.type === "wake_word_detected") {
       lastTriggerTs = Date.now();
       updateTriggerBadge();
     } else if (ev.type === "wake_sensitivity_updated") {
       const p = ev.payload || {};
-      if (typeof p.threshold === "number") rulerThreshold = p.threshold;
+      if (typeof p.threshold === "number") syncThreshFromSse(p.threshold);
     }
   }, () => {});
 
@@ -406,14 +463,18 @@ function buildOwwSection() {
     ]),
     meter.canvas,
     rulerCanvas,
-    el("div", { style: "display:flex; align-items:center; gap:8px" }, [
-      el("span", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.3" },
-        "Перетащи оранжевую линию — порог wake-word «адам» (wake_word.threshold). " +
-        "Полоска ниже: голубой fill = текущий score, оранжевая метка = порог. " +
-        "Значок «⚡ АДАМ!» загорается при каждом реальном срабатывании."),
+    el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap" }, [
+      el("label", { style: "display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted)" }, [
+        "Порог:", threshInput,
+      ]),
+      threshBadge,
       el("span", { class: "spacer" }),
       calibStatus,
     ]),
+    el("div", { class: "dim", style: "font-size:10px; color:var(--muted); line-height:1.3" },
+      "Перетащи оранжевую линию или введи число (Enter). " +
+      "Полоска: голубой fill = текущий score, оранжевая метка = порог. " +
+      "Значок «⚡ АДАМ!» загорается при каждом реальном срабатывании."),
   ]);
   wrapper._dispose = () => {
     rulerDisposed = true;
