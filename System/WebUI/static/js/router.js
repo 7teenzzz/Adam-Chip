@@ -3,6 +3,7 @@
 const ROUTES = {
   chat:     { file: "chat",     label: "Чат" },
   settings: { file: "settings", label: "Конфигурация" },
+  audioInput: { file: "audioInput", label: "Аудио-вход" },
   models:   { file: "models",   label: "Модели" },
   tuning:   { file: "tuning",   label: "Тюнинг" },
   services: { file: "services", label: "Сервисы" },
