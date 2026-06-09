@@ -2,7 +2,7 @@
 """Ночной консолидатор памяти Адама.
 
 Читает свежие эпизоды (`{ADAM_DATA_DIR}/memory/episodes/*.jsonl`),
-просит локальный LLM (qwen2.5:7b через Ollama) сгенерировать JSON-патч
+просит локальный LLM (llama.cpp, gemma-4-E4B) сгенерировать JSON-патч
 для `diary.md`, применяет патч, помечает эпизоды consolidated, делает декей.
 
 Запускается systemd-таймером ночью (см. `deploy/systemd/adam-consolidator.{service,timer}`).

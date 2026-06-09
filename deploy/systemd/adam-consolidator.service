@@ -1,7 +1,6 @@
 [Unit]
 Description=Adam Chip · ночной консолидатор памяти (semantic merge + decay)
-After=network-online.target ollama.service
-Wants=ollama.service
+After=network-online.target
 
 [Service]
 Type=oneshot

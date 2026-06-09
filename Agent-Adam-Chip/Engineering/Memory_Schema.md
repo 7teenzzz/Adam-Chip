@@ -141,7 +141,7 @@ def main():
         model=cfg.consolidator.model,    # qwen2.5:7b
         system=CONSOLIDATOR_PROMPT,       # "ты редактор журнала наблюдений, не персонаж"
         user=build_user_message(new_episodes, current_semantic),
-        format="json",                     # Ollama JSON mode
+        format="json",                     # llama.cpp JSON mode
     )
 
     if not validate_patch_schema(patch):

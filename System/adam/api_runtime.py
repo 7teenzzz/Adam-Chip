@@ -418,29 +418,18 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
     @router.get("/api/models/llm")
     async def models_llm() -> dict[str, Any]:
         llm_cfg = deps.settings.section("services").get("llm", {})
-        provider = str(llm_cfg.get("provider", "ollama"))
+        provider = str(llm_cfg.get("provider", "openai"))
         base_url = str(llm_cfg.get("base_url", "")).rstrip("/")
         current = str(llm_cfg.get("model", ""))
         available: list[dict[str, Any]] = []
         error: str | None = None
         try:
             async with httpx.AsyncClient(timeout=4.0, trust_env=False) as client:
-                if provider == "ollama":
-                    resp = await client.get(f"{base_url}/api/tags")
-                    resp.raise_for_status()
-                    body = resp.json()
-                    for tag in body.get("models", []):
-                        available.append({
-                            "name": tag.get("name"),
-                            "size": tag.get("size"),
-                            "modified_at": tag.get("modified_at"),
-                        })
-                else:
-                    resp = await client.get(f"{base_url}/v1/models")
-                    resp.raise_for_status()
-                    body = resp.json()
-                    for entry in body.get("data", []):
-                        available.append({"name": entry.get("id")})
+                resp = await client.get(f"{base_url}/v1/models")
+                resp.raise_for_status()
+                body = resp.json()
+                for entry in body.get("data", []):
+                    available.append({"name": entry.get("id")})
         except Exception as exc:
             error = str(exc)
         return {"provider": provider, "current": current, "available": available, "error": error}
