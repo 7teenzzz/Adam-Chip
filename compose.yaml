@@ -68,7 +68,7 @@ services:
       ADAM_MODELS_DIR: /models
       HF_HOME: /hf_cache
       HF_HUB_CACHE: /hf_cache/hub
-      ADAM_ASR_VAD_ONSET: ${ADAM_ASR_VAD_ONSET:-0.1}
+      ADAM_ASR_VAD_ONSET: ${ADAM_ASR_VAD_ONSET:-0.2}
       ADAM_ASR_VAD_OFFSET: ${ADAM_ASR_VAD_OFFSET:-0.2}
       ADAM_ASR_LOGPROB_THRESHOLD: ${ADAM_ASR_LOGPROB_THRESHOLD:--1.85}
     volumes:

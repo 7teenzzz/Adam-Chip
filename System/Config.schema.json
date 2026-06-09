@@ -515,6 +515,13 @@
               "description": "Milliseconds after TTS playback finishes during which MicReader continues to drain the ESP32 socket but does NOT queue chunks to the consumer. This flushes the ESP32's internal stream buffer of self-echo audio (Adam's own voice picked up by INMP441 across the room) before the REPLY window starts accepting user speech. Reference observation: ESP32 stream lag is ~2300ms — chunks read at t=T contain audio captured at t=T-2.3s. Without this window, ~2 seconds of TTS-tail audio enters the queue right after mic_unmuted and gets transcribed as user speech in REPLY. Default 2500ms covers the worst observed lag with a small safety margin. Set to 0 to disable (only safe in setups with negligible mic→speaker acoustic coupling).",
               "default": 2500
             },
+            "pre_wake_buffer_ms": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 5000,
+              "description": "Rolling audio buffer retained before OWW wake-word confirmation (milliseconds). When OWW triggers, this audio is prepended to speech_frames instead of being discarded. Covers OWW debounce window (debounce_hits=2 × 80ms = 160ms) plus wake-word duration (~400ms) and early command start (~940ms). Computed to frames as int(pre_wake_buffer_ms / frame_ms) in VoiceLoopController.__init__. Minimum 200ms; values below frame_ms have no effect. Deferred: 0 as a disable flag is not supported — use 200ms minimum.",
+              "default": 1500
+            },
             "reply_silence_timeout_sec": {
               "type": "number",
               "minimum": 1.0,
@@ -620,6 +627,13 @@
               "maximum": 1.0,
               "description": "pyannote VAD offset threshold passed to whisperX load_model() via vad_options. Controls when speech is detected as ending. whisperX default 0.363. Lower values keep speech windows open longer (more tolerant of brief pauses within a sentence). 0.2 recommended for ESP32 INMP441 / USB webcam. Must be <= vad_onset or VAD behaves unexpectedly.",
               "default": 0.2
+            },
+            "asr_pre_send_min_rms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000,
+              "description": "Pre-send RMS gate: if the mean RMS of collected speech_frames falls below this value, the orchestrator skips the ASR call and returns an empty result. Catches fully-silent submissions that slipped past WebRTC VAD (e.g. stuck VAD state or very long silence-misclassified segment). 0 disables the gate. 200 is conservative — a real whispered command normalised through normalize_factor=8000 would exceed this. Compare with media.audio.silence_rms_threshold (per-frame gate during recording).",
+              "default": 200
             },
             "logprob_threshold": {
               "type": "number",
@@ -1025,6 +1039,13 @@
           "type": "boolean",
           "description": "When true, a second OWW wake-word detection during TTS playback immediately interrupts Adam (stops aplay and cancels the LLM producer) and transitions the voice loop to LISTENING so the user can speak their new request. Requires the OWW engine to be configured (engine != 'none'). Safe to disable (false) if false-positive interrupts are a problem at the exhibition venue.",
           "default": true
+        },
+        "barge_in_debounce_hits": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Number of consecutive OWW frames above threshold required to confirm a barge-in during TTS playback. Independent from debounce_hits (normal wake detection). Higher value = less sensitive to acoustic echo of Adam's own voice reflecting off the mic. Default 3 gives one extra frame of protection over debounce_hits=2 without meaningfully delaying real interruptions.",
+          "default": 3
         }
       }
     },

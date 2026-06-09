@@ -1037,6 +1037,31 @@ Plans:
 
 ---
 
+## Phase 34: ASR Quality — пустые строки и галлюцинации
+
+**Branch:** `voice-loop-recovery` (текущая)
+
+**Goal:** Устранить два подтверждённых класса дефектов ASR: (1) пустые транскрипции после детекции wake-word, когда речевой буфер обнуляется до того как команда полностью произнесена; (2) галлюцинации (субтитры-фантомы типа «Спасибо за внимание», «Тревожная музыка» и т.д.), проходящие сквозь фильтры ASR-сервиса и оркестратора.
+
+**Requires:**
+- Все изменения из Phase 31 (barge-in fix, queue drain) уже закоммичены
+
+**Delivers:**
+- Wave 1: Pre-wake audio buffer — сохранять N секунд аудио до момента детекции wake-word и прикреплять к основному сегменту; strip wake-word из транскрипта в оркестраторе
+- Wave 2: Hallucination guard — расширить `_HALLUCINATION_PATTERNS` в ASR_WhisperX.py + добавить post-filter в оркестраторе как второй эшелон; пересобрать Docker-контейнер
+
+**Requirements:** REQ-ASR-EMPTY-PREWAKE (пустые после OWW), REQ-ASR-HALLUCINATION (фильтрация галлюцинаций)
+
+**Mode:** standard | **Priority:** P0 | **Effort:** S | **Exhibition:** Critical
+
+**Plans:** 2 plans
+
+Plans:
+- [ ] 34-PLAN-wave1.md — Pre-wake buffer fix: _pre_wake_buf в VoiceLoopController + Config param
+- [ ] 34-PLAN-wave2.md — Hallucination guard: asr_filter.py + second-tier в Orchestrator + Docker rebuild
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.
