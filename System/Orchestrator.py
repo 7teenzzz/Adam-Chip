@@ -65,6 +65,11 @@ from adam.tuning import TuningStore, get_store as _get_tuning_store
 from adam.asr_filter import is_hallucination as _is_hallucination
 from adam.wake_word import create_engine as _create_wake_engine
 from adam.webrtc_vad import WebRtcVadWrapper
+from adam.identity import (
+    AIIMRuntimeState, AspectModulator, EmotionMachine, IdentityVector,
+    IntentionTracker, apply_humor_reaction, parse_aiim_formula,
+)
+from adam.identity_drift import DriftAccumulator
 
 
 
@@ -156,7 +161,36 @@ session_state: dict[str, Any] = {
     "accumulator": None,  # type: ignore[assignment]
     "last_turn_at": 0.0,
     "last_face_seen_at": 0.0,
+    "aiim_state": None,   # AIIMRuntimeState | None — per-session identity state
 }
+
+# AIIM singletons — stateless machines, instantiated once
+_emotion_machine = EmotionMachine()
+_intention_tracker = IntentionTracker()
+_aspect_modulator = AspectModulator()
+_drift_accumulator = DriftAccumulator()
+
+_VISITOR_TONE_SAD = {
+    "грустно", "тяжело", "устал", "устала", "одинок", "одинока",
+    "потерял", "потеряла", "скучно", "боюсь", "страшно", "больно",
+    "печально", "пусто", "одиноко",
+}
+_VISITOR_TONE_CURIOUS = {
+    "почему", "как это", "что это", "расскажи", "объясни",
+    "а если", "а вдруг", "интересно", "хочу понять", "что значит",
+    "зачем", "как работает",
+}
+
+
+def _detect_visitor_tone(transcript: str, word_count: int) -> str:
+    """Infer visitor's conversational tone from transcript heuristics."""
+    t = transcript.lower()
+    if any(m in t for m in _VISITOR_TONE_SAD):
+        return "sad"
+    if "?" in transcript or any(m in t for m in _VISITOR_TONE_CURIOUS):
+        if word_count >= 3:
+            return "curious"
+    return "neutral"
 
 # Ring-buffer полных промтов для UI диагностики.
 from collections import deque  # noqa: E402
@@ -300,12 +334,44 @@ async def _commit_session_locked(reason: str) -> None:
     acc: SessionAccumulator | None = session_state.get("accumulator")  # type: ignore[assignment]
     if acc is None or acc.turn_count == 0:
         session_state["accumulator"] = None
+        session_state["aiim_state"] = None
         return
     tuning = tuning_store.current()
+    # Finalize episode first so AIIM drift gets real salience (not a stub)
     episode = acc.finalize(
         weights=tuning.memory.episodic.weights,
         duration_normalize_seconds=tuning.memory.episodic.duration_normalize_seconds,
     )
+    # AIIM: apply drift and persist using real episode salience
+    aiim_state: AIIMRuntimeState | None = session_state.get("aiim_state")  # type: ignore[assignment]
+    if aiim_state is not None and tuning.identity.enabled:
+        try:
+            drift_record = session_state.get("_drift_record")
+            if drift_record is not None:
+                emotion_dist = aiim_state.emotion_distribution()
+                real_salience = episode.salience
+                session_type = _drift_accumulator.classify_session(
+                    emotion_dist, real_salience, aiim_state.turn
+                )
+                updated_record = _drift_accumulator.apply_session(
+                    emotion_dist, real_salience, aiim_state.turn,
+                    drift_record, tuning.identity,
+                )
+                _drift_accumulator.save(
+                    updated_record,
+                    Path(settings.data_dir),
+                    log_entry=_drift_accumulator.build_log_entry(
+                        session_type,
+                        real_salience, aiim_state.turn,
+                        _drift_accumulator.compute_delta(
+                            session_type,
+                            real_salience, tuning.identity,
+                        ),
+                    ),
+                )
+        except Exception as _exc:
+            event_log.append("aiim_drift_error", {"error": str(_exc)})
+    session_state["aiim_state"] = None
     write = should_record(episode, acc, tuning.memory.episodic)
     if write:
         try:
@@ -3206,6 +3272,22 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         if acc is None:
             acc = SessionAccumulator()
             session_state["accumulator"] = acc
+            # Init AIIM state for this session
+            _identity_tuning = tuning_store.current().identity
+            if _identity_tuning.enabled:
+                try:
+                    _id_path = PROJECT_ROOT / _identity_tuning.aiim_formula_path
+                    _specs = parse_aiim_formula(_id_path.read_text(encoding="utf-8"))
+                    _base_vec = IdentityVector.from_specs(_specs)
+                    _drift_rec = _drift_accumulator.load(Path(settings.data_dir))
+                    _cur_vec = _drift_accumulator.apply_to_vector(_base_vec, _drift_rec, _identity_tuning)
+                    session_state["aiim_state"] = AIIMRuntimeState(vector=_cur_vec)
+                    session_state["_drift_record"] = _drift_rec
+                except Exception as _exc:
+                    event_log.append("aiim_init_error", {"error": str(_exc)})
+                    session_state["aiim_state"] = None
+            else:
+                session_state["aiim_state"] = None
         session_state["last_turn_at"] = now_ts
 
     # извлекаем имя
@@ -3360,6 +3442,39 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         "unique": len(set(recent_scenes)),
         "texts": recent_scenes,
     }, turn_id=turn_id)
+    # AIIM per-turn update
+    identity_block = ""
+    aiim_state: AIIMRuntimeState | None = session_state.get("aiim_state")  # type: ignore[assignment]
+    if aiim_state is not None and tuning.identity.enabled:
+        try:
+            silence_s = max(0.0, now_ts - float(session_state.get("last_turn_at") or now_ts))
+            word_count = len(transcript.split())
+            visitor_tone = _detect_visitor_tone(transcript, word_count)
+            new_emotion, emotion_src = _emotion_machine.transition(
+                aiim_state.emotion, transcript, visitor_tone,
+                silence_s, word_count, tuning.identity,
+            )
+            if new_emotion != aiim_state.emotion or emotion_src:
+                aiim_state.emotion_src = emotion_src
+            aiim_state.emotion = new_emotion
+            aiim_state.intentions = _intention_tracker.evaluate(
+                transcript, aiim_state.intentions, aiim_state.emotion,
+                aiim_state.turn, tuning.identity,
+            )
+            aiim_state.vector = _aspect_modulator.modulate(
+                aiim_state.vector, aiim_state.emotion, tuning.identity,
+            )
+            humor_reaction = apply_humor_reaction(aiim_state, transcript, tuning.identity)
+            if humor_reaction:
+                event_log.append("aiim_humor_reaction", {
+                    "reaction": humor_reaction, "turn": aiim_state.turn,
+                }, turn_id=turn_id)
+            identity_block = aiim_state.to_ctx_block(tuning.identity)
+            aiim_state.record_turn()
+            aiim_state.turn += 1
+        except Exception as _exc:
+            event_log.append("aiim_turn_error", {"error": str(_exc)})
+
     messages = prompt_builder.build_messages(
         transcript=transcript,
         dialogue_history=history,
@@ -3374,6 +3489,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         include_scene=tuning.prompt.include_scene,
         include_sensors=tuning.prompt.include_sensors,
         response_word_target=tuning.llm.response_word_target,
+        identity_block=identity_block,
     )
     memory.add_dialogue("viewer", transcript)
     event_log.append(

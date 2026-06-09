@@ -1,24 +1,27 @@
-# Branch: ultimate-integration
+# Branch: ultimate-integration-v2
 
-**Diverged from:** `vlr-main-integrated` (43b7f2f)
-**Goal:** Интегрировать все параллельные потоки работ в единую ветку — кандидат на мёрдж в main.
+**Diverged from:** main (after ultimate-integration merge)
+**Goal:** Интегрировать Dynamic AIIM в ветку-кандидат — добавить живую идентичность Адама поверх полного интеграционного стека.
 **Status:** in-progress
 **Merge target:** main
-**Phase:** 35 — см. `.planning/phases/35-ultimate-integration/35-PLAN.md`
+**Phase:** 35 — Dynamic AIIM integration
 
-**Интегрируемые ветки (пофазно):**
+**Интегрированные ветки:**
+
 1. `LuxFlora-modes_V1.2` — аппаратный ремап каналов (вибро 0-3 / свет 4-14) ✓
-2. `origin/MemoryFixes` — фикс Echoes/Chinese gate + тесты памяти
-3. `origin/Extra` — Skills: шутки + погода (pre-LLM провайдеры)
+2. `origin/MemoryFixes` — фикс Echoes/Chinese gate + тесты памяти ✓
+3. `origin/Extra` — Skills: шутки + погода (pre-LLM провайдеры) ✓
+4. `dynamic-aiim` — Dynamic AIIM: [ctx.identity], identity.py, identity_drift.py ✓
 
 **Merge conditions:**
-1. Все три ветки влиты без регрессий
-2. Channel map прошивки (AdamsConfig.h) = Config.json = flora.py — консистентно
-3. Python синтаксис чистый, JSON валидный
-4. `/gsd-debug` проверка пройдена ✓
-5. Knowledge graph обновлён (`graphify update System/`)
 
-**Global changes:** ДА — firmware (reflash обязателен после LuxFlora), Config.json (каналы, параметры), новые модули skills.py + asr_filter.py.
+1. Все ветки влиты без регрессий
+2. `[ctx.identity]` инжектируется без эха меток в LLM-ответах
+3. `[ctx.weather]` и `[ctx.identity]` сосуществуют в prompt.py
+4. Python синтаксис чистый, JSON валидный
+5. Unit-тесты identity зелёные
+
+**Global changes:** ДА — новые модули identity.py + identity_drift.py, Config.json (identity tuning), prompt.py (два новых ctx-блока).
 
 **Notes:**
 - `input_device` = `pulse` (PipeWire, Phase 32) — НЕ менять на plughw

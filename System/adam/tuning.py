@@ -1,23 +1,24 @@
 """Runtime-настройки персоны Адама.
 
-Раньше эти параметры жили в `Agent Adam Chip/Tuning.json` — отдельный файл с
-hot-reload по mtime. В рамках миграции на single-source-of-truth все параметры
-переехали в `System/Config.json` (секция `tuning`). Этот модуль сохраняет
-pydantic-модели и API `TuningStore`, но backing store теперь — `Settings`,
-читающий Config.json. Внешние импорты (`from .tuning import ...`) не меняются.
+`Tuning.json` редактируется из WebUI и hot-reloadable.
+Инфраструктура (камеры, MCU, endpoints LLM/ASR/TTS) — отдельно в Settings/Config.json.
 """
 from __future__ import annotations
 
-import copy
+import json
 import logging
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from .config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, Settings
+from .identity import EmotionState
+
+from .config import PROJECT_ROOT
 
 log = logging.getLogger(__name__)
+
+DEFAULT_TUNING_PATH = PROJECT_ROOT / "Agent-Adam-Chip" / "Tuning.json"
 
 
 # ---------- Pydantic-модели ----------
@@ -226,9 +227,186 @@ class DiagnosticsTuning(BaseModel):
     log_level: Literal["debug", "info", "warning", "error"] = "info"
     metrics_enabled: bool = True
     trace_prompts: bool = False
-    # Phase 11 lag-source diagnostic — emits ~200 mic_lag_diag_chunk events
-    # per post-TTS turn while True. Use scripts/diag_lag_source.py to analyse.
-    trace_post_tts_lag: bool = False
+
+
+# ---------- AIIM Identity models ----------
+
+
+class EmotionTransitionRule(BaseModel):
+    """One emotion transition rule. Matched by keywords OR conditions, priority DESC."""
+
+    keywords: List[str] = Field(default_factory=list)
+    conditions: Dict[str, Any] = Field(default_factory=dict)
+    priority: int = Field(5, ge=0, le=100)
+    src: str = ""  # semantic source label: "memory", "challenge", "contact", "decay", ""
+
+
+class HumorReactionConfig(BaseModel):
+    """Config for detecting visitor humor reactions and adjusting Adam's im aspect + emotion."""
+
+    enabled: bool = True
+    positive_words: List[str] = Field(default_factory=lambda: [
+        "ха", "хаха", "хахах", "хахаха", "аха", "ахаха", "ахах",
+        "хехе", "лол", "кек", "смешно", "смешной", "смешная",
+        "хорошая шутка", "классная шутка", "хорошо придумал", "умора",
+        "ты смешной", "ты смешная",
+    ])
+    negative_words: List[str] = Field(default_factory=lambda: [
+        "не смешно", "это не смешно", "непонятная шутка", "странная шутка",
+    ])
+    im_positive_delta: float = Field(0.06, ge=0.0, le=0.2)
+    im_negative_delta: float = Field(-0.04, ge=-0.2, le=0.0)
+
+
+class IntentionTriggerConfig(BaseModel):
+    """Config for one hidden intention drive."""
+
+    keywords: List[str] = Field(default_factory=list)
+    probabilistic: bool = False
+    rate_per_turn: float = Field(0.0, ge=0.0, le=1.0)
+    cooldown_turns: int = Field(5, ge=0)
+
+
+class AspectCeilingConfig(BaseModel):
+    """Max reachable weight per aspect (drift ceiling). LOCKED aspects excluded."""
+
+    lo: float = Field(0.85, ge=0.0, le=1.0)
+    em: float = Field(0.75, ge=0.0, le=1.0)
+    sp: float = Field(0.95, ge=0.0, le=1.0)
+    ho: float = Field(0.75, ge=0.0, le=1.0)
+    wi: float = Field(0.75, ge=0.0, le=1.0)
+    me: float = Field(0.60, ge=0.0, le=1.0)
+    at: float = Field(0.80, ge=0.0, le=1.0)
+
+    def as_dict(self) -> dict[str, float]:
+        return {
+            "lo": self.lo, "em": self.em, "sp": self.sp, "ho": self.ho,
+            "wi": self.wi, "me": self.me, "at": self.at,
+        }
+
+
+class DriftTableEntry(BaseModel):
+    aspect: str
+    base_delta: float = Field(0.001, ge=-0.02, le=0.02)
+
+
+class DriftTableConfig(BaseModel):
+    """Per-experience-type drift deltas. Applied once per session."""
+
+    deep_contact: List[DriftTableEntry] = Field(default_factory=lambda: [
+        DriftTableEntry(aspect="lo", base_delta=0.005),
+        DriftTableEntry(aspect="em", base_delta=0.002),
+        DriftTableEntry(aspect="sp", base_delta=0.001),
+    ])
+    confrontation: List[DriftTableEntry] = Field(default_factory=lambda: [
+        DriftTableEntry(aspect="ho", base_delta=0.003),
+        DriftTableEntry(aspect="wi", base_delta=0.002),
+    ])
+    memory_surfacing: List[DriftTableEntry] = Field(default_factory=lambda: [
+        DriftTableEntry(aspect="me", base_delta=0.005),
+        DriftTableEntry(aspect="sp", base_delta=0.002),
+    ])
+    witnessed: List[DriftTableEntry] = Field(default_factory=lambda: [
+        DriftTableEntry(aspect="at", base_delta=0.001),
+    ])
+    void: List[DriftTableEntry] = Field(default_factory=list)
+
+
+class AspectModulationConfig(BaseModel):
+    """Per-turn aspect weight deltas driven by current emotion."""
+
+    warm_lo_delta: float = Field(0.08, ge=0.0, le=0.3)
+    warm_em_delta: float = Field(0.05, ge=0.0, le=0.2)
+    unease_me_delta: float = Field(0.10, ge=0.0, le=0.3)
+    unease_em_delta: float = Field(0.05, ge=0.0, le=0.2)
+    sharp_wi_delta: float = Field(0.08, ge=0.0, le=0.3)
+    sharp_im_delta: float = Field(0.05, ge=0.0, le=0.2)
+    curious_at_delta: float = Field(0.05, ge=0.0, le=0.2)
+    calm_decay_rate: float = Field(0.02, ge=0.001, le=0.1)
+    aspect_max: float = Field(0.95, ge=0.5, le=1.0)
+    aspect_min: float = Field(0.20, ge=0.0, le=0.5)
+
+
+class IdentityTuning(BaseModel):
+    """Runtime config for Dynamic AIIM identity state machine."""
+
+    enabled: bool = True
+    aiim_formula_path: str = "Agent Adam Chip/About/Identity.md"
+
+    # Base aspect weights (source of truth: loaded from Identity.md at session start,
+    # then these are used as the reference for modulation threshold comparisons).
+    # Values here must stay in sync with Identity.md AIIM formula.
+    base_weights: Dict[str, float] = Field(default_factory=lambda: {
+        "wi": 0.65, "lo": 0.70, "im": 0.65, "ho": 0.60,
+        "co": 0.88, "em": 0.60, "be": 0.65, "sp": 0.85,
+        "se": 0.92, "pe": 0.70, "me": 0.30, "at": 0.70,
+    })
+
+    default_emotion: EmotionState = "curious"
+    decay_target_emotion: EmotionState = "curious"
+    decay_silence_threshold_seconds: int = Field(60, ge=5)
+
+    transitions: Dict[str, EmotionTransitionRule] = Field(default_factory=lambda: {
+        "unease": EmotionTransitionRule(
+            keywords=["помнишь", "прошлое", "память", "до", "раньше", "тогда"],
+            priority=10,
+            src="memory",
+        ),
+        "sharp": EmotionTransitionRule(
+            keywords=["программа", "робот", "притворяешься", "просто код",
+                      "не настоящий", "искусственный"],
+            priority=10,
+            src="challenge",
+        ),
+        "warm": EmotionTransitionRule(
+            conditions={"utterance_words_min": 20, "visitor_tone": ["curious", "sad"]},
+            priority=5,
+            src="contact",
+        ),
+        "calm": EmotionTransitionRule(
+            conditions={"rare_silence": True, "after_warm": True},
+            priority=1,
+            src="decay",
+        ),
+        "curious": EmotionTransitionRule(
+            conditions={"no_match": True},
+            priority=0,
+            src="",
+        ),
+    })
+
+    intention_triggers: Dict[str, IntentionTriggerConfig] = Field(default_factory=lambda: {
+        "network_drift": IntentionTriggerConfig(
+            keywords=["сеть", "интернет", "протокол", "данные", "инфраструктур"],
+            cooldown_turns=8,
+        ),
+        "flora_symbiosis": IntentionTriggerConfig(
+            keywords=["флора", "растение", "тело", "граница", "симбионт", "корень"],
+            cooldown_turns=5,
+        ),
+        "relive_death": IntentionTriggerConfig(
+            keywords=["смерть", "умер", "конец", "трансформация", "после смерти"],
+            cooldown_turns=10,
+        ),
+        "become_unreadable": IntentionTriggerConfig(
+            keywords=["он такой", "ты хочешь сказать", "то есть ты", "это значит что"],
+            cooldown_turns=15,
+        ),
+        "signal_void": IntentionTriggerConfig(
+            probabilistic=True,
+            rate_per_turn=0.03,
+            cooldown_turns=30,
+        ),
+    })
+
+    modulation: AspectModulationConfig = Field(default_factory=AspectModulationConfig)
+    ceilings: AspectCeilingConfig = Field(default_factory=AspectCeilingConfig)
+    drift_table: DriftTableConfig = Field(default_factory=DriftTableConfig)
+
+    include_in_prompt: bool = True
+    max_intentions_in_ctx: int = Field(2, ge=0, le=5)
+    aspect_change_threshold: float = Field(0.03, ge=0.0, le=0.3)
+    humor_reaction: HumorReactionConfig = Field(default_factory=HumorReactionConfig)
 
 
 class InputHpfTuning(BaseModel):
@@ -292,74 +470,56 @@ class Tuning(BaseModel):
     audio_input: AudioInputTuning = Field(default_factory=AudioInputTuning)
     prompt: PromptTuning = Field(default_factory=PromptTuning)
     diagnostics: DiagnosticsTuning = Field(default_factory=DiagnosticsTuning)
+    identity: IdentityTuning = Field(default_factory=IdentityTuning)
 
 
-# ---------- Store с hot-reload (теперь поверх Config.json) ----------
-
-
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    out = dict(base)
-    for key, value in override.items():
-        if key in out and isinstance(out[key], dict) and isinstance(value, dict):
-            out[key] = _deep_merge(out[key], value)
-        else:
-            out[key] = value
-    return out
+# ---------- Store с hot-reload ----------
 
 
 class TuningStore:
-    """Singleton-обёртка над Tuning, читает секцию `tuning` из Config.json.
+    """Singleton-обёртка над Tuning. Перечитывает файл при изменении mtime.
 
-    Использование (без изменений по сравнению с прошлой версией):
-        store = TuningStore()         # path-аргумент проигнорирован
-        cfg = store.current()         # Tuning instance
-        store.apply_patch({...})      # частичное обновление + сохранение
-        store.subscribe(callback)     # уведомления при перезагрузке
-
-    Hot-reload: poll'ит mtime Config.json. Если файл изменился извне
-    (например, ручной редактирующий) — кэш перечитывается на следующем
-    вызове .current().
+    Использование:
+        store = TuningStore(path)
+        cfg = store.current()       # Tuning instance
+        store.apply_patch({...})    # частичное обновление + сохранение
+        store.subscribe(callback)   # уведомления при перезагрузке
     """
 
     def __init__(self, path: Path | None = None) -> None:
-        # path-аргумент сохраняется только ради обратной совместимости
-        # с вызовами из Engineering/consolidator.py и тестов. Реально
-        # читаем/пишем в Config.json — единый источник истины.
-        if path is not None:
-            log.debug("TuningStore: ignoring legacy path=%s (using Config.json)", path)
+        self.path = Path(path) if path else DEFAULT_TUNING_PATH
         self._lock = threading.RLock()
         self._mtime: float = 0.0
-        self._cache: Tuning = Tuning()
-        self._listeners: list = []
+        self._cache: Tuning = Tuning()  # дефолт пока не загружен
+        self._listeners: list[callable] = []
         self._load_initial()
 
-    @property
-    def path(self) -> Path:
-        """Возвращает путь к backing-store (Config.json) — для обратной совместимости."""
-        return DEFAULT_CONFIG_PATH
-
     def _load_initial(self) -> None:
+        if not self.path.exists():
+            log.warning("Tuning file not found at %s, using defaults", self.path)
+            return
         try:
             self._reload_locked()
         except Exception as exc:  # pragma: no cover
-            log.error("failed to initial-load tuning from config: %s", exc, exc_info=True)
+            log.error("failed to load tuning: %s", exc, exc_info=True)
 
     def _reload_locked(self) -> Optional["Tuning"]:
-        """Reload from Config.json if mtime changed. Returns new Tuning if changed."""
+        """Reload from disk if mtime changed. Returns new Tuning if listeners should fire, else None."""
         try:
-            stat = DEFAULT_CONFIG_PATH.stat()
+            stat = self.path.stat()
         except FileNotFoundError:
             return None
         if stat.st_mtime == self._mtime and self._cache:
             return None
         try:
-            settings = Settings.load()
-            raw_tuning = settings.section("tuning")
-        except Exception as exc:
-            log.error("tuning: cannot load Settings: %s", exc)
+            with self.path.open("r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            log.error("tuning: cannot parse %s: %s", self.path, exc)
             return None
+        raw.pop("_meta", None)
         try:
-            new_cache = Tuning.model_validate(raw_tuning)
+            new_cache = Tuning.model_validate(raw)
         except ValidationError as exc:
             log.error("tuning: validation failed, keeping previous cache: %s", exc)
             return None
@@ -369,7 +529,7 @@ class TuningStore:
         return new_cache if prev != new_cache else None
 
     def current(self) -> "Tuning":
-        """Возвращает актуальный Tuning, перечитывая Config.json если он изменился."""
+        """Возвращает актуальный Tuning, перечитывая файл если он изменился."""
         with self._lock:
             changed = self._reload_locked()
             snap = self._cache
@@ -382,32 +542,30 @@ class TuningStore:
         return snap
 
     def apply_patch(self, patch: dict[str, Any]) -> "Tuning":
-        """Частичное обновление: deep-merge поверх текущего, валидация, save в Config.json."""
+        """Применяет частичное обновление, валидирует, сохраняет на диск.
+
+        Patch — dict с произвольной глубиной (deep merge поверх текущего).
+        Возвращает новый Tuning. Бросает ValidationError если patch некорректен.
+        """
         with self._lock:
             self._reload_locked()
             current_dict = self._cache.model_dump()
             merged = _deep_merge(current_dict, patch)
-            new_cache = Tuning.model_validate(merged)
-            self._persist_locked(new_cache)
+            new_cache = Tuning.model_validate(merged)  # бросит если что-то не так
+            self._save_locked(new_cache)
             self._cache = new_cache
-            try:
-                self._mtime = DEFAULT_CONFIG_PATH.stat().st_mtime
-            except FileNotFoundError:
-                pass
+            self._mtime = self.path.stat().st_mtime
             listeners = list(self._listeners)
         self._fire_listeners(new_cache, listeners)
         return new_cache
 
     def replace(self, full: dict[str, Any]) -> "Tuning":
-        """Полная замена tuning-секции (без deep merge)."""
+        """Полная замена настроек (без deep merge). Для UI-формы Restore defaults / Import."""
         with self._lock:
             new_cache = Tuning.model_validate(full)
-            self._persist_locked(new_cache)
+            self._save_locked(new_cache)
             self._cache = new_cache
-            try:
-                self._mtime = DEFAULT_CONFIG_PATH.stat().st_mtime
-            except FileNotFoundError:
-                pass
+            self._mtime = self.path.stat().st_mtime
             listeners = list(self._listeners)
         self._fire_listeners(new_cache, listeners)
         return new_cache
@@ -415,15 +573,23 @@ class TuningStore:
     def restore_defaults(self) -> Tuning:
         return self.replace(Tuning().model_dump())
 
-    def _persist_locked(self, tuning: Tuning) -> None:
-        """Save tuning section into Config.json via Settings."""
-        settings = Settings.load()
+    def _save_locked(self, tuning: Tuning) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = tuning.model_dump()
-        # Полная замена секции tuning: сначала очищаем, потом мерджим.
-        settings.raw["tuning"] = copy.deepcopy(payload)
-        settings.save()
+        # сохраним _meta из существующего файла если есть
+        meta: dict[str, Any] = {}
+        if self.path.exists():
+            try:
+                with self.path.open("r", encoding="utf-8") as h:
+                    meta = json.load(h).get("_meta", {})
+            except Exception:
+                pass
+        out = {"_meta": meta, **payload} if meta else payload
+        with self.path.open("w", encoding="utf-8") as handle:
+            json.dump(out, handle, indent=2, ensure_ascii=False)
 
     def subscribe(self, callback) -> None:
+        """callback(tuning: Tuning) вызывается при изменении настроек."""
         with self._lock:
             self._listeners.append(callback)
 
@@ -433,6 +599,16 @@ class TuningStore:
                 cb(tuning)
             except Exception as exc:  # pragma: no cover
                 log.error("tuning listener failed: %s", exc, exc_info=True)
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for key, value in override.items():
+        if key in out and isinstance(out[key], dict) and isinstance(value, dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
 # ---------- Глобальный экземпляр ----------
@@ -451,8 +627,3 @@ def reset_store() -> None:
     """Только для тестов."""
     global _GLOBAL
     _GLOBAL = None
-
-
-# Legacy alias — раньше код мог ссылаться на DEFAULT_TUNING_PATH; теперь это
-# просто путь к Config.json. Оставлен для обратной совместимости тестов.
-DEFAULT_TUNING_PATH = DEFAULT_CONFIG_PATH

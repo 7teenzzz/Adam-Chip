@@ -23,6 +23,11 @@ _OTHER_NOISE_PATTERNS = [
     re.compile(r"^\s*сенсоры?\s+молч\w+", re.IGNORECASE),
     re.compile(r"^\s*мои\s+сенсоры?\b", re.IGNORECASE),
     re.compile(r"^\s*канал\s+зрени[ея]\b", re.IGNORECASE),
+    # [ctx.identity] echo guard — prevent the model from parroting raw identity data
+    re.compile(r"^\s*emotion\s*=", re.IGNORECASE),
+    re.compile(r"^\s*intention\s*=", re.IGNORECASE),
+    re.compile(r"^\s*состояние\s*[:=]", re.IGNORECASE),
+    re.compile(r"^\s*намерение\s*[:=]", re.IGNORECASE),
 ]
 
 
@@ -170,6 +175,7 @@ class PromptBuilder:
         include_scene: bool = True,
         include_sensors: bool = True,
         response_word_target: Optional[int] = None,
+        identity_block: str = "",
     ) -> list[dict[str, str]]:
         persona = self._load_persona()
         # Apply word-count substitution here so tuning can override the target.
@@ -188,6 +194,7 @@ class PromptBuilder:
             include_scene=include_scene,
             include_sensors=include_sensors,
             weather_ctx=weather_ctx,
+            identity_block=identity_block,
         )
 
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
@@ -221,8 +228,13 @@ class PromptBuilder:
         include_scene: bool,
         include_sensors: bool,
         weather_ctx: Optional[str] = None,
+        identity_block: str = "",
     ) -> str:
         parts: list[str] = []
+
+        # Identity state comes first — it shapes how Adam interprets everything else.
+        if identity_block and identity_block.strip():
+            parts.append(f"[ctx.identity]\n{identity_block.strip()}")
 
         if semantic_text.strip():
             parts.append(f"[ctx.memory]\n{semantic_text.strip()}")
