@@ -127,15 +127,7 @@ export function mount(target) {
   }
 
   // ===== Jetson camera (snapshot or Live VLM viewer) =========================
-  let jetTimer = null;
-  let jetInflight = false;
-
-  function clearJetTimer() {
-    if (jetTimer) { clearInterval(jetTimer); jetTimer = null; }
-  }
-
   async function loadJetson(force = false) {
-    clearJetTimer();
     jetStatus.textContent = "проверка…";
     jetStatus.style.color = "var(--muted)";
     jetBody.innerHTML = "";
@@ -161,38 +153,30 @@ export function mount(target) {
       return;
     }
 
-    // VLM не запущен — пробуем snapshot.
-    refreshSnapshot(force);
-    jetTimer = setInterval(refreshSnapshot, 1500);
+    // VLM не запущен — запускаем MJPEG stream (браузер-нативный, без polling).
+    mountMjpegStream();
   }
 
-  function refreshSnapshot(force = false) {
-    if (jetInflight) return;
-    jetInflight = true;
-    const url = "/api/camera/snapshot.jpg?_=" + Date.now();
-    const probe = new Image();
-    probe.onload = () => {
-      jetBody.innerHTML = "";
-      const img = el("img", {
-        alt: "Jetson v4l2 snapshot",
-        src: probe.src,
-        style: "width:100%; max-height:60vh; object-fit:contain; background:var(--bg-2); border-radius:var(--radius-s); border:1px solid var(--line)",
-      });
-      jetBody.appendChild(img);
-      jetStatus.textContent = "снимок свежий";
+  function mountMjpegStream() {
+    jetBody.innerHTML = "";
+    const img = el("img", {
+      alt: "Jetson camera stream",
+      src: "/api/camera/stream",
+      style: "width:100%; max-height:60vh; object-fit:contain; background:var(--bg-2); border-radius:var(--radius-s); border:1px solid var(--line)",
+    });
+    img.addEventListener("load", () => {
+      jetStatus.textContent = "стрим активен";
       jetStatus.style.color = "var(--accent)";
-      jetInflight = false;
-    };
-    probe.onerror = () => {
+    });
+    img.addEventListener("error", () => {
       jetBody.innerHTML = "";
       jetBody.appendChild(placeholder("Камера недоступна (нет /dev/video0 или занята).", "bad"));
       jetStatus.textContent = "камера недоступна";
       jetStatus.style.color = "var(--bad)";
-      jetInflight = false;
-      clearJetTimer();
-      if (force) toast("Snapshot недоступен", "warn");
-    };
-    probe.src = url;
+    });
+    jetStatus.textContent = "стрим…";
+    jetStatus.style.color = "var(--muted)";
+    jetBody.appendChild(img);
   }
 
   // ===== VLM scene caption ===================================================

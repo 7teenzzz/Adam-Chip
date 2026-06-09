@@ -19,7 +19,7 @@ import subprocess
 import time
 import wave
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, AsyncGenerator, Awaitable, Callable
 
 import httpx
 from fastapi import APIRouter, Body, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -644,6 +644,29 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         if not data:
             raise HTTPException(status_code=503, detail="camera not ready")
         return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @router.get("/api/camera/stream")
+    async def camera_stream(request: Request) -> StreamingResponse:
+        """MJPEG multipart stream — browser-native, no JS polling needed (~10 FPS)."""
+        _BOUNDARY = b"--mjpegframe"
+
+        async def _generate() -> AsyncGenerator[bytes, None]:
+            while not await request.is_disconnected():
+                frame = deps.capture_snapshot()
+                if frame:
+                    yield (
+                        _BOUNDARY + b"\r\n"
+                        b"Content-Type: image/jpeg\r\n"
+                        b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
+                        + frame + b"\r\n"
+                    )
+                await asyncio.sleep(0.1)
+
+        return StreamingResponse(
+            _generate(),
+            media_type="multipart/x-mixed-replace; boundary=mjpegframe",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @router.get("/api/live_vlm/status")
     async def live_vlm_status() -> dict[str, Any]:

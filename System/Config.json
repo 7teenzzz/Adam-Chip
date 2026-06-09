@@ -28,10 +28,10 @@
       "esp_fail_threshold": 3,
       "esp_retry_interval_sec": 30.0,
       "video_device": "/dev/video0",
-      "camera_width": 640,
-      "camera_height": 480,
+      "camera_width": 480,
+      "camera_height": 360,
       "camera_quality": 75,
-      "camera_capture_interval_sec": 0.5
+      "camera_capture_interval_sec": 0.1
     },
     "audio": {
       "input_device": "pulse",
@@ -72,7 +72,7 @@
       "spectrum_color_red_at": 0.85,
       "events_jsonl_sample_audio_level": 5
     },
-    "scene_worker_enabled": false,
+    "scene_worker_enabled": true,
     "scene_interval_sec": 4,
     "scene_stale_after_sec": 8,
     "scene_buffer_maxlen": 8,
@@ -90,8 +90,8 @@
       "model_path": "Subsystem/Models/gguf/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
     },
     "vlm": {
-      "base_url": "http://127.0.0.1:8050",
-      "model": "Efficient-Large-Model/VILA1.5-3b",
+      "base_url": "http://127.0.0.1:8051",
+      "model": "Cosmos-Reason2-2B-Q8_0",
       "timeout_sec": 20,
       "max_new_tokens": 80,
       "prompt": "You are a fixed camera sensor in an interactive art installation. Look at the image and write ONE short English sentence describing what you actually see, using this structure:\nScene: <people count and position>. Engagement: <one of: none, watching, approaching, leaving, interacting>.\n\nReference examples (style only — do not copy):\n- Scene: 2 people near installation, one leaning in. Engagement: watching.\n- Scene: 1 person walking away from the camera. Engagement: leaving.\n- Scene: empty room. Engagement: none.\n\nOutput only the final sentence about this specific image. Never output placeholders like <people count and position> or angle-bracket tokens. English only."
