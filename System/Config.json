@@ -201,6 +201,7 @@
     ],
     "tick_ms": 20,
     "crossfade_ms": 200,
+    "accent_hold_ms": 220,
     "external_timeout_ms": 500,
     "max_duty_pct": 71,
     "speech": {
@@ -224,6 +225,7 @@
         "vibro": false
       },
       "accent": {
+        "crossfade_ms": 10,
         "peak_pct": 71,
         "attack_ms": 250,
         "vibro": true,
@@ -238,11 +240,11 @@
         "wave_period_ms": 450
       },
       "think_pulse": {
-        "base_pct": 20,
+        "base_pct": 35,
         "peak_pct": 71,
-        "flash_ms": 500,
-        "wave_period_ms": 500,
-        "flicker_ms": 120,
+        "flash_ms": 200,
+        "wave_period_ms": 200,
+        "flicker_ms": 80,
         "vibro": "double_pulse"
       },
       "wake_bloom": {

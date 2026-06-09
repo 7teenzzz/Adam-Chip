@@ -152,6 +152,13 @@ class FloraController:
                 self._answer_active = False
                 self._fed_wav_this_answer = False
             await self._set_state("accent")  # детекция
+            # Hold accent visible before attentive overrides it.
+            # voice_state_change(to=listening) fires ~20ms later; without this hold
+            # it overwrites accent in firmware's sTarget before the first 20ms tick.
+            flora = self._live_flora_cfg()
+            hold_ms = int(flora.get("accent_hold_ms", 220))
+            if hold_ms > 0:
+                await asyncio.sleep(hold_ms / 1000.0)
         elif etype == "voice_state_change":
             payload = event.get("payload", {}) or {}
             if payload.get("from") == "boot_warmup" and not self._booted:
