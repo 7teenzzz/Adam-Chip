@@ -974,6 +974,12 @@ Plans:
 
 **Mode:** standard | **Priority:** P0 | **Effort:** M | **Exhibition:** Critical
 
+**Plans:** 4 plans (Wave 1 → 2 → 3 → 4)
+- [ ] 35-01-PLAN.md — Bring-up & smoke: checkout ultimate-integration в основной каталог, restart, healthcheck, валидация live-конфига, maintenance text-turn smoke (REQ-INT-CONFIG-LIVE)
+- [ ] 35-02-PLAN.md — Live voice E2E: exhibition power-gate, оператор «адам»+команда, trace oww→…→action + звук из ESP, barge-in, «стоп» (REQ-INT-VOICE-E2E)
+- [ ] 35-03-PLAN.md — Integration surfaces: флора-сосуществование (operator), pre-LLM шутки/погода, запись в dialogue_turns (REQ-INT-FLORA-COEXIST, REQ-INT-SKILLS, REQ-INT-MEMORY)
+- [ ] 35-04-PLAN.md — Debug loop & go/no-go: /gsd-debug по каждому дефекту, ре-тест, решение go/no-go, user-gated push на origin/ultimate-integration
+
 **Связь с историей:** `ultimate-integration` — пред-main интеграционная ветка, собравшая 4 линии разработки. До мёржа в main нужно живое подтверждение, что слияния не сломали голосовой тракт и что починка мохибейка (wake word на ult читался как «Р°РґР°Рj») восстановила распознавание.
 
 ---
