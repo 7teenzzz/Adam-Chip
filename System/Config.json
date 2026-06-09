@@ -105,6 +105,7 @@
       "reply_window_sec": 3.75,
       "reply_silence_timeout_sec": 4,
       "post_tts_discard_window_ms": 300,
+      "pre_wake_buffer_ms": 1500,
       "endpointing_debounce_frames": 5,
       "endpointing_voiced_debounce_frames": 3,
       "sample_rate": 16000,

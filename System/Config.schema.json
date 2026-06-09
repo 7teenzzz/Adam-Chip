@@ -515,6 +515,13 @@
               "description": "Milliseconds after TTS playback finishes during which MicReader continues to drain the ESP32 socket but does NOT queue chunks to the consumer. This flushes the ESP32's internal stream buffer of self-echo audio (Adam's own voice picked up by INMP441 across the room) before the REPLY window starts accepting user speech. Reference observation: ESP32 stream lag is ~2300ms — chunks read at t=T contain audio captured at t=T-2.3s. Without this window, ~2 seconds of TTS-tail audio enters the queue right after mic_unmuted and gets transcribed as user speech in REPLY. Default 2500ms covers the worst observed lag with a small safety margin. Set to 0 to disable (only safe in setups with negligible mic→speaker acoustic coupling).",
               "default": 2500
             },
+            "pre_wake_buffer_ms": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 5000,
+              "description": "Rolling audio buffer retained before OWW wake-word confirmation (milliseconds). When OWW triggers, this audio is prepended to speech_frames instead of being discarded. Covers OWW debounce window (debounce_hits=2 × 80ms = 160ms) plus wake-word duration (~400ms) and early command start (~940ms). Computed to frames as int(pre_wake_buffer_ms / frame_ms) in VoiceLoopController.__init__. Minimum 200ms; values below frame_ms have no effect. Deferred: 0 as a disable flag is not supported — use 200ms minimum.",
+              "default": 1500
+            },
             "reply_silence_timeout_sec": {
               "type": "number",
               "minimum": 1.0,
