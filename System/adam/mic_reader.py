@@ -260,6 +260,11 @@ class MicReader:
         self._lag_diag_until_ts: float = 0.0
         self._lag_diag_started_t: float = 0.0
         self._lag_diag_origin: str = ""
+        # Barge-in monitor queue: receives every drained chunk regardless of mute
+        # state. Set by VoiceLoopController.start() via voice_loop._barge_in_q
+        # (read here as an attribute on the linked voice_loop object). None when
+        # barge-in is disabled or voice loop is not running.
+        # NOTE: do NOT set this attribute directly — read it via voice_loop.
 
     # ── External wiring ────────────────────────────────────────────────
 
@@ -1009,6 +1014,23 @@ class MicReader:
                     self._emit("mic_lag_diag_finished", {"origin": self._lag_diag_origin})
                     self._lag_diag_until_ts = 0.0
                     self._lag_diag_origin = ""
+
+                # Barge-in: push every chunk to the barge-in queue regardless
+                # of mute state so the OWW monitor can scan during TTS playback.
+                # Drop-oldest on overflow to never block the drain hot-path.
+                _bq = getattr(self._voice_loop, "_barge_in_q", None) if self._voice_loop else None
+                if _bq is not None:
+                    try:
+                        _bq.put_nowait(chunk)
+                    except Exception:
+                        try:
+                            _bq.get_nowait()
+                        except Exception:
+                            pass
+                        try:
+                            _bq.put_nowait(chunk)
+                        except Exception:
+                            pass
 
                 # B-1 mute gate: drain-and-discard while voice_loop is muted
                 # by TTS. The socket still drains (socket reader thread handles

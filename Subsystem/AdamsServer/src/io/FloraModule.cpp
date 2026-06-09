@@ -12,7 +12,7 @@
 // A static FreeRTOS task ticks at ~50 Hz (kFloraTickMs), runs a preset state
 // machine, crossfades from the last-written duties to the new preset over
 // crossfade_ms, and writes one atomic 16-channel frame per tick via
-// writeAllChannelsRaw. Light = ch 0-10, vibro = ch 11-14.
+// writeAllChannelsRaw. Light = ch 4-14 (11 lamps), vibro = ch 0-3 (4 motors).
 // Phase 30 R5 (decision A): raw PWM, no perceptual gamma. The Jetson already
 // sends raw pct->duty values (linear), so gammaApply is now an identity pass-
 // through. The gamma LUT (sGammaLut/buildGammaLut) is retained but unused.
@@ -250,7 +250,7 @@ void floraTick(uint32_t nowMs) {
 
   uint16_t duties[16] = {0};
 
-  // --- Light channels 0-10 (D-02) ---
+  // --- Light channels 4-14 (kFloraLightChannelLo..Hi, D-02) ---
   for (uint8_t ch = kFloraLightChannelLo; ch <= kFloraLightChannelHi; ++ch) {
     uint16_t d = lightDuty;
     if (t.preset == FloraPreset::Attentive) {
@@ -284,7 +284,7 @@ void floraTick(uint32_t nowMs) {
     duties[ch] = d;
   }
 
-  // --- Vibro channels 11-14 (D-11 / D-12 / FLORA-06) ---
+  // --- Vibro channels 0-3 (kFloraVibroChannelLo..Hi, D-11 / D-12 / FLORA-06) ---
   // Belt-and-suspenders: force vibro to 0 whenever preset==attentive regardless
   // of vibroEnabled, protecting ASR from motor->mic coupling.
   uint16_t vibroDuty = 0;
@@ -310,14 +310,14 @@ void floraTick(uint32_t nowMs) {
     }
   }
 
-  // Phase 30 D-03: safe-ceiling firmware clamp (defence-in-depth).
-  // Clamp every channel to kFloraMaxDutyPct of full 12-bit scale before writing.
-  // Mirrors Config.json flora.max_duty_pct — structural default duplicated
-  // firmware-side. Ensures no animation frame exceeds the safe PWM cap regardless
-  // of preset params, Jetson-side values, or floating-point rounding.
+  // Phase 30 D-03: safe-ceiling firmware clamp (defence-in-depth) — LIGHT ONLY.
+  // Clamp the light channels to kFloraMaxDutyPct of full 12-bit scale before
+  // writing. Mirrors Config.json flora.max_duty_pct. Vibro channels
+  // (kFloraVibroChannelLo..Hi) are EXEMPT: the power ceiling is a светофлора
+  // limit; vibro power is governed only by its own kFloraVibroIntensityCeiling.
   {
     const uint16_t maxDuty = (4095u * kFloraMaxDutyPct) / 100u;
-    for (uint8_t ch = 0; ch < 16; ++ch) {
+    for (uint8_t ch = kFloraLightChannelLo; ch <= kFloraLightChannelHi; ++ch) {
       duties[ch] = min<uint16_t>(duties[ch], maxDuty);
     }
   }

@@ -22,11 +22,14 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 import httpx
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
+
+from pydantic import ValidationError
 
 from .config import Settings, PROJECT_ROOT
 from .events import EventLog
+from .tuning import EqPreset, get_store as get_tuning_store
 from .memory import EpisodicMemory, MemoryStore
 from .metrics import MetricsLog
 from .metrics_sessions import SessionsLog
@@ -306,32 +309,127 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             "warning": warning,
         }
 
+    # ── Phase 31 (D-05): input-EQ preset CRUD ────────────────────────────
+    def _tuning_store():
+        return get_tuning_store()
+
+    def _presets_list() -> list[dict[str, Any]]:
+        return [p.model_dump() for p in _tuning_store().current().audio_input.presets]
+
+    @router.get("/api/audio/presets")
+    async def list_audio_presets() -> dict[str, Any]:
+        audio_input = _tuning_store().current().audio_input
+        return {
+            "presets": [p.model_dump() for p in audio_input.presets],
+            "active_preset": audio_input.active_preset,
+        }
+
+    @router.post("/api/audio/presets")
+    async def create_audio_preset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        try:
+            preset = EqPreset.model_validate(payload)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        store = _tuning_store()
+        existing = store.current().audio_input.presets
+        if any(p.name == preset.name for p in existing):
+            raise HTTPException(status_code=400, detail=f"preset '{preset.name}' already exists")
+        new_presets = [p.model_dump() for p in existing] + [preset.model_dump()]
+        try:
+            store.apply_patch({"audio_input": {"presets": new_presets}})
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        deps.event_log.append("audio_preset_created", {"name": preset.name})
+        return {"ok": True, "preset": preset.model_dump(), "presets": _presets_list()}
+
+    @router.put("/api/audio/presets/{name}")
+    async def update_audio_preset(name: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        store = _tuning_store()
+        existing = store.current().audio_input.presets
+        idx = next((i for i, p in enumerate(existing) if p.name == name), None)
+        if idx is None:
+            raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
+        merged_payload = {"name": name, **payload}
+        try:
+            updated = EqPreset.model_validate(merged_payload)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if updated.name != name and any(p.name == updated.name for p in existing):
+            raise HTTPException(status_code=400, detail=f"preset '{updated.name}' already exists")
+        new_presets = [p.model_dump() for p in existing]
+        new_presets[idx] = updated.model_dump()
+        tuning_now = store.current().audio_input
+        active = tuning_now.active_preset
+        patch: dict[str, Any] = {"audio_input": {"presets": new_presets}}
+        if active == name:
+            patch["audio_input"]["active_preset"] = updated.name
+            patch["audio_input"]["dsp"] = {"hpf": updated.hpf.model_dump(), "bands": [b.model_dump() for b in updated.bands]}
+        try:
+            store.apply_patch(patch)
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        deps.event_log.append("audio_preset_updated", {"name": name, "new_name": updated.name})
+        return {"ok": True, "preset": updated.model_dump(), "presets": _presets_list()}
+
+    @router.delete("/api/audio/presets/{name}")
+    async def delete_audio_preset(name: str) -> dict[str, Any]:
+        store = _tuning_store()
+        audio_input = store.current().audio_input
+        existing = audio_input.presets
+        if not any(p.name == name for p in existing):
+            raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
+        new_presets = [p.model_dump() for p in existing if p.name != name]
+        patch: dict[str, Any] = {"audio_input": {"presets": new_presets}}
+        cleared_active = False
+        if audio_input.active_preset == name:
+            patch["audio_input"]["active_preset"] = None
+            cleared_active = True
+        try:
+            store.apply_patch(patch)
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        deps.event_log.append("audio_preset_deleted", {"name": name, "cleared_active": cleared_active})
+        return {"ok": True, "deleted": name, "active_preset_cleared": cleared_active, "presets": _presets_list()}
+
+    @router.post("/api/audio/presets/{name}/activate")
+    async def activate_audio_preset(name: str) -> dict[str, Any]:
+        store = _tuning_store()
+        existing = store.current().audio_input.presets
+        preset = next((p for p in existing if p.name == name), None)
+        if preset is None:
+            raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
+        patch = {
+            "audio_input": {
+                "active_preset": preset.name,
+                "dsp": {
+                    "hpf": preset.hpf.model_dump(),
+                    "bands": [b.model_dump() for b in preset.bands],
+                },
+            }
+        }
+        try:
+            new_tuning = store.apply_patch(patch)
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        deps.event_log.append("audio_preset_activated", {"name": preset.name})
+        return {"ok": True, "active_preset": new_tuning.audio_input.active_preset, "dsp": new_tuning.audio_input.dsp.model_dump()}
+
+
     @router.get("/api/models/llm")
     async def models_llm() -> dict[str, Any]:
         llm_cfg = deps.settings.section("services").get("llm", {})
-        provider = str(llm_cfg.get("provider", "ollama"))
+        provider = str(llm_cfg.get("provider", "openai"))
         base_url = str(llm_cfg.get("base_url", "")).rstrip("/")
         current = str(llm_cfg.get("model", ""))
         available: list[dict[str, Any]] = []
         error: str | None = None
         try:
             async with httpx.AsyncClient(timeout=4.0, trust_env=False) as client:
-                if provider == "ollama":
-                    resp = await client.get(f"{base_url}/api/tags")
-                    resp.raise_for_status()
-                    body = resp.json()
-                    for tag in body.get("models", []):
-                        available.append({
-                            "name": tag.get("name"),
-                            "size": tag.get("size"),
-                            "modified_at": tag.get("modified_at"),
-                        })
-                else:
-                    resp = await client.get(f"{base_url}/v1/models")
-                    resp.raise_for_status()
-                    body = resp.json()
-                    for entry in body.get("data", []):
-                        available.append({"name": entry.get("id")})
+                resp = await client.get(f"{base_url}/v1/models")
+                resp.raise_for_status()
+                body = resp.json()
+                for entry in body.get("data", []):
+                    available.append({"name": entry.get("id")})
         except Exception as exc:
             error = str(exc)
         return {"provider": provider, "current": current, "available": available, "error": error}
@@ -488,6 +586,22 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             "stats": deps.sessions_log.stats(limit),
         }
 
+    @router.post("/api/audio/input_gain/apply")
+    async def apply_input_gain() -> dict[str, Any]:
+        """Apply media.audio.input_gain to ALSA + PulseAudio immediately (live, no restart).
+        Called by the volume slider in the Audio Input panel after saving config so the
+        monitor stream reflects the change without waiting for an orchestrator restart."""
+        gain = deps.settings.section("media").get("audio", {}).get("input_gain", {})
+        result = await asyncio.to_thread(
+            _apply_input_gain_now,
+            str(gain.get("card_name", "WebCamera")),
+            str(gain.get("alsa_control", "Mic")),
+            int(gain.get("alsa_capture_percent", 100)),
+            int(gain.get("pulse_source_percent", 100)),
+        )
+        deps.event_log.append("input_gain_applied", result)
+        return {"ok": True, **result}
+
     @router.get("/api/audio/devices")
     async def audio_devices() -> dict[str, Any]:
         return await asyncio.to_thread(_aplay_devices)
@@ -633,6 +747,52 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         types = [type] if type else None
         return {"events": deps.event_log.tail(limit, types=types)}
 
+    # ── Phase 31 (D-06/D-07): browser microphone monitor ─────────────────
+    # Streams the EXACT post-EQ PCM flowing through _vad_loop (WYSIWYG, D-02) —
+    # operator hears precisely what OWW/ASR hear. Raw mono 16-bit LE PCM at
+    # media.audio.sample_rate (16000 Hz); browser plays via Web Audio API /
+    # AudioWorklet (Wave 3). Mirrors EventLog.subscribe()/unsubscribe() via
+    # VoiceLoopController.subscribe_monitor()/unsubscribe_monitor() — bounded
+    # ring queue, drop-oldest on overflow, never blocks the voice-processing
+    # hot path. Does NOT interact with safety.half_duplex_mute — this taps
+    # whatever PCM is flowing (silence during TTS mute is expected/correct;
+    # it's a microphone monitor, not a TTS tap).
+    @router.websocket("/api/audio/monitor")
+    async def audio_monitor_ws(websocket: WebSocket) -> None:
+        await websocket.accept()
+        voice_loop = deps.get_voice_loop() if deps.get_voice_loop else None
+        if voice_loop is None or not hasattr(voice_loop, "subscribe_monitor"):
+            await websocket.close(code=1013, reason="voice loop not available")
+            return
+        queue = voice_loop.subscribe_monitor()
+        deps.event_log.append("audio_monitor_connected", {"client": str(websocket.client)})
+        try:
+            while True:
+                try:
+                    raw_chunk, processed_chunk = await asyncio.wait_for(queue.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    # Idle keep-alive — also doubles as a disconnect probe via send.
+                    try:
+                        await websocket.send_bytes(b"")
+                    except Exception:
+                        break
+                    continue
+                # D-07: pick pre/post per the LIVE config — no resubscribe needed
+                # when the operator flips the toggle mid-session.
+                try:
+                    tap = get_tuning_store().current().audio_input.dsp.monitor_tap
+                except Exception:
+                    tap = "post_eq"
+                frame = raw_chunk if tap == "pre_eq" else processed_chunk
+                await websocket.send_bytes(frame)
+        except WebSocketDisconnect:
+            pass
+        except Exception as exc:
+            deps.event_log.append("audio_monitor_error", {"error": str(exc)})
+        finally:
+            voice_loop.unsubscribe_monitor(queue)
+            deps.event_log.append("audio_monitor_disconnected", {"client": str(websocket.client)})
+
     return router
 
 
@@ -660,6 +820,44 @@ def _docker_inspect(name: str) -> dict[str, Any]:
         "image": image,
         "name": name,
     }
+
+
+def _apply_input_gain_now(card: str, control: str, alsa_pct: int, pulse_pct: int) -> dict[str, str]:
+    """Apply ALSA capture gain + PulseAudio source volume from Python (mirrors adam_audio_input_gain.sh).
+    Called live from /api/audio/input_gain/apply so the monitor stream reflects slider changes."""
+    results: dict[str, str] = {}
+    # ALSA
+    if shutil.which("amixer"):
+        try:
+            r = subprocess.run(
+                ["amixer", "-c", card, "sset", control, f"{alsa_pct}%", "cap"],
+                capture_output=True, timeout=4,
+            )
+            results["alsa"] = "ok" if r.returncode == 0 else f"err:{r.stderr.decode(errors='replace')[:80]}"
+        except Exception as exc:
+            results["alsa"] = f"skip:{exc}"
+    else:
+        results["alsa"] = "skip:amixer not found"
+    # PulseAudio
+    if shutil.which("pactl"):
+        try:
+            ls = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, timeout=4)
+            src = next(
+                (line.split()[1] for line in ls.stdout.decode(errors="replace").splitlines()
+                 if card.lower() in line.lower()),
+                None,
+            )
+            if src:
+                subprocess.run(["pactl", "set-source-volume", src, f"{pulse_pct}%"], timeout=4)
+                subprocess.run(["pactl", "set-source-mute", src, "0"], timeout=4)
+                results["pulse"] = f"ok:{src}"
+            else:
+                results["pulse"] = f"skip:no source matching '{card}'"
+        except Exception as exc:
+            results["pulse"] = f"skip:{exc}"
+    else:
+        results["pulse"] = "skip:pactl not found"
+    return results
 
 
 _USEFUL_OUTPUT_PREFIXES = ("pulse", "default", "hw:", "plughw:", "sysdefault:", "dmix:", "hdmi:", "iec958:", "front:", "rear:", "surround")

@@ -1,46 +1,26 @@
-# BRANCH: ESP-Mic-Fix
+# Branch: ultimate-integration
 
-**Цель:** устранить ложные срабатывания микрофона INMP441 — постоянный
-низкочастотный фон/всплески уровня в тишине («громкость поднимается, хотя
-ничего не происходит»).
+**Diverged from:** `vlr-main-integrated` (43b7f2f)
+**Goal:** Интегрировать все параллельные потоки работ в единую ветку — кандидат на мёрдж в main.
+**Status:** in-progress
+**Merge target:** main
+**Phase:** 35 — см. `.planning/phases/35-ultimate-integration/35-PLAN.md`
 
-**Базовая ветка:** ответвлена от `ESP-Audio-Out` (включает durable-фикс
-спикера `:82`), чтобы тестировать mic + speaker вместе.
+**Интегрируемые ветки (пофазно):**
+1. `LuxFlora-modes_V1.2` — аппаратный ремап каналов (вибро 0-3 / свет 4-14) ✓
+2. `origin/MemoryFixes` — фикс Echoes/Chinese gate + тесты памяти
+3. `origin/Extra` — Skills: шутки + погода (pre-LLM провайдеры)
 
-## Диагноз (2026-06-02)
+**Merge conditions:**
+1. Все три ветки влиты без регрессий
+2. Channel map прошивки (AdamsConfig.h) = Config.json = flora.py — консистентно
+3. Python синтаксис чистый, JSON валидный
+4. `/gsd-debug` проверка пройдена ✓
+5. Knowledge graph обновлён (`graphify update System/`)
 
-- Сравнение с `8e6f6bb` (Phase 21A): `mic_reader.py` и `webrtc_vad.py` НЕ
-  менялись; Config mic-чувствительность только понижена (`silence_rms_threshold
-  100→200`); изменения Orchestrator/config — speaker-DSP, не mic.
-- **Единственное релевантное изменение — железо: PCM5102A → MAX98357A**
-  (Class-D, +15 дБ, GAIN floating; speaker I2S TX тактируется непрерывно).
-- Реальные данные: фон mic ~0.12–0.16, всплески до 0.76; спектр **пик в
-  80–200 Гц** → электрический гул/EMI, не акустика. Низкочастотная сигнатура.
-- **Корень: EMI от MAX98357A (switching-усилитель + непрерывный I2S TX) в
-  линии INMP441.** Код mic ни при чём.
+**Global changes:** ДА — firmware (reflash обязателен после LuxFlora), Config.json (каналы, параметры), новые модули skills.py + asr_filter.py.
 
-## Кандидаты-фиксы (ранжировано)
-
-1. **Firmware: гейтить speaker I2S TX на реальное воспроизведение** — не
-   тактировать TX в простое (сейчас задача всегда пишет нули → постоянный EMI).
-   В простое (нет TTS) TX выключен → mic чист. Бьёт в корень «когда ничего не
-   происходит».
-2. **Jetson: HPF на mic-входе (<150–200 Гц)** перед level/VAD/ASR — убирает
-   низкочастотный фантом независимо от источника. Быстро, defence-in-depth,
-   чистит и вход ASR.
-3. **Железо (deferred):** 5 В / отдельное питание усилителей + развязка/
-   экранирование mic-линий; шатдаун MAX98357A в простое (SD-пин).
-
-## Затрагиваемые файлы (план)
-
-- `Subsystem/AdamsServer/src/audio/AudioModule.cpp` — гейт I2S TX (фикс 1)
-- `System/adam/mic_reader.py` — HPF mic (фикс 2)
-- `System/Config.json` + schema — параметры HPF mic, если вводим
-
-## Результат (2026-06-02, commit `496c52d`)
-
-- Фон mic: mean 0.165 → 0.025 (−85%), median 0.
-- OWW ложных срабатываний: 0/1247 (max score 0.001). VAD: 0.
-- Hardware: отдельный 3.3В рельс для динамиков (−78% кондуктивный EMI).
-- Firmware: I2S TX гейт в простое (−25% радиационный EMI).
-- Условия мёржа выполнены ✓
+**Notes:**
+- `input_device` = `pulse` (PipeWire, Phase 32) — НЕ менять на plughw
+- `scene_worker_enabled` = `false` — VILA контейнер не включается по умолчанию
+- ESP firmware требует перепрошивки под новые channel masks (vibro 0-3 / light 4-14)

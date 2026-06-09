@@ -13,6 +13,7 @@ import shutil
 import sys
 import asyncio
 import subprocess
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -56,11 +57,12 @@ from adam.metrics import MetricsLog
 from adam.metrics_sessions import SessionsLog
 from adam.power import PowerGate
 from adam.prompt import PromptBuilder, LeadingNoiseFilter, sanitize_reply
+from adam.skills import IntentRouter, JokeGate, WeatherProvider
 from adam.config import PROJECT_ROOT
 from adam.sound import play_local_sound
 from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
 from adam.tuning import TuningStore, get_store as _get_tuning_store
-from adam.ui import agent_page, dash_page, debug_page
+from adam.asr_filter import is_hallucination as _is_hallucination
 from adam.wake_word import create_engine as _create_wake_engine
 from adam.webrtc_vad import WebRtcVadWrapper
 
@@ -87,9 +89,6 @@ tts = TTSClient(
     settings.section("services").get("tts", {}),
     mcu_speaker_url=mcu.speaker_endpoint_url(),
 )
-# Surface barge-in attempts that cannot stop ESP32 audio (PCM5102A has no stop
-# endpoint today). Lets operators see why interrupt didn't take effect.
-tts._barge_in_event_emitter = lambda t, p: event_log.append(t, p)
 scene_cache = SceneCache()
 _media_cfg = settings.section("media")
 _video_cfg = dict(_media_cfg.get("video", {}))
@@ -117,6 +116,26 @@ chinese_gate = EchoGate(
     memory=episodic_memory,
     pool="chinese",
 )
+
+# --- Phase 30 skills: intent-gated jokes + weather (pre-LLM providers) ---
+_skills_cfg = settings.section("skills")
+_weather_cfg = _skills_cfg.get("weather", {}) if isinstance(_skills_cfg, dict) else {}
+_jokes_cfg = _skills_cfg.get("jokes", {}) if isinstance(_skills_cfg, dict) else {}
+# NOTE: keywords loaded once at startup — skills.*.intent_keywords changes in
+# Config.json require an orchestrator restart to take effect (not hot-reload).
+intent_router = IntentRouter(
+    joke_keywords=list(_jokes_cfg.get("intent_keywords", [])),
+    weather_keywords=list(_weather_cfg.get("intent_keywords", [])),
+)
+weather_provider = WeatherProvider(_weather_cfg)
+joke_gate = JokeGate(
+    pool_path=PROJECT_ROOT / str(_jokes_cfg.get("pool_path") or "Agent-Adam-Chip/About/Jokes.md"),
+    memory=episodic_memory,
+)
+
+# Spoken framing for verbatim jokes — keeps the punchline exact while sounding
+# in-character. Empty entries bias toward deadpan (no frame) delivery.
+_JOKE_FRAMES = ["Лови.", "Держи.", "Хочешь? Слушай.", "Будет тебе шутка.", "", ""]
 
 runtime_state: dict[str, Any] = {
     "mode": settings.mode,
@@ -149,6 +168,11 @@ prompt_trace: deque[dict[str, Any]] = deque(maxlen=_PROMPT_TRACE_MAX)
 # Pre-compiled sentence boundary regex for streaming LLM→TTS pipeline.
 # Matches .!?。！？ and em-dash (—, common in Russian) followed by whitespace.
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？—])\s+")
+# Chunks that contain no speakable content: only punctuation, ellipses, dashes,
+# whitespace, or Markdown fences. Silero /wav returns None for these, producing
+# tts_chunk_failed events (observed with "..." as joke-ending chunk from Gemma).
+# Filter in _producer before enqueuing so _consumer never sees them.
+_PUNCT_ONLY_RE = re.compile(r"^[\s.,!?\u2026\-\u2014\u2013`'*_#\[\]()]+$")
 
 
 def _apply_wav_speed(wav: bytes, speed: float) -> bytes:
@@ -363,6 +387,16 @@ def _make_stereo_reader(
     return _read
 
 
+# Phase 31 Wave 2 (D-06): bound on the per-client monitor fan-out queue. Each
+# slot holds one ~20 ms stereo-tagged frame pair (raw, processed PCM bytes) —
+# 64 slots ≈ 1.28 s of audio, enough to absorb a brief WS/network stall without
+# unbounded memory growth. This is a structural ring-buffer-depth constant
+# (implementation detail of the fan-out, not a tunable persona/runtime
+# parameter), so it stays a module constant rather than a Config.json knob —
+# see Config-First guidance in CLAUDE.md ("real" parameters vs structural sizes.
+_MONITOR_QUEUE_MAXSIZE = 64
+
+
 class VoiceLoopController:
     # Phase 7 D-13/D-14: boot_warmup is the canonical entry state when
     # voice_loop.start() is called (before warmup TTS completes). After
@@ -472,6 +506,13 @@ class VoiceLoopController:
         # 4 × 20ms frames = 80ms chunks for openWakeWord
         self._ww_buf: list[bytes] = []
         self._ww_frames_needed = 4
+        # Pre-wake rolling buffer: retains audio from before OWW debounce confirmation
+        # so that single-phrase utterances like "адам скажи что-нибудь" are not truncated.
+        # On OWW trigger, list(_pre_wake_buf) is prepended to speech_frames instead of
+        # the legacy speech_frames.clear(). Configured by services.asr.pre_wake_buffer_ms.
+        self._pre_wake_buffer_ms: int = int(asr_cfg.get("pre_wake_buffer_ms", 1500))
+        _pre_wake_frames = max(1, self._pre_wake_buffer_ms // self.frame_ms)
+        self._pre_wake_buf: deque[bytes] = deque(maxlen=_pre_wake_frames)
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
         self._STANDBY_GUARD_SEC: float = 0.3    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
         self._REPLY_GUARD_SEC: float = 0.6      # post-TTS guard for reply state — suppress echo of own TTS picked up by ESP32 mic
@@ -503,6 +544,80 @@ class VoiceLoopController:
             self._vad_hpf_alpha = 0.0
         self._vad_hpf_x_prev: float = 0.0
         self._vad_hpf_y_prev: float = 0.0
+        # Phase 31: streaming input EQ (generalises the legacy 1-pole HPF above).
+        # Config lives in tuning.audio_input.dsp (hot-reloadable). When master-enabled
+        # this REPLACES _apply_vad_hpf in _vad_loop; the HPF stage carries the same
+        # default cutoff (220 Hz) so out-of-the-box behaviour is unchanged.
+        try:
+            _idsp_cfg = tuning_store.current().audio_input.dsp.model_dump()
+        except Exception:
+            _idsp_cfg = {}
+        self._input_dsp = audio_dsp.InputDSP(_idsp_cfg, sample_rate=self.sample_rate)
+        self._input_dsp_poll: int = 0
+        # Phase 31+ EQ-overlay: cached OWW state for audio_level_eq events.
+        self._oww_last_score: float = 0.0
+        self._oww_last_threshold: float = 0.25
+        # Phase 31 Wave 2 (D-06/D-07): browser monitor fan-out. _vad_loop pushes
+        # BOTH the raw (pre-EQ) and processed (post-EQ) PCM for every frame into
+        # a small registry of bounded queues — one per connected /api/audio/monitor
+        # WebSocket client. Bounded + drop-oldest so a slow browser client can
+        # NEVER stall the live voice-processing hot path (D-02 WYSIWYG contract
+        # requires the SAME buffer feeding OWW/ASR to also feed the monitor, but
+        # the fan-out itself must be non-blocking). Mirrors EventLog.subscribe()/
+        # unsubscribe() for symmetry.
+        self._monitor_subscribers: list[asyncio.Queue[tuple[bytes, bytes]]] = []
+        self._monitor_lock = threading.Lock()
+        # Barge-in interrupt: OWW scanning during TTS playback lets user cut Adam off.
+        # Queue lives on voice_loop; mic_reader reads it via getattr(_voice_loop, "_barge_in_q").
+        self._barge_in_enabled: bool = bool(ww_cfg.get("barge_in_enabled", True))
+        self._barge_in_triggered: bool = False
+        self._manual_interrupt_triggered: bool = False
+        self._barge_in_q: asyncio.Queue[bytes] | None = None
+        self._barge_in_task: asyncio.Task[None] | None = None
+        # Local-mic barge-in feeder: parallel arecord + asyncio task that run
+        # during TTS mute so OWW can scan while _vad_loop is blocked.
+        self._barge_in_proc: "subprocess.Popen[bytes] | None" = None
+        self._barge_in_feed_task: "asyncio.Task[None] | None" = None
+        # Pointer to the current LLM streaming producer task — set by
+        # _run_dialogue_turn_locked so barge-in monitor can cancel it.
+        self._current_producer_task: asyncio.Task[None] | None = None
+
+    # Phase 31 Wave 2 — monitor fan-out subscribe/unsubscribe (mirrors EventLog).
+    def subscribe_monitor(self, max_queue: int = _MONITOR_QUEUE_MAXSIZE) -> "asyncio.Queue[tuple[bytes, bytes]]":
+        """Register a new monitor client. Returns a bounded queue of (raw, processed) PCM tuples."""
+        queue: asyncio.Queue[tuple[bytes, bytes]] = asyncio.Queue(maxsize=max_queue)
+        with self._monitor_lock:
+            self._monitor_subscribers.append(queue)
+        return queue
+
+    def unsubscribe_monitor(self, queue: "asyncio.Queue[tuple[bytes, bytes]]") -> None:
+        with self._monitor_lock:
+            self._monitor_subscribers = [q for q in self._monitor_subscribers if q is not queue]
+
+    def _publish_monitor_frame(self, raw_chunk: bytes, processed_chunk: bytes) -> None:
+        """Fan out one frame to all monitor subscribers. Non-blocking, drop-oldest on overflow.
+
+        Called from _vad_loop's hot path — must never block or raise. Pushes both
+        pre-EQ and post-EQ PCM so the WS handler can honour a live monitor_tap
+        change (D-07) without resubscribing.
+        """
+        with self._monitor_lock:
+            subscribers = list(self._monitor_subscribers)
+        if not subscribers:
+            return
+        frame = (raw_chunk, processed_chunk)
+        for queue in subscribers:
+            try:
+                queue.put_nowait(frame)
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    queue.put_nowait(frame)
+                except asyncio.QueueFull:
+                    pass
 
     def apply_audio_config(self, audio_cfg: dict[str, Any]) -> list[str]:
         """Apply audio config changes live. Returns list of fields that require loop restart."""
@@ -634,6 +749,17 @@ class VoiceLoopController:
         # Cancelled in stop(); restarted on every start(). Survives _vad_loop
         # blocks on ASR/TTS, so loop liveness is always visible in events.jsonl.
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="adam_voice_heartbeat")
+        # Barge-in queue: created fresh each start so stale chunks from a previous
+        # session never leak into a new one. mic_reader accesses it via
+        # getattr(voice_loop, "_barge_in_q", None) — no direct wiring needed.
+        if self._barge_in_enabled and self._wake_engine is not None:
+            self._barge_in_q = asyncio.Queue(maxsize=40)
+        else:
+            self._barge_in_q = None
+        self._barge_in_triggered = False
+        self._barge_in_task = asyncio.create_task(
+            self._barge_in_monitor_loop(), name="adam_barge_in_monitor"
+        )
         await asyncio.sleep(0.2)
         if self._task.done():
             self.running = False
@@ -652,6 +778,16 @@ class VoiceLoopController:
 
     async def stop(self) -> dict[str, Any]:
         self.running = False
+        # Cancel barge-in monitor first — it references mic/tts/wake objects.
+        if self._barge_in_task and not self._barge_in_task.done():
+            self._barge_in_task.cancel()
+            try:
+                await self._barge_in_task
+            except asyncio.CancelledError:
+                pass
+        self._barge_in_task = None
+        self._barge_in_q = None
+        self._barge_in_triggered = False
         # Phase 9 (REQ-HEARTBEAT-INDEPENDENT): cancel the heartbeat ticker too.
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
@@ -724,7 +860,20 @@ class VoiceLoopController:
                 stdout = self._process.stdout
                 if stdout is None:
                     raise RuntimeError("arecord stdout unavailable")
-                await self._vad_loop(stdout.read, frame_bytes)
+                # PipeWire delivers audio in smaller quanta than PulseAudio
+                # (e.g. 80 samples = 5 ms instead of 320 = 20 ms), so a single
+                # read() may return fewer bytes than requested. Accumulate
+                # fragments until a full VAD frame is available.
+                _raw_read = stdout.read
+                def _read_exact(n: int) -> bytes:
+                    buf = _raw_read(n)
+                    while buf and len(buf) < n:
+                        tail = _raw_read(n - len(buf))
+                        if not tail:
+                            return buf
+                        buf += tail
+                    return buf
+                await self._vad_loop(_read_exact, frame_bytes)
                 return
             except asyncio.CancelledError:
                 raise
@@ -779,6 +928,142 @@ class VoiceLoopController:
                 await asyncio.sleep(period_sec)
         except asyncio.CancelledError:
             raise
+
+    async def _barge_in_monitor_loop(self) -> None:
+        """Scans mic audio for wake word during TTS playback to allow barge-in.
+
+        Runs as a separate background task. Reads chunks from self._barge_in_q
+        (populated by mic_reader._drain_loop regardless of mute state) and feeds
+        80ms windows to the OWW model while runtime_state["speaking"] is True.
+
+        Intentionally NOT active during thinking (LLM generating): the ESP32 audio
+        stream has a ~2.3s lag, so chunks arriving during thinking contain the
+        user's own "адам" wake word that triggered this turn. Scanning during
+        thinking would cause OWW to re-trigger on that buffered audio and suppress
+        the reply before it starts. UI-based interruption during thinking is
+        handled by POST /api/agent/interrupt instead.
+
+        When the wake word fires: stops TTS immediately, cancels the LLM producer
+        task, and sets _barge_in_triggered so _vad_loop transitions to listening
+        instead of reply after _transcribe_and_dispatch returns.
+        """
+        if not self._barge_in_enabled or self._wake_engine is None:
+            return
+        # Barge-in uses a SEPARATE debounce counter from normal wake detection.
+        # wake_word.barge_in_debounce_hits (default 3) > debounce_hits (2) so
+        # acoustic echo of Adam's own voice rarely triggers a false barge-in.
+        _ww_cfg = settings.section("wake_word") or {}
+        _bi_debounce = max(1, int(_ww_cfg.get("barge_in_debounce_hits", 3)))
+        _bi_hits = 0
+        _buf: list[bytes] = []
+        _was_speaking = False
+        try:
+            while self.running:
+                # Only scan when Adam is actually speaking (TTS playing).
+                if not runtime_state.get("speaking"):
+                    _buf.clear()
+                    _bi_hits = 0
+                    # Drain stale audio: frames accumulated during ASR/LLM thinking
+                    # contain the user's wake word "адам". If fed to OWW when TTS
+                    # starts, they score high (0.7+) and fire an immediate false
+                    # barge-in (observed: 50ms after tts_started, score=0.724).
+                    bq = self._barge_in_q
+                    if bq is not None:
+                        while True:
+                            try:
+                                bq.get_nowait()
+                            except Exception:
+                                break
+                    _was_speaking = False
+                    await asyncio.sleep(0.05)
+                    continue
+                # Reset OWW model state on the False→True transition so accumulated
+                # LSTM state from the previous wake-word detection doesn't carry over
+                # and produce an immediate high score on the first audio frame of TTS.
+                # NOTE: do NOT flush the queue here — audio the user speaks at the
+                # very start of TTS (the barge-in attempt) lands in _barge_in_q
+                # during this gap. Flushing it would discard exactly the "адам"
+                # we are trying to detect and prevent OWW from ever accumulating
+                # the required debounce_hits. The queue is already drained every
+                # 50 ms while speaking=False, so no stale pre-TTS audio survives.
+                if not _was_speaking:
+                    _buf.clear()
+                    _bi_hits = 0
+                    self._wake_engine.reset()
+                    event_log.append("barge_in_monitor_active", {"barge_in_q_is_none": bq is None})
+                _was_speaking = True
+                bq = self._barge_in_q
+                if bq is None:
+                    await asyncio.sleep(0.05)
+                    continue
+                # Wait for the next chunk (up to 50ms).
+                try:
+                    chunk = await asyncio.wait_for(bq.get(), timeout=0.05)
+                except asyncio.TimeoutError:
+                    continue
+                # OWW must see raw (pre-DSP) audio — the model was trained on
+                # natural speech and aggressive EQ (e.g. highshelf cuts) kills
+                # detection. Chunks pushed from _vad_loop are already pre-DSP.
+                _buf.append(chunk)
+                if len(_buf) < self._ww_frames_needed:
+                    continue
+                pcm_80ms = b"".join(_buf)
+                _buf.clear()
+                # Log RMS every 20 OWW evaluations during barge-in for audio level diagnostics.
+                _bi_eval_count = getattr(self, "_bi_eval_count", 0) + 1
+                self._bi_eval_count = _bi_eval_count
+                if _bi_eval_count % 20 == 0:
+                    import audioop as _ao2
+                    _pcm_rms = _ao2.rms(pcm_80ms, 2)
+                    event_log.append("barge_in_audio_rms", {"rms": _pcm_rms, "size": len(pcm_80ms)})
+                # Advance the OWW model state but use local hit counter (not
+                # the engine's internal debounce) so barge-in and wake-word
+                # detection have independent thresholds.
+                try:
+                    self._wake_engine.process_chunk(pcm_80ms)
+                except Exception as exc:
+                    event_log.append("barge_in_oww_error", {
+                        "error": str(exc),
+                        "chunk_size": len(pcm_80ms),
+                    })
+                    _buf.clear()
+                    continue
+                score = getattr(self._wake_engine, "last_score", None)
+                _ww_threshold = getattr(self._wake_engine, "_threshold", 0.02)
+                # Log every 10th score during barge-in monitoring for diagnostics.
+                _bi_frame_count = getattr(self, "_bi_diag_frame", 0) + 1
+                self._bi_diag_frame = _bi_frame_count
+                if _bi_frame_count % 10 == 0:
+                    event_log.append("barge_in_score", {"score": round(float(score), 4) if score is not None else None, "n": _bi_frame_count})
+                if score is not None and float(score) >= _ww_threshold:
+                    _bi_hits += 1
+                    event_log.append("barge_in_hit", {"score": round(float(score), 4), "hits": _bi_hits})
+                else:
+                    _bi_hits = 0
+                triggered = _bi_hits >= _bi_debounce
+                if triggered:
+                    _bi_hits = 0
+                if triggered and not self._barge_in_triggered:
+                    event_log.append("barge_in_detected", {
+                        "score": round(float(score), 3) if score is not None else None,
+                    })
+                    self._barge_in_triggered = True
+                    runtime_state["interrupt_tts"] = True
+                    tts.interrupt_playback()
+                    # Cancel the LLM producer — _producer() always puts the None
+                    # sentinel in its finally block, so _consumer() drains cleanly.
+                    pt = self._current_producer_task
+                    if pt is not None and not pt.done():
+                        pt.cancel()
+                    # Flush queue so we don't re-trigger on the same audio.
+                    _buf.clear()
+                    while True:
+                        try:
+                            bq.get_nowait()
+                        except Exception:
+                            break
+        except asyncio.CancelledError:
+            pass
 
     async def _vad_loop(self, read_fn: Callable[[int], bytes] | None, frame_bytes: int) -> None:
         """VAD + endpointing + ASR dispatch.
@@ -835,11 +1120,39 @@ class VoiceLoopController:
                     await asyncio.sleep(0.005)
                     continue
                 _empty_streak = 0
-                # Partial frame: arecord exited mid-buffer; subsequent reads
-                # will be empty and trigger the 3-streak error properly.
                 if len(chunk) < frame_bytes:
                     continue
-                chunk = self._apply_vad_hpf(chunk)
+                # Barge-in: for mic_source=="local" there is no MicReader drain
+                # loop feeding _barge_in_q, so push RAW chunk here so OWW sees
+                # audio during TTS playback. Drop-oldest on overflow, never block.
+                if self.mic_source == "local":
+                    _bq = self._barge_in_q
+                    if _bq is not None:
+                        try:
+                            _bq.put_nowait(chunk)
+                        except Exception:
+                            try:
+                                _bq.get_nowait()
+                            except Exception:
+                                pass
+                            try:
+                                _bq.put_nowait(chunk)
+                            except Exception:
+                                pass
+                # Phase 31: streaming input EQ before RMS/VAD/OWW/ASR.
+                # Refresh config every ~10 frames (~200 ms).
+                self._input_dsp_poll += 1
+                if self._input_dsp_poll >= 10:
+                    self._input_dsp_poll = 0
+                    try:
+                        self._input_dsp.ensure_config(
+                            tuning_store.current().audio_input.dsp.model_dump()
+                        )
+                    except Exception:
+                        pass
+                _raw_chunk_for_monitor = chunk
+                chunk = self._input_dsp.process(chunk)
+                self._publish_monitor_frame(_raw_chunk_for_monitor, chunk)
 
                 _rms = audioop.rms(chunk, 2)
                 vad_voiced = self._webrtc_vad.predict(chunk, self.sample_rate) >= 0.5
@@ -872,6 +1185,24 @@ class VoiceLoopController:
                             _level_payload["bands"] = _bands
                         event_log.append("audio_level", _level_payload)
 
+                # audio_level_eq: feeds the EQ canvas with pre-DSP (gray background)
+                # and post-DSP (coloured) bands side-by-side for both mic paths.
+                # Fires at the same cadence as audio_level regardless of mic_source.
+                self._eq_level_tick = getattr(self, "_eq_level_tick", 0) + 1
+                if self._eq_level_tick >= mic_reader._audio_level_emit_every_n:
+                    self._eq_level_tick = 0
+                    _pre_b = mic_reader._compute_bands(_raw_chunk_for_monitor)
+                    _post_b = mic_reader._compute_bands(chunk)
+                    _eq_payload: dict[str, Any] = {
+                        "oww_score": round(self._oww_last_score, 3),
+                        "oww_threshold": round(self._oww_last_threshold, 3),
+                    }
+                    if _pre_b is not None:
+                        _eq_payload["pre_bands"] = _pre_b
+                    if _post_b is not None:
+                        _eq_payload["bands"] = _post_b
+                    event_log.append("audio_level_eq", _eq_payload)
+
                 # D-13/D-14: boot_warmup is a drain-only state. We keep
                 # get_chunk()/read_fn() pumping so MicReader's queue doesn't
                 # fill up (drop_oldest would stay silent but still wastes CPU),
@@ -888,7 +1219,11 @@ class VoiceLoopController:
                         if time.perf_counter() - self._standby_entry_time < self._STANDBY_GUARD_SEC:
                             self.vad_state = "standby_guard"
                             continue
-                        self._ww_buf.append(chunk)
+                        # Rolling pre-wake buffer: capture every standby frame so that
+                        # audio uttered before OWW debounce confirmation is not lost.
+                        # Uses processed `chunk` (post-EQ) matching what ASR will see.
+                        self._pre_wake_buf.append(chunk)
+                        self._ww_buf.append(_raw_chunk_for_monitor)
                         if len(self._ww_buf) >= self._ww_frames_needed:
                             pcm_80ms = b"".join(self._ww_buf)
                             self._ww_buf.clear()
@@ -899,6 +1234,10 @@ class VoiceLoopController:
                                 # dynamics, and noise calibration uses the low tail of
                                 # the distribution as baseline. Includes current threshold
                                 # so UI does not need a separate poll.
+                                self._oww_last_score = float(score)
+                                _thr = getattr(self._wake_engine, "_threshold", None)
+                                if _thr is not None:
+                                    self._oww_last_threshold = float(_thr)
                                 event_log.append("oww_score", {
                                     "score": round(float(score), 3),
                                     "hits": getattr(self._wake_engine, "_consecutive_hits", None),
@@ -910,9 +1249,20 @@ class VoiceLoopController:
                                 self._set_voice_state("listening", "wake_word")
                                 self._webrtc_vad.reset_states()
                                 self._wake_detected_at = time.perf_counter()
-                                speech_frames.clear()
-                                speech_ms = 0
+                                # Prepend pre-wake audio to capture any speech uttered
+                                # before OWW debounce confirmation (BUG-1 fix).
+                                # speech_frames is normally empty here (standby → listening
+                                # transition) but the prepend is safe even if not empty.
+                                _pre_wake_list = list(self._pre_wake_buf)
+                                speech_frames = _pre_wake_list + speech_frames
+                                self._pre_wake_buf.clear()
+                                speech_ms = len(speech_frames) * self.frame_ms
                                 silence_ms = 0
+                                event_log.append("pre_wake_prepend", {
+                                    "pre_wake_frames": len(_pre_wake_list),
+                                    "pre_wake_ms": len(_pre_wake_list) * self.frame_ms,
+                                    "total_speech_frames": len(speech_frames),
+                                })
                     elif not self.wake_word_required and voiced:
                         # No wake word required (maintenance / local-dev mode).
                         # VAD-based entry: any voiced frame after the guard period opens listening.
@@ -1098,7 +1448,33 @@ class VoiceLoopController:
                         # in its own task; no per-turn drainer needed. Local
                         # mode also no longer needs special drainer handling.
 
+                        # Local mic barge-in: while _vad_loop is blocked in
+                        # _transcribe_and_dispatch the main arecord is stopped,
+                        # so _barge_in_q receives nothing and OWW goes blind.
+                        # Start a parallel arecord dedicated to OWW-only during
+                        # TTS. Its output never reaches VAD/ASR — only _barge_in_q.
+                        # ESP32 path doesn't need this: _drain_loop feeds the queue.
+                        event_log.append("barge_in_proc_check", {
+                            "using_process": _using_process,
+                            "barge_in_q": self._barge_in_q is not None,
+                            "barge_in_enabled": self._barge_in_enabled,
+                        })
+                        if _using_process and self._barge_in_q is not None:
+                            self._barge_in_proc = self._start_arecord()
+                            self._barge_in_feed_task = asyncio.create_task(
+                                self._local_barge_in_feed(self._barge_in_proc),
+                                name="adam_local_barge_in_feed",
+                            )
+                            event_log.append("barge_in_proc_started", {})
+
                         spoke = await self._transcribe_and_dispatch(pcm)
+
+                        # Stop local barge-in feeder before restarting main arecord.
+                        if self._barge_in_feed_task is not None:
+                            self._barge_in_feed_task.cancel()
+                            await asyncio.gather(self._barge_in_feed_task, return_exceptions=True)
+                            self._barge_in_feed_task = None
+                        self._stop_barge_in_proc()
 
                         # Local mode: restart arecord and update _reader (clean
                         # buffer). ESP32 mode: drainer kept stream live and at
@@ -1152,6 +1528,42 @@ class VoiceLoopController:
                             )
                             if _diag_on:
                                 self.mic_reader.begin_lag_diag(4000.0, "post_transcribe")
+                        # Barge-in: wake word fired during TTS → open a short reply window
+                        # so the user's follow-up ("тихо", "стоп", or a new request) is
+                        # captured by VAD and processed immediately without requiring another
+                        # wake word. Silence keywords are checked in reply state too (see
+                        # _transcribe_and_dispatch), so "Адам, тихо" works end-to-end.
+                        if self._barge_in_triggered:
+                            self._barge_in_triggered = False
+                            self._current_producer_task = None
+                            self._utterance_id = str(uuid4())[:8]
+                            speech_frames.clear()
+                            speech_ms = 0
+                            silence_ms = 0
+                            self._ww_buf.clear()
+                            if self._wake_engine is not None:
+                                self._wake_engine.reset()
+                            self._reply_start = time.perf_counter()
+                            _bi_total_timeout = (
+                                self._post_tts_discard_window_ms / 1000.0
+                                + self._reply_silence_timeout_sec
+                            )
+                            event_log.append("barge_in_reply", {
+                                "utterance_id": self._utterance_id,
+                                "timeout_sec": round(_bi_total_timeout, 2),
+                                "silence_timeout_sec": self._reply_silence_timeout_sec,
+                            })
+                            self._set_voice_state("reply", "barge_in")
+                            continue
+                        # Manual interrupt (button / API): go to standby, skip reply window.
+                        if self._manual_interrupt_triggered:
+                            self._manual_interrupt_triggered = False
+                            self._set_voice_state("standby", "manual_interrupt")
+                            self._standby_entry_time = time.perf_counter()
+                            if self._wake_engine is not None:
+                                self._wake_engine.reset()
+                            event_log.append("manual_interrupt_standby", {})
+                            continue
                         if spoke:
                             self._set_voice_state("reply", "agent_spoke")
                             self._reply_start = time.perf_counter()
@@ -1188,6 +1600,74 @@ class VoiceLoopController:
         # — see notes/voice-pipeline-vs-ui-layering.md.
         finally:
             self._stop_process()
+            self._stop_barge_in_proc()
+            if self._barge_in_feed_task is not None and not self._barge_in_feed_task.done():
+                self._barge_in_feed_task.cancel()
+            self._barge_in_feed_task = None
+
+    async def _local_barge_in_feed(self, proc: "subprocess.Popen[bytes]") -> None:
+        """Read from a dedicated arecord process and push raw chunks to _barge_in_q.
+
+        Runs only during TTS mute (local mic path) so OWW has audio to scan.
+        The main arecord is stopped separately; this process is for OWW only —
+        its output never reaches VAD/ASR. Cancelled by the caller after TTS ends.
+        """
+        if proc.stdout is None:
+            return
+        raw_read = proc.stdout.read
+        fb = max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
+
+        def _read_exact_bi(n: int) -> bytes:
+            # PipeWire/PulseAudio delivers audio in small quanta (e.g. 160 bytes = 5ms
+            # at 16kHz) instead of the requested frame size (640 bytes = 20ms).
+            # Accumulate until we have exactly n bytes so OWW always gets full frames.
+            buf = raw_read(n)
+            while buf and len(buf) < n:
+                tail = raw_read(n - len(buf))
+                if not tail:
+                    return buf
+                buf += tail
+            return buf
+
+        _feed_chunk_count = 0
+        try:
+            while True:
+                chunk = await asyncio.to_thread(_read_exact_bi, fb)
+                if len(chunk) < fb:
+                    event_log.append("barge_in_feed_eof", {"chunks_sent": _feed_chunk_count, "last_size": len(chunk)})
+                    break  # EOF
+                _feed_chunk_count += 1
+                if _feed_chunk_count <= 10:
+                    import audioop as _ao
+                    _rms = _ao.rms(chunk, 2)
+                    event_log.append("barge_in_feed_chunk", {"n": _feed_chunk_count, "size": len(chunk), "rms": _rms})
+                bq = self._barge_in_q
+                if bq is None:
+                    break
+                try:
+                    bq.put_nowait(chunk)
+                except Exception:
+                    try:
+                        bq.get_nowait()
+                    except Exception:
+                        pass
+                    try:
+                        bq.put_nowait(chunk)
+                    except Exception:
+                        pass
+        except asyncio.CancelledError:
+            pass
+
+    def _stop_barge_in_proc(self) -> None:
+        """Terminate the local barge-in capture process if running."""
+        proc = self._barge_in_proc
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        self._barge_in_proc = None
 
     def _start_arecord(self) -> subprocess.Popen[bytes]:
         command = [
@@ -1239,6 +1719,23 @@ class VoiceLoopController:
             "provider": self.asr_client.__class__.__name__,
             "utterance_id": self._utterance_id,
         }, turn_id=turn_id)
+        # Pre-send RMS gate: skip ASR if audio is near-silent (catches frames that slipped
+        # past WebRTC VAD but contain no actual speech — prevents WhisperX hallucinations).
+        _rms_gate = int(settings.section("services").get("asr", {}).get("asr_pre_send_min_rms", 200))
+        if _rms_gate > 0 and pcm:
+            import struct as _struct
+            _n = len(pcm) // 2
+            if _n > 0:
+                _samples = _struct.unpack(f"<{_n}h", pcm[:_n * 2])
+                _rms = (sum(s * s for s in _samples) / _n) ** 0.5
+                if _rms < _rms_gate:
+                    event_log.append("asr_skipped_silent", {
+                        "rms": round(_rms),
+                        "rms_gate": _rms_gate,
+                        "pcm_ms": pcm_ms,
+                    }, turn_id=turn_id)
+                    return False
+
         t_asr = time.perf_counter()
         try:
             transcript = (await self.asr_client.transcribe_pcm(pcm)).strip()
@@ -1256,6 +1753,16 @@ class VoiceLoopController:
         if not transcript:
             return False
 
+        # Second-tier hallucination guard: blocks known Whisper hallucinations even when
+        # the ASR Docker container is stale and its local pattern set hasn't been rebuilt.
+        # Defense-in-depth per D-04 (phase 34). Fires before wake-word strip.
+        if _is_hallucination(transcript):
+            event_log.append("asr_hallucination_filtered", {
+                "raw": transcript[:120],
+                "utterance_id": self._utterance_id,
+            }, turn_id=turn_id)
+            return False
+
         self.last_transcript = transcript
         self.last_transcript_at = utc_now()
         self.last_asr_error = ""
@@ -1264,6 +1771,31 @@ class VoiceLoopController:
         cleaned = self._wake_re.sub("", transcript).strip() if self._wake_re else transcript
         if not cleaned:
             event_log.append("asr_wake_only", {"raw": transcript, "reason": "only_wake_word"}, turn_id=turn_id)
+            return False
+
+        # Silence-keyword gate: only fires when voice_state == "listening" (OWW already detected).
+        # Active in both listening (wake-word + stop-word) and reply (barge-in follow-up after TTS
+        # interruption). Reply window is intentionally included because barge-in now transitions to
+        # reply instead of listening — the user's "тихо/стоп" after "адам" during TTS arrives in
+        # the reply window, not the listening window.
+        _silence_kws = settings.section("services").get("asr", {}).get("silence_keywords", [])
+        _cleaned_norm = cleaned.lower().strip(".,!?- ")
+        if (self._voice_state in ("listening", "reply")
+                and _silence_kws
+                and any(_cleaned_norm == kw.lower() or _cleaned_norm.startswith(kw.lower() + " ")
+                        for kw in _silence_kws)):
+            pt = self._current_producer_task
+            if pt and not pt.done():
+                runtime_state["interrupt_tts"] = True
+                pt.cancel()
+            tts.interrupt_playback()
+            event_log.append("silence_command", {
+                "transcript": cleaned, "matched": _cleaned_norm, "action": "standby",
+            }, turn_id=turn_id)
+            self._set_voice_state("standby", "silence_command")
+            self._standby_entry_time = time.perf_counter()
+            if self._wake_engine is not None:
+                self._wake_engine.reset()
             return False
 
         event_log.append("asr_final", {
@@ -1906,9 +2438,16 @@ async def lifespan(_: FastAPI):
         services_confirmed = True
     asyncio.create_task(_orchestrated_startup(services_confirmed), name="startup_sequence")
     asyncio.create_task(_warmup_asr(), name="warmup_asr")
+    # Phase 30: background weather poll — caches readings so dialogue turns never
+    # block on HTTP. Only started when the weather skill is enabled.
+    weather_task: asyncio.Task | None = None
+    if bool(_weather_cfg.get("enabled", True)):
+        weather_task = asyncio.create_task(weather_provider.poll_loop(), name="weather_poll")
     try:
         yield
     finally:
+        if weather_task is not None:
+            weather_task.cancel()
         await voice_loop.stop()
         if voice_loop.mic_source == "esp32":
             # voice_loop must release any in-flight mic_reader.get_chunk() awaits
@@ -1932,35 +2471,6 @@ app = FastAPI(title="Adam Chip Orchestrator", version="0.1.0", lifespan=lifespan
 async def index() -> RedirectResponse:
     return RedirectResponse("/ui/", status_code=307)
 
-
-@app.get("/legacy/agent", response_class=HTMLResponse)
-async def legacy_agent() -> str:
-    return agent_page()
-
-
-@app.get("/legacy/dash", response_class=HTMLResponse)
-async def legacy_dash() -> str:
-    return dash_page(_ui_settings_public())
-
-
-@app.get("/legacy/debug", response_class=HTMLResponse)
-async def legacy_debug() -> str:
-    return debug_page(_ui_settings_public())
-
-
-@app.get("/agent", response_class=HTMLResponse)
-async def agent() -> RedirectResponse:
-    return RedirectResponse("/legacy/agent", status_code=307)
-
-
-@app.get("/dash", response_class=HTMLResponse)
-async def dash() -> RedirectResponse:
-    return RedirectResponse("/legacy/dash", status_code=307)
-
-
-@app.get("/debug", response_class=HTMLResponse)
-async def debug() -> RedirectResponse:
-    return RedirectResponse("/legacy/debug", status_code=307)
 
 
 @app.get("/api/ui/status")
@@ -2415,6 +2925,28 @@ async def stop() -> dict[str, Any]:
     return {"ok": True, "mcu": action.as_dict() if action else None}
 
 
+@app.post("/api/agent/interrupt")
+async def interrupt_turn() -> dict[str, Any]:
+    """Stop active TTS playback and cancel LLM generation mid-turn.
+
+    Guard: only acts when a turn is actually in progress (thinking or speaking).
+    Without the guard, setting interrupt_tts=True when idle would silently
+    suppress the first TTS chunk of the *next* turn (consumer checks the flag
+    before playing pending_wav and clears it, so the chunk is lost).
+    """
+    if not (runtime_state.get("thinking") or runtime_state.get("speaking")):
+        return {"ok": True, "detail": "no_active_turn"}
+    runtime_state["interrupt_tts"] = True
+    tts.interrupt_playback()
+    pt = voice_loop._current_producer_task
+    if pt is not None and not pt.done():
+        pt.cancel()
+    # Signal _vad_loop to go to standby (not reply) after this turn completes.
+    voice_loop._manual_interrupt_triggered = True
+    event_log.append("manual_interrupt", {})
+    return {"ok": True}
+
+
 @app.post("/api/agent/scene")
 async def update_scene(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # Part C (flora): /api/agent/scene writes motor scenes to PCA9685 channels 0-14,
@@ -2542,6 +3074,104 @@ async def restart_service(name: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=result.detail)
     return {"ok": True, "service": name, "unit": unit, "detail": result.detail}
 
+async def _run_joke_turn(
+    *,
+    transcript: str,
+    source: str,
+    turn_id: str | None,
+    joke: Any,
+    acc: SessionAccumulator,
+    sensors: dict[str, Any],
+    visitor_name: str | None,
+    t_total: float,
+    asr_ms: float | None,
+) -> dict[str, Any]:
+    """Verbatim joke short-circuit — speak a pooled anecdote, bypassing the LLM.
+
+    The punchline must be exact, so we never route jokes through Gemma (which
+    would also add ~9 s prefill). We still run the full turn bookkeeping:
+    dialogue memory, session accumulator, events, metrics.
+    """
+    frame = random.choice(_JOKE_FRAMES)
+    reply = f"{frame} {joke.body}".strip() if frame else joke.body.strip()
+
+    memory.add_dialogue("viewer", transcript)
+    event_log.append(
+        "viewer_transcript",
+        {"text": transcript, "source": source, "sensors": sensors, "visitor_name": visitor_name, "skill": "joke"},
+        turn_id=turn_id,
+    )
+
+    t_tts = time.perf_counter()
+    tts_result = await _speak(reply, turn_id=turn_id)
+    tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
+
+    runtime_state["last_tts_text"] = reply.lower()
+    _hist = runtime_state.setdefault("recent_tts_history", [])
+    _hist.append({"text": reply.lower(), "finished_at": time.perf_counter()})
+    if len(_hist) > 5:
+        _hist.pop(0)
+    memory.add_dialogue("adam", reply)
+    acc.note_turn("adam", reply)
+
+    total_ms = round((time.perf_counter() - t_total) * 1000, 1)
+    timings = {"asr_ms": asr_ms, "llm_ms": 0.0, "ttfv_ms": 0.0, "tts_ms": tts_ms, "total_ms": total_ms}
+    action_dict = {
+        "kind": "no_action", "mood": "warm", "scene": None, "channel": None,
+        "value": None, "duration_ms": 0, "reason": "skill_joke",
+    }
+
+    metrics_log.append({
+        "turn_id": turn_id,
+        "source": source,
+        "transcript": transcript,
+        "reply": reply,
+        "voice_degraded": bool(tts_result.get("degraded")),
+        "asr_ms": asr_ms,
+        "llm_ms": 0.0,
+        "ttfv_ms": 0.0,
+        "tts_ms": tts_ms,
+        "total_ms": total_ms,
+        "tts_chunks": int(tts_result.get("chunks") or 0),
+        "llm_error": False,
+        "action": "no_action",
+        "action_kind": "no_action",
+        "action_reason": "skill_joke",
+        "session_id": acc.session_id,
+        "session_turn": acc.turn_count,
+        "skill": "joke",
+        "skill_id": joke.id,
+        "visitor_name": visitor_name,
+        "proactive": False,
+    })
+
+    event_log.append(
+        "adam_reply",
+        {
+            "text": reply,
+            "source": source,
+            "voice_degraded": bool(tts_result.get("degraded")),
+            "tts": tts_result,
+            "skill": "joke",
+            "skill_id": joke.id,
+            "timings": timings,
+        },
+        turn_id=turn_id,
+    )
+    return {
+        "ok": True,
+        "turn_id": turn_id,
+        "reply": reply,
+        "source": source,
+        "voice_degraded": bool(tts_result.get("degraded")),
+        "tts": tts_result,
+        "action": action_dict,
+        "mcu": None,
+        "timings": timings,
+        "skill": "joke",
+    }
+
+
 async def _run_dialogue_turn(transcript: str, source: str, asr_ms: float | None = None, turn_id: str | None = None) -> dict[str, Any]:
     if turn_id is None:
         turn_id = str(uuid4())[:8]
@@ -2604,16 +3234,28 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         memory_retrieved_ids = [ep.id for ep in recent_eps]
 
     # echoes / chinese gate (приоритет — echoes, потом chinese)
-    # mood = _resolve_mood(scene_cache.text, sensors)  # disabled: VLM outputs English, Russian keywords never match
-    mood = "neutral"
+    # Phase 30 (layer A): окно последних реплик (зритель + Адам) для тематического
+    # матча тегов — реплики Адама несут внутреннюю лексику (технофлора, память),
+    # совпадающую с тегами карточек.
+    _match_window_turns = max(
+        tuning.echoes.history_window_turns, tuning.chinese.history_window_turns
+    )
+    _match_history = memory.recent_dialogue(_match_window_turns) if _match_window_turns else []
+    history_text = " ".join(str(t.get("text", "")) for t in _match_history)
+    # Phase 30 (layer D): mood оживлён — _resolve_mood даёт overload по English
+    # VLM "group"/русским словам толпы; mood_block:[overload] снова работает.
+    mood = _resolve_mood(scene_cache.text, sensors)
     echo_hint: str | None = None
     echo_meta: dict[str, Any] | None = None
     if tuning.echoes.enabled:
         echo_inj = echoes_gate.maybe_inject(
             transcript=transcript,
-            mood=mood,
-            adam_state=acc.adam_state,
             tuning=tuning.echoes,
+            themes=acc.themes,
+            theme_clusters=tuning.memory.theme_clusters,
+            history_text=history_text,
+            mood=mood,
+            session_id=acc.session_id,
         )
         if echo_inj:
             echo_hint = echo_inj.hint_text
@@ -2625,9 +3267,12 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     if echo_hint is None and tuning.chinese.enabled:
         cn_inj = chinese_gate.maybe_inject(
             transcript=transcript,
-            mood=mood,
-            adam_state=acc.adam_state,
             tuning=tuning.chinese,
+            themes=acc.themes,
+            theme_clusters=tuning.memory.theme_clusters,
+            history_text=history_text,
+            mood=mood,
+            session_id=acc.session_id,
         )
         if cn_inj:
             echo_hint = cn_inj.hint_text
@@ -2636,6 +3281,67 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             memory_metrics.record_echo_injected(
                 cn_inj.entry.id, cn_inj.score, tuning.chinese.matcher_type
             )
+    # Phase 30 (layer C): спонтанный канал — если тематический инжект не сработал,
+    # с низкой вероятностью «всплывает» echo/chinese по глубине сессии (без матча).
+    if echo_hint is None and tuning.echoes.enabled:
+        sp_inj = echoes_gate.maybe_inject_spontaneous(
+            tuning=tuning.echoes,
+            turn_count=acc.turn_count,
+            session_id=acc.session_id,
+            mood=mood,
+        )
+        if sp_inj:
+            echo_hint = sp_inj.hint_text
+            acc.note_echo_used(sp_inj.entry.id)
+            echo_meta = {"pool": "echoes", "id": sp_inj.entry.id, "score": sp_inj.score, "spontaneous": True}
+            memory_metrics.record_echo_injected(
+                sp_inj.entry.id, sp_inj.score, tuning.echoes.matcher_type
+            )
+    if echo_hint is None and tuning.chinese.enabled:
+        sp_cn = chinese_gate.maybe_inject_spontaneous(
+            tuning=tuning.chinese,
+            turn_count=acc.turn_count,
+            session_id=acc.session_id,
+            mood=mood,
+        )
+        if sp_cn:
+            echo_hint = sp_cn.hint_text
+            acc.note_chinese_used(sp_cn.entry.id)
+            echo_meta = {"pool": "chinese", "id": sp_cn.entry.id, "score": sp_cn.score, "spontaneous": True}
+            memory_metrics.record_echo_injected(
+                sp_cn.entry.id, sp_cn.score, tuning.chinese.matcher_type
+            )
+
+    # --- Phase 30: intent-gated skills (jokes / weather) ---
+    # Detection is offline keyword matching (see skills.IntentRouter) — no extra
+    # LLM pass. Jokes short-circuit the turn (verbatim, no LLM); weather injects
+    # a [ctx.weather] block so the LLM speaks the cached reading in character.
+    weather_ctx: str | None = None
+    intent = intent_router.classify(transcript)
+    if intent == "joke" and bool(_jokes_cfg.get("enabled", True)):
+        joke = joke_gate.pick(cooldown_days=int(_jokes_cfg.get("per_joke_cooldown_days", 3)))
+        if joke is not None:
+            return await _run_joke_turn(
+                transcript=transcript,
+                source=source,
+                turn_id=turn_id,
+                joke=joke,
+                acc=acc,
+                sensors=sensors,
+                visitor_name=visitor_name,
+                t_total=t_total,
+                asr_ms=asr_ms,
+            )
+    elif intent == "weather" and bool(_weather_cfg.get("enabled", True)):
+        # Failure ≠ silence (invariant): stale/missing cache → offline note, not
+        # fabricated data. Adam acknowledges he can't sense outside right now.
+        cached_str = weather_provider.cached()
+        weather_ctx = cached_str or "(датчик улицы сейчас недоступен)"
+        event_log.append(
+            "skill_weather",
+            {"ctx": weather_ctx, "cached": cached_str is not None},
+            turn_id=turn_id,
+        )
 
     # semantic
     semantic_text = ""
@@ -2663,6 +3369,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         recent_episodic=recent_lines,
         recent_scenes=recent_scenes,
         echo_hint=echo_hint,
+        weather_ctx=weather_ctx,
         history_turns=history_turns,
         include_scene=tuning.prompt.include_scene,
         include_sensors=tuning.prompt.include_sensors,
@@ -2940,23 +3647,29 @@ async def _stream_llm_and_speak(
                     sentence = buf[: m.start()].strip()
                     buf = buf[m.end() :]
                     if sentence:
-                        cleaned = noise_filter.accept(sentence)
-                        if cleaned is None:
-                            dropped_leading.append(sentence)
-                            event_log.append(
-                                "llm_partial_dropped",
-                                {"text": sentence, "reason": "leading_noise"},
-                            )
+                        if _PUNCT_ONLY_RE.match(sentence):
+                            # Punct-only chunk (e.g. "...", "—"): skip silently.
+                            # Silero cannot synthesize these and returns wav=None,
+                            # which would produce a tts_chunk_failed event.
+                            pass
                         else:
-                            parts.append(cleaned)
-                            await queue.put(cleaned)
-                            event_log.append(
-                                "llm_partial", {"text": cleaned, "index": len(parts) - 1}
-                            )
+                            cleaned = noise_filter.accept(sentence)
+                            if cleaned is None:
+                                dropped_leading.append(sentence)
+                                event_log.append(
+                                    "llm_partial_dropped",
+                                    {"text": sentence, "reason": "leading_noise"},
+                                )
+                            else:
+                                parts.append(cleaned)
+                                await queue.put(cleaned)
+                                event_log.append(
+                                    "llm_partial", {"text": cleaned, "index": len(parts) - 1}
+                                )
                     m = _SENTENCE_BOUNDARY_RE.search(buf)
         finally:
             remainder = buf.strip()
-            if remainder:
+            if remainder and not _PUNCT_ONLY_RE.match(remainder):
                 cleaned = noise_filter.accept(remainder)
                 if cleaned is None:
                     dropped_leading.append(remainder)
@@ -3151,6 +3864,9 @@ async def _stream_llm_and_speak(
     # чтобы статус "Говорю" в UI появлялся только когда TTS реально звучит,
     # а не на стадии генерации LLM-токенов (статус "Думаю").
     producer_task = asyncio.create_task(_producer(), name="llm_producer")
+    # Expose producer to barge-in monitor so it can cancel LLM generation mid-stream.
+    if voice_loop is not None:
+        voice_loop._current_producer_task = producer_task
     consumer_task = asyncio.create_task(_consumer(), name="tts_consumer")
     filler_task = asyncio.create_task(_filler_task(), name="tts_filler")
     try:
@@ -3174,6 +3890,8 @@ async def _stream_llm_and_speak(
     finally:
         runtime_state["speaking"] = False
         runtime_state["last_tts_finished_at"] = time.perf_counter()
+        if voice_loop is not None:
+            voice_loop._current_producer_task = None
     # Re-raise exceptions from child tasks (producer error → caller handles gracefully).
     # Filler errors are non-fatal — already logged inside _filler_task.
     for _task in (producer_task, consumer_task):
@@ -3561,7 +4279,6 @@ def _rebuild_clients(section_path: str) -> list[str]:
         restarted.append("vlm")
     if section_path.startswith("services.tts") or section_path == "services":
         tts = TTSClient(services.get("tts", {}), mcu_speaker_url=mcu.speaker_endpoint_url())
-        tts._barge_in_event_emitter = lambda t, p: event_log.append(t, p)
         restarted.append("tts")
     if section_path.startswith("wake_word"):
         ww_cfg = settings.section("wake_word") or {}
@@ -3661,7 +4378,39 @@ if _WEBUI_DIR.exists():
     app.mount("/ui", StaticFiles(directory=str(_WEBUI_DIR), html=True), name="ui")
 
 
+_singleton_lock_fd = None
+
+
+def _acquire_singleton_lock() -> None:
+    """Enforce a single orchestrator instance (Phase 30, Option A — systemd is the
+    sole owner; this flock is defence-in-depth against stray bare/manual launches
+    that historically duplicated the orchestrator and fought over :8080 + the mic).
+
+    Any second instance — regardless of launcher (systemd / scripts / manual) —
+    exits cleanly with code 0 so systemd's `Restart=on-failure` treats it as
+    success and does NOT relaunch it into a churn loop.
+    """
+    global _singleton_lock_fd
+    import fcntl
+
+    lock_path = PROJECT_ROOT / "data" / "adam" / "orchestrator.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = open(lock_path, "w")
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.stderr.write(
+            f"[orchestrator] another instance already holds the singleton lock "
+            f"({lock_path}) — exiting cleanly (exit 0).\n"
+        )
+        raise SystemExit(0)
+    fd.write(f"{os.getpid()}\n")
+    fd.flush()
+    _singleton_lock_fd = fd  # keep fd open for the whole process lifetime
+
+
 def main() -> None:
+    _acquire_singleton_lock()
     try:
         import uvicorn
     except ImportError as exc:

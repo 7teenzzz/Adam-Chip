@@ -8,6 +8,7 @@ import json
 import re
 import socket
 import struct
+import threading
 import time
 import wave
 from dataclasses import dataclass
@@ -38,6 +39,10 @@ _ESP_SPEAKER_TAIL_SILENCE_BYTES = 5292
 # boot continues to standby) instead of stalling startup for 20-40 s.
 _ESP_SPEAKER_CONNECT_TIMEOUT = 4.0
 _ESP_SPEAKER_STALL_TIMEOUT = 6.0
+
+
+class _SendInterrupted(Exception):
+    """Raised by _post_wav_paced_to_esp32 when interrupt_evt fires mid-send."""
 
 # Bypass system HTTP proxy for ESP32 LAN traffic (v2ray on this Jetson hijacks
 # urllib via env vars and leaks sockets back to ESP32:81 port pool of 4).
@@ -129,7 +134,8 @@ def _prepare_wav_for_esp32_speaker(wav_bytes: bytes) -> bytes:
 
 
 def _post_wav_paced_to_esp32(url: str, payload: bytes, bytes_per_sec: int,
-                             timeout: float) -> tuple[int, str]:
+                             timeout: float,
+                             interrupt_evt: "threading.Event | None" = None) -> tuple[int, str]:
     """POST a WAV to the ESP32 :81 /speaker sink, PACING the body to playback
     rate so the ESP's 32 KB ring never overflows (overflow drops cause audible
     clicks). A raw socket inherently bypasses the v2ray proxy that hijacks LAN
@@ -139,6 +145,9 @@ def _post_wav_paced_to_esp32(url: str, payload: bytes, bytes_per_sec: int,
     Pacing model: keep bytes-sent under ``prime + bytes_per_sec * elapsed`` so
     the ESP plays out of the ring as fast as we fill it. The send therefore
     takes roughly the audio duration — which also replaces the post-POST sleep.
+
+    If interrupt_evt is set during the send loop, the socket is closed and
+    _SendInterrupted is raised so the caller can return early (barge-in support).
     """
     parsed = urlsplit(url)
     host = parsed.hostname
@@ -174,6 +183,14 @@ def _post_wav_paced_to_esp32(url: str, payload: bytes, bytes_per_sec: int,
         per_chunk_dt = _ESP_SPEAKER_CHUNK_BYTES / float(bps)
         next_t = time.perf_counter()
         while sent < total:
+            # Barge-in: if interrupt_evt fires, close the socket and stop feeding.
+            # ESP32 will drain whatever is already in the I2S ring then go silent.
+            if interrupt_evt is not None and interrupt_evt.is_set():
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                raise _SendInterrupted()
             now = time.perf_counter()
             if now >= next_t:
                 end = min(sent + _ESP_SPEAKER_CHUNK_BYTES, total)
@@ -355,9 +372,11 @@ class TTSClient:
         # Stored regardless so a later runtime config swap can flip the target.
         self._mcu_speaker_url = (mcu_speaker_url or "").strip() or None
         self._current_play_proc: Any = None  # active aplay Popen handle for barge-in interrupt
+        # Shared interrupt signal: set by interrupt_playback(), cleared before each playback.
+        # Checked by both the local aplay path AND the ESP32 paced-send loop so barge-in
+        # works regardless of output_target.
+        self._interrupt_evt: threading.Event = threading.Event()
         self._session: Any = None
-        # Hook for orchestrator to log barge-in attempts that cannot stop ESP32 audio.
-        self._barge_in_event_emitter: Any = None
 
     def _get_session(self) -> Any:
         if self._session is None or self._session.is_closed:
@@ -402,6 +421,7 @@ class TTSClient:
 
     def _play_wav_bytes_sync(self, wav_bytes: bytes) -> dict[str, Any]:
         """Route WAV playback to the configured output target. Blocks until done."""
+        self._interrupt_evt.clear()
         if self.output_target == "esp32_speaker":
             return self._play_wav_bytes_to_esp32_sync(wav_bytes)
         return self._play_wav_bytes_local_sync(wav_bytes)
@@ -505,13 +525,21 @@ class TTSClient:
         # for the network round-trip and ESP32 buffer ramp-up.
         post_timeout = max(self.timeout, duration_sec + 5.0)
         t0 = time.perf_counter()
+        interrupted = False
         try:
             # Paced send: feed the ESP ring at playback rate so it never
             # overflows (full-speed dumps drop samples → audible clicks).
             # Raw socket also bypasses the v2ray proxy that hijacks LAN traffic.
+            # _interrupt_evt is checked inside the loop — barge-in closes the
+            # socket early so the ESP stops receiving new data.
             status, body = _post_wav_paced_to_esp32(
-                self._mcu_speaker_url, prepared, bytes_per_sec, post_timeout)
+                self._mcu_speaker_url, prepared, bytes_per_sec, post_timeout,
+                interrupt_evt=self._interrupt_evt)
             ok = status < 400
+        except _SendInterrupted:
+            interrupted = True
+            ok = True
+            status, body = 0, "interrupted"
         except OSError:
             # Pacing failed (connection issue) — fall back to a full-speed
             # urllib POST so audio still plays (may click) rather than going
@@ -533,12 +561,19 @@ class TTSClient:
                 }
             except (URLError, OSError) as exc:
                 return {"ok": False, "error": str(exc), "target": "esp32_speaker"}
+        if interrupted:
+            return {"ok": True, "interrupted": True, "target": "esp32_speaker",
+                    "duration_sec": round(duration_sec, 3)}
         # Block remaining playback time so caller-visible "TTS finished" matches
         # actual audio end — within the bytes already buffered in I2S DMA.
+        # Poll the interrupt event so barge-in can skip the sleep early.
         elapsed = time.perf_counter() - t0
         wait_extra = duration_sec - elapsed
-        if wait_extra > 0:
-            time.sleep(min(wait_extra, duration_sec))
+        deadline = time.perf_counter() + wait_extra
+        while wait_extra > 0 and not self._interrupt_evt.is_set():
+            time.sleep(min(0.05, deadline - time.perf_counter()))
+            if time.perf_counter() >= deadline:
+                break
         return {
             "ok": ok, "status": status, "body": body, "target": "esp32_speaker",
             "duration_sec": round(duration_sec, 3),
@@ -546,14 +581,16 @@ class TTSClient:
         }
 
     def interrupt_playback(self) -> None:
-        """Kill the active aplay process (barge-in). Safe to call from any thread.
+        """Stop active TTS playback for barge-in. Safe to call from any thread.
 
-        Limitation: when output_target='esp32_speaker' there is no analogous
-        kill — the ESP32 firmware does not currently expose a stop endpoint, so
-        any audio already POSTed will keep playing through the I2S buffer until
-        it drains. The emitter hook lets the orchestrator surface the gap so
-        operators can see why barge-in didn't take effect on ESP32.
+        Local path (jetson_hdmi): kills the aplay/paplay subprocess immediately.
+        ESP32 path (esp32_speaker): sets _interrupt_evt which is polled inside
+          _post_wav_paced_to_esp32's send loop — the socket is closed and the
+          remaining post-send sleep is skipped. The ESP32 I2S ring drains silently
+          over the next ~200 ms (whatever was already buffered) and goes quiet.
         """
+        # Signal both paths simultaneously — whichever is active will respond.
+        self._interrupt_evt.set()
         proc = self._current_play_proc
         if proc is not None and proc.poll() is None:
             proc.terminate()
@@ -565,11 +602,6 @@ class TTSClient:
                 except Exception:
                     pass
         self._current_play_proc = None
-        if self.output_target == "esp32_speaker" and self._barge_in_event_emitter is not None:
-            try:
-                self._barge_in_event_emitter("tts_barge_in_unsupported", {"target": "esp32_speaker"})
-            except Exception:
-                pass
 
     def _health_sync(self) -> ServiceHealth:
         try:

@@ -60,15 +60,15 @@ def test_flora_config() -> None:
     flora = Settings.load().section("flora")
     assert isinstance(flora, dict) and flora, "flora section must be a non-empty dict"
 
-    # Channel masks (D-02): light 0-10, vibro 11-14.
-    assert flora["light_channels"] == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    assert flora["vibro_channels"] == [11, 12, 13, 14]
+    # Channel masks: vibro = first 4 (0-3), light = next 11 (4-14).
+    assert flora["light_channels"] == [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    assert flora["vibro_channels"] == [0, 1, 2, 3]
     # All channel indices stay within the PCA9685 0-15 range.
     for ch in flora["light_channels"] + flora["vibro_channels"]:
         assert 0 <= ch <= 15
 
-    # Gamma + crossfade (D-13 / D-09).
-    assert flora["gamma"] == 2.2
+    # Gamma was removed in Phase 30 (raw PWM, decision A) — must be absent.
+    assert "gamma" not in flora
     assert 150 <= flora["crossfade_ms"] <= 250
 
     # Speech RMS params (D-07 / D-08).

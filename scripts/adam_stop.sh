@@ -24,7 +24,9 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-echo "▶ Adam Chip — stop${STOP_ALL:+ (--all)}"
+# NB: ${STOP_ALL:+…} would expand on the non-empty string "false" too — use the
+# boolean form so the label matches the actual flag.
+echo "▶ Adam Chip — stop$(${STOP_ALL} && echo ' (--all)' || true)"
 echo
 
 # --------- 0. Disarm systemd orchestrator first (prevents Restart=on-failure) -
@@ -73,7 +75,18 @@ else
   echo "  · orchestrator не был запущен"
 fi
 
-# --------- 2. Live VLM container (best effort) -------------------------------
+# --------- 2. Live VLM (disarm systemd wrapper first, then container) ---------
+# adam-vlm.service is a fg wrapper around adam_live_vlm.sh that owns the container.
+# If we `docker stop` the container without first stopping the unit, systemd's
+# Restart= revives it instantly → adam_stop.sh appears to fail. Disarm the unit first.
+# (The unit is `disabled`, so this only affects the current session — it won't autostart
+#  on reboot; adam_start.sh is the canonical VLM launcher.)
+if systemctl is-active --quiet adam-vlm.service 2>/dev/null; then
+  echo
+  echo "⏵ Разоружаю adam-vlm.service (systemd-обёртка VLM)…"
+  sudo systemctl stop adam-vlm.service || true
+  echo "  ✓ adam-vlm.service остановлен"
+fi
 if command -v docker >/dev/null 2>&1; then
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${LIVE_VLM_CONTAINER}"; then
     echo

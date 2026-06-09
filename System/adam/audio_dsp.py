@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import struct
 
-__all__ = ["process_tts_wav", "resample_pcm16_soxr"]
+__all__ = ["process_tts_wav", "resample_pcm16_soxr", "InputDSP"]
 
 
 def _db_to_lin(db: float) -> float:
@@ -251,6 +251,161 @@ def process_tts_wav(
         return bytes(out)
     except Exception:
         return wav
+
+
+# ============================================================================
+# Phase 31 — INPUT audio DSP (microphone tuning panel)
+#
+# Unlike process_tts_wav (one-shot WAV, OUTPUT path), InputDSP is a STREAMING
+# biquad EQ applied per-frame in Orchestrator._vad_loop BEFORE RMS / WebRTC-VAD
+# / OpenWakeWord / ASR. Suppressing parasitic frequencies here actually raises
+# SNR for wake-word and transcription (the whole point of the tuning panel).
+# Streaming ⇒ biquad state (zi) MUST persist across 20 ms frames for click-free
+# continuity. Fail-safe: process() returns the input frame unchanged on ANY
+# error or when master-disabled — the voice loop must never break on an EQ bug.
+# ============================================================================
+
+
+def _rbj_sos(sr: float, ftype: str, f0: float, gain_db: float, q: float):
+    """Build ONE normalised SOS row [b0,b1,b2,1,a1,a2] via RBJ Audio-EQ Cookbook.
+
+    Returns None (skip the section) for out-of-range f0 or a no-op gain on
+    peaking/shelf filters. Supports: peaking, lowshelf, highshelf, lowpass,
+    highpass. gain_db is ignored for lowpass/highpass.
+    """
+    try:
+        import numpy as np
+
+        if f0 <= 0 or f0 >= sr * 0.5:
+            return None
+        q = max(float(q), 1e-3)
+        w0 = 2.0 * np.pi * float(f0) / sr
+        cw, sw = float(np.cos(w0)), float(np.sin(w0))
+        alpha = sw / (2.0 * q)
+        A = 10.0 ** (float(gain_db) / 40.0)
+
+        if ftype == "peaking":
+            if abs(float(gain_db)) < 0.01:
+                return None
+            b0, b1, b2 = 1 + alpha * A, -2 * cw, 1 - alpha * A
+            a0, a1, a2 = 1 + alpha / A, -2 * cw, 1 - alpha / A
+        elif ftype == "lowpass":
+            b0, b1, b2 = (1 - cw) / 2, 1 - cw, (1 - cw) / 2
+            a0, a1, a2 = 1 + alpha, -2 * cw, 1 - alpha
+        elif ftype == "highpass":
+            b0, b1, b2 = (1 + cw) / 2, -(1 + cw), (1 + cw) / 2
+            a0, a1, a2 = 1 + alpha, -2 * cw, 1 - alpha
+        elif ftype == "lowshelf":
+            if abs(float(gain_db)) < 0.01:
+                return None
+            sa = 2.0 * (A ** 0.5) * alpha
+            b0 = A * ((A + 1) - (A - 1) * cw + sa)
+            b1 = 2 * A * ((A - 1) - (A + 1) * cw)
+            b2 = A * ((A + 1) - (A - 1) * cw - sa)
+            a0 = (A + 1) + (A - 1) * cw + sa
+            a1 = -2 * ((A - 1) + (A + 1) * cw)
+            a2 = (A + 1) + (A - 1) * cw - sa
+        elif ftype == "highshelf":
+            if abs(float(gain_db)) < 0.01:
+                return None
+            sa = 2.0 * (A ** 0.5) * alpha
+            b0 = A * ((A + 1) + (A - 1) * cw + sa)
+            b1 = -2 * A * ((A - 1) + (A + 1) * cw)
+            b2 = A * ((A + 1) + (A - 1) * cw - sa)
+            a0 = (A + 1) - (A - 1) * cw + sa
+            a1 = 2 * ((A - 1) - (A + 1) * cw)
+            a2 = (A + 1) - (A - 1) * cw - sa
+        else:
+            return None
+        return [b0 / a0, b1 / a0, b2 / a0, 1.0, a1 / a0, a2 / a0]
+    except Exception:
+        return None
+
+
+class InputDSP:
+    """Streaming biquad EQ for the microphone INPUT path (Phase 31).
+
+    Config dict shape (tuning.audio_input.dsp):
+        { enabled: bool,                       # master toggle (D-04)
+          hpf: { enabled: bool, hz: float },   # generalises legacy vad_hpf_hz (D-01)
+          bands: [ { enabled, type, freq_hz, gain_db, q } ],
+          monitor_tap: "pre_eq" | "post_eq" }
+
+    Usage (Orchestrator._vad_loop):
+        dsp.ensure_config(tuning.audio_input.dsp.model_dump())  # cheap if unchanged
+        processed = dsp.process(raw_chunk)                      # same buffer → OWW+ASR+monitor
+    """
+
+    def __init__(self, config: dict | None = None, sample_rate: int = 16000) -> None:
+        self.sample_rate = int(sample_rate) or 16000
+        self._cfg: dict = {}
+        self._sos = None       # np.ndarray (n,6) or None
+        self._zi = None        # persistent biquad state
+        self._enabled = False
+        self._warned = False
+        self.ensure_config(config or {})
+
+    def ensure_config(self, config: dict) -> None:
+        """Rebuild coefficients only when the config actually changed (cheap dict ==)."""
+        if config == self._cfg:
+            return
+        self._cfg = config
+        self._rebuild()
+
+    @property
+    def monitor_tap(self) -> str:
+        return str(self._cfg.get("monitor_tap", "post_eq"))
+
+    def _rebuild(self) -> None:
+        self._enabled = bool(self._cfg.get("enabled", True))
+        self._sos = None
+        self._zi = None
+        if not self._enabled:
+            return
+        try:
+            import numpy as np
+
+            rows: list[list[float]] = []
+            hpf = self._cfg.get("hpf") or {}
+            if hpf.get("enabled", True):
+                row = _rbj_sos(self.sample_rate, "highpass",
+                               float(hpf.get("hz", 0) or 0), 0.0, 0.707)
+                if row is not None:
+                    rows.append(row)
+            for band in (self._cfg.get("bands") or []):
+                if not band.get("enabled", True):
+                    continue
+                row = _rbj_sos(
+                    self.sample_rate,
+                    str(band.get("type", "peaking")),
+                    float(band.get("freq_hz", 1000.0)),
+                    float(band.get("gain_db", 0.0)),
+                    float(band.get("q", 1.0)),
+                )
+                if row is not None:
+                    rows.append(row)
+            if rows:
+                self._sos = np.asarray(rows, dtype=np.float64)
+                self._zi = np.zeros((self._sos.shape[0], 2), dtype=np.float64)
+        except Exception:
+            self._sos = None
+            self._zi = None
+
+    def process(self, chunk: bytes) -> bytes:
+        """Apply the EQ chain to a mono 16-bit PCM frame. Bypass = bit-exact input."""
+        if not self._enabled or self._sos is None or not chunk:
+            return chunk
+        try:
+            import numpy as np
+            from scipy.signal import sosfilt
+
+            x = np.frombuffer(chunk, dtype="<i2").astype(np.float64)
+            y, self._zi = sosfilt(self._sos, x, zi=self._zi)
+            np.clip(y, -32768, 32767, out=y)
+            return np.round(y).astype("<i2").tobytes()
+        except Exception:
+            self._warned = True
+            return chunk
 
 
 def resample_pcm16_soxr(pcm: bytes, channels: int, in_sr: int, out_sr: int) -> bytes:

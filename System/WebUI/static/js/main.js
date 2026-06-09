@@ -80,6 +80,7 @@ const NAV_STRUCTURE = [
     children: [
       { sectionLabel: "Система" },
       { key: "settings",   label: "Настройки" },
+      { key: "audioInput", label: "Аудио-вход" },
       { key: "models",     label: "Модели" },
       { key: "subsystem",  label: "Подсистема" },
       { key: "services",   label: "Сервисы" },

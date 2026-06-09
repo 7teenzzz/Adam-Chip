@@ -78,6 +78,7 @@ function cameraSourceLabel(primary) {
 }
 
 export function mount(target) {
+  let interruptBtn = null;
   // ---- Vision (right panel) ----
   const jetImg = el("img", {
     alt: "camera snapshot",
@@ -308,7 +309,18 @@ export function mount(target) {
       }
     }
     dotsTick = 0;
+    updateInterruptBtn();
     renderHearing();
+  }
+
+  function updateInterruptBtn() {
+    if (!interruptBtn) return;
+    const active = hearingState === "thinking" || hearingState === "tts";
+    interruptBtn.style.color = active ? "#ff6868" : "var(--muted)";
+    interruptBtn.style.borderColor = active ? "rgba(255,104,104,0.4)" : "var(--line)";
+    interruptBtn.style.opacity = active ? "1" : "0.45";
+    interruptBtn.style.pointerEvents = active ? "auto" : "none";
+    interruptBtn.style.cursor = active ? "pointer" : "default";
   }
 
   // Route to idle: standby if voice_loop is up, loading if it's down,
@@ -420,6 +432,13 @@ export function mount(target) {
   const sendBtn = el("button", { class: "btn btn-primary", onclick: () => send() }, "Отправить ⏎");
   const clearBtn = el("button", { class: "btn btn-ghost", type: "button", onclick: clearTranscript }, "Очистить");
 
+  interruptBtn = el("button", {
+    class: "btn btn-ghost",
+    title: "Прервать TTS/LLM (POST /api/agent/interrupt)",
+    style: "color:var(--muted); opacity:0.45; pointer-events:none; cursor:default",
+    onclick: async () => { try { await api.post("/api/agent/interrupt", {}); } catch (_) {} },
+  }, "⏹ стоп");
+
   // Phase 9 (REQ-UI-CHAT-CLEANUP): calibrate button removed from chat panel.
   // The shared widget still lives on the Settings page (settings.js) — that
   // is the canonical place to recalibrate noise threshold.
@@ -439,6 +458,7 @@ export function mount(target) {
         el("div", { class: "row", style: "gap:6px; align-items:center; flex-wrap:wrap" }, [
           sendBtn,
           el("span", { class: "spacer" }),
+          interruptBtn,
           clearBtn,
         ]),
       ]),

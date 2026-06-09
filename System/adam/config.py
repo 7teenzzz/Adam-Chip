@@ -139,25 +139,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "flora": {
         "enabled": True,
-        "light_channels": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-        "vibro_channels": [11, 12, 13, 14],
-        "gamma": 2.2,
+        "light_channels": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+        "vibro_channels": [0, 1, 2, 3],
         "tick_ms": 20,
         "crossfade_ms": 200,
+        "external_timeout_ms": 500,
+        "max_duty_pct": 100,
         "speech": {
             "frame_interval_ms": 80,
             "hdmi_latency_offset_ms": 150,
             "base_duty_pct": 25,
-            "peak_duty_pct": 90,
+            "peak_duty_pct": 71,
             "spark_probability": 0.15,
         },
         "vibro": {
-            "intensity_pct": 30,
+            "intensity_pct": 95,
             "silent_states": ["attentive"],
         },
         "states": {
-            "breathe": {"base_pct": 8, "peak_pct": 30, "period_ms": 7000, "vibro": False},
-            "accent": {"peak_pct": 75, "attack_ms": 250, "vibro": True, "vibro_pulse_ms": 120},
+            "breathe": {"base_pct": 7, "peak_pct": 71, "period_ms": 4000, "vibro": False},
+            "accent": {"base_pct": 10, "peak_pct": 71, "attack_ms": 250, "vibro": True, "vibro_pulse_ms": 120, "period_ms": 1400},
             "attentive": {"plateau_pct": 40, "vibro": False},
             "think_pulse": {"base_pct": 20, "flash_ms": 1750, "vibro": "double_pulse"},
             "wake_bloom": {"from_dark": True, "settle_to": "breathe", "vibro": True},
@@ -183,6 +184,31 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "debounce_hits": 2,
         "vad_threshold": 0,
         "wake_silence_timeout_sec": 6,
+    },
+    "skills": {
+        "weather": {
+            "enabled": True,
+            "provider": "open_meteo",
+            "base_url": "https://api.open-meteo.com/v1/forecast",
+            "latitude": 55.721265,
+            "longitude": 37.625647,
+            "location_name": "Москва",
+            "poll_interval_sec": 900,
+            "cache_ttl_sec": 1800,
+            "timeout_sec": 8,
+            "intent_keywords": [
+                "погод", "на улице", "за окном", "холодно", "тепло",
+                "жарко", "дожд", "снег", "ветер", "градус",
+            ],
+        },
+        "jokes": {
+            "enabled": True,
+            "pool_path": "Agent-Adam-Chip/About/Jokes.md",
+            "per_joke_cooldown_days": 3,
+            "intent_keywords": [
+                "пошути", "анекдот", "рассмеши", "шутк", "смешн", "развесели",
+            ],
+        },
     },
     "tuning": {
         "memory": {
@@ -225,7 +251,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "theme_clusters": {},
         },
         "echoes": {
-            "enabled": False,
+            "enabled": True,
             "global_cooldown_turns": 12,
             "per_echo_cooldown_days": 7,
             "match_threshold": 0.55,
@@ -234,18 +260,34 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "score_boost": 0.2,
             "tag_short_cutoff": 3,
             "default_entry_weight": 0.5,
+            "selection_floor": 0.15,
+            "recency_window_days": 30,
+            "recency_min": 0.5,
+            "diversity_enabled": True,
+            "history_window_turns": 4,
+            "spontaneous_enabled": True,
+            "spontaneous_probability": 0.05,
+            "spontaneous_min_turns": 3,
         },
         "chinese": {
-            "enabled": False,
+            "enabled": True,
             "global_cooldown_turns": 30,
             "per_echo_cooldown_days": 7,
-            "match_threshold": 0.65,
+            "match_threshold": 0.5,
             "weight_multiplier": 1.0,
             "matcher_type": "tag",
             "score_boost": 0.2,
             "tag_short_cutoff": 3,
             "default_entry_weight": 0.5,
             "audio_mode": "prerendered_with_text_fallback",
+            "selection_floor": 0.15,
+            "recency_window_days": 30,
+            "recency_min": 0.5,
+            "diversity_enabled": True,
+            "history_window_turns": 4,
+            "spontaneous_enabled": True,
+            "spontaneous_probability": 0.03,
+            "spontaneous_min_turns": 3,
         },
         "session": {
             "end_strategy": "combined",
@@ -368,6 +410,15 @@ class Settings:
         keys = [key for key in section_path.split(".") if key]
         if not keys:
             raise ValueError("section_path must reference at least one key")
+
+        # Refresh from disk before merging. This `Settings` instance can be
+        # long-lived (e.g. the orchestrator-wide singleton), while other code
+        # paths (TuningStore.apply_patch) persist through their own freshly
+        # loaded Settings instances. Without this reload, save() would dump
+        # this instance's stale in-memory snapshot and silently revert any
+        # changes written elsewhere since it was last loaded — this is what
+        # caused saved EQ presets to disappear after any /api/config PATCH.
+        self.raw = Settings.load().raw
 
         cursor: dict[str, Any] = self.raw
         for key in keys:

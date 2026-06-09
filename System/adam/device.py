@@ -35,6 +35,11 @@ class MCUClient:
         self.base_url = str(config.get("base_url", "http://10.10.10.171")).rstrip("/")
         self.speaker_url = str(config.get("speaker_url", "http://10.10.10.171:82/speaker")).strip()
         self.timeout = float(config.get("timeout_sec", 3))
+        # Flora state transitions use a longer timeout than fire-and-forget motor
+        # commands: occasional ESP HTTP delays (I2C mutex contention, FreeRTOS
+        # scheduling) can push the response past 1s. Kept separate so mcu.timeout_sec
+        # stays low (fast-fail for motor / scene commands).
+        self.flora_timeout = float(config.get("flora_timeout_sec", 3.0))
         self.idle_scene = str(config.get("idle_scene", "boot_idle"))
         self.allowed_scenes = set(config.get("allowed_scenes", ["boot_idle"]))
         channels = config.get("channels", {})
@@ -99,7 +104,7 @@ class MCUClient:
                 payload[key] = max(self.channel_min, min(self.channel_max, int(value)))
             else:
                 payload[key] = value
-        return await asyncio.to_thread(self._request, "POST", "/api/flora/state", payload)
+        return await asyncio.to_thread(self._request, "POST", "/api/flora/state", payload, self.flora_timeout)
 
     async def play_system_sound(self, name: str) -> DeviceResult:
         name = str(name).strip()
@@ -135,7 +140,7 @@ class MCUClient:
         """Return ESP32 heap/uptime diagnostics."""
         return await asyncio.to_thread(self._request, "GET", "/api/system/info")
 
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> DeviceResult:
+    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None, timeout: float | None = None) -> DeviceResult:
         target = urljoin(self.base_url + "/", path.lstrip("/"))
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         req = Request(target, data=body, method=method)
@@ -143,7 +148,7 @@ class MCUClient:
         if body is not None:
             req.add_header("Content-Type", "application/json")
         try:
-            with _NO_PROXY_OPENER.open(req, timeout=self.timeout) as resp:
+            with _NO_PROXY_OPENER.open(req, timeout=timeout if timeout is not None else self.timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
                 return DeviceResult(True, resp.status, self._decode_json(raw))
         except HTTPError as exc:

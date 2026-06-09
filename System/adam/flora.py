@@ -58,11 +58,11 @@ class FloraController:
         # corrupts ASR.
         self._silent_states: set[str] = set(self._vibro_cfg.get("silent_states", ["attentive"]))
         self._crossfade_ms: int = int(self._cfg.get("crossfade_ms", 200))
-        self._vibro_intensity_pct: int = int(self._vibro_cfg.get("intensity_pct", 30))
+        self._vibro_intensity_pct: int = int(self._vibro_cfg.get("intensity_pct", 95))
 
         # Light/vibro channel masks (D-02) — all numbers Config-First.
         self._light_channels: list[int] = list(self._cfg.get("light_channels", list(range(11))))
-        self._vibro_channels: list[int] = list(self._cfg.get("vibro_channels", [11, 12, 13, 14]))
+        self._vibro_channels: list[int] = list(self._cfg.get("vibro_channels", [0, 1, 2, 3]))
         # PCA9685 full-scale duty (12-bit). mcu_client clamps anyway, but the
         # base..peak percent mapping needs the ceiling. Mirror mcu.channels.value_max.
         self._value_max: int = int(getattr(self._mcu, "value_max", 4095))
@@ -72,7 +72,7 @@ class FloraController:
         self._frame_interval_ms: int = int(self._speech_cfg.get("frame_interval_ms", 80))
         self._hdmi_offset_ms: int = int(self._speech_cfg.get("hdmi_latency_offset_ms", 150))
         self._base_duty_pct: float = float(self._speech_cfg.get("base_duty_pct", 25))
-        self._peak_duty_pct: float = float(self._speech_cfg.get("peak_duty_pct", 90))
+        self._peak_duty_pct: float = float(self._speech_cfg.get("peak_duty_pct", 71))
         self._spark_probability: float = float(self._speech_cfg.get("spark_probability", 0.15))
 
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
@@ -152,6 +152,13 @@ class FloraController:
                 self._answer_active = False
                 self._fed_wav_this_answer = False
             await self._set_state("accent")  # детекция
+            # Hold accent visible before attentive overrides it.
+            # voice_state_change(to=listening) fires ~20ms later; without this hold
+            # it overwrites accent in firmware's sTarget before the first 20ms tick.
+            flora = self._live_flora_cfg()
+            hold_ms = int(flora.get("accent_hold_ms", 220))
+            if hold_ms > 0:
+                await asyncio.sleep(hold_ms / 1000.0)
         elif etype == "voice_state_change":
             payload = event.get("payload", {}) or {}
             if payload.get("from") == "boot_warmup" and not self._booted:
@@ -258,10 +265,15 @@ class FloraController:
         # Belt-and-suspenders using cached set (D-11 invariant must survive hot-reload errors).
         if state in self._silent_states:
             params["vibro_enabled"] = False
-        await self._mcu.set_flora_state(state, params)
+        result = await self._mcu.set_flora_state(state, params)
+        if not result.ok:
+            logger.warning("flora set_state %r -> MCU error %s: %s", state, result.status, result.error)
         if self._event_log is not None:
             try:
-                self._event_log.append("flora_state_change", {"state": state})
+                payload: dict[str, Any] = {"state": state}
+                if not result.ok:
+                    payload["mcu_error"] = result.status
+                self._event_log.append("flora_state_change", payload)
             except Exception:
                 pass
 
@@ -461,7 +473,7 @@ class FloraController:
         await self._rms_stream(duties)
 
     async def _rms_stream(self, duties: list[int]) -> None:
-        """Stream brightness frames to light channels 0-10 in lockstep with playback.
+        """Stream brightness frames to light channels 4-14 in lockstep with playback.
 
         Algorithm (D-07):
           t0 = perf_counter() at task-start (≈ same instant playback dispatched)
@@ -472,37 +484,48 @@ class FloraController:
         spark_probability boost a random channel subset to full peak for one frame.
         This adds subtle texture — cluster-friendly (random, no spatial centre, D-01).
 
-        Vibro (channels 11-14): driven from the same phase as lights at the
+        Vibro (channels 0-3): driven from the same phase as lights at the
         configured intensity_pct ceiling (D-11); NOT forced silent here —
         only 'attentive' state silences vibro.  The RMS modulation shares the
         lamp duty scaled to vibro_intensity_pct so the motors throb subtly with
-        the voice without overwhelming (D-12 restrained default 30%).
+        the voice without overwhelming (D-12, intensity_pct=95).
 
         Frame rate ceiling: frame_interval_ms from config defaults to 80 ms
         (~12.5 fps) — well within the ESP LWIP socket budget (T-29-10).
         """
         t0 = perf_counter()
-        offset_s: float = self._hdmi_offset_ms / 1000.0
-        interval_s: float = self._frame_interval_ms / 1000.0
-
-        # D-03: read max_duty fresh per stream (hot-reload-aware).
+        # WR-01: read all speech/vibro params fresh per stream (hot-reload-aware).
         flora = self._live_flora_cfg()
+        speech_cfg: dict = (flora.get("speech") or {})
+        offset_s: float = int(speech_cfg.get("hdmi_latency_offset_ms", self._hdmi_offset_ms)) / 1000.0
+        interval_s: float = int(speech_cfg.get("frame_interval_ms", self._frame_interval_ms)) / 1000.0
+        peak_duty_pct: float = float(speech_cfg.get("peak_duty_pct", self._peak_duty_pct))
+        spark_probability: float = float(speech_cfg.get("spark_probability", self._spark_probability))
+        vibro_intensity_pct: int = int((flora.get("vibro") or {}).get("intensity_pct", self._vibro_intensity_pct))
+
         max_duty_pct: float = float(flora.get("max_duty_pct", 100))
         max_duty: int = int(round(self._value_max * max_duty_pct / 100.0))
 
         peak_duty = min(
-            int(round(self._value_max * self._peak_duty_pct / 100.0)), max_duty
+            int(round(self._value_max * peak_duty_pct / 100.0)), max_duty
         )
-        vibro_scale: float = self._vibro_intensity_pct / 100.0
+        vibro_scale: float = vibro_intensity_pct / 100.0
 
         try:
             for i, duty in enumerate(duties):
                 target_t = t0 + offset_s + i * interval_s
                 delay = target_t - perf_counter()
+                # Skip frames that fell behind by more than one interval (e.g. after
+                # a set_channels timeout). Without this guard a 1-second timeout
+                # schedules ~12 frames for the past; they burst out simultaneously,
+                # saturate ESP max_open_sockets=3 and cascade into more failures.
+                if delay < -interval_s:
+                    continue
                 if delay > 0:
                     await asyncio.sleep(delay)
 
                 # D-03: clamp per-frame light duty to safe ceiling.
+                raw_duty = duty  # pre-clamp value for vibro (WR-03)
                 duty = min(duty, max_duty)
 
                 # Build the batch update: all light channels at this frame's duty.
@@ -512,9 +535,9 @@ class FloraController:
 
                 # Sparks (D-08): near-peak frames — randomly boost a subset.
                 if (
-                    self._spark_probability > 0.0
+                    spark_probability > 0.0
                     and duty >= int(peak_duty * 0.75)
-                    and random.random() < self._spark_probability
+                    and random.random() < spark_probability
                 ):
                     # Pick a random non-empty subset of light channels (cluster-friendly).
                     n_sparks = max(1, random.randint(1, len(self._light_channels) // 2))
@@ -526,9 +549,10 @@ class FloraController:
                         for ch in self._light_channels
                     ]
 
-                # Vibro: scaled RMS duty — throbs subtly with voice (D-12).
-                # D-03: clamp vibro duty to safe ceiling as well.
-                vibro_duty = min(int(round(duty * vibro_scale)), max_duty)
+                # Vibro: scaled RMS duty — throbs with the voice (vibro_scale =
+                # vibro.intensity_pct). Uses raw (pre-light-clamp) duty so the
+                # светофлора power ceiling does NOT reduce vibro energy (D-12).
+                vibro_duty = int(round(raw_duty * vibro_scale))
                 updates.extend(
                     {"channel": ch, "value": vibro_duty}
                     for ch in self._vibro_channels

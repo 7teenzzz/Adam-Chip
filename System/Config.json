@@ -34,7 +34,7 @@
       "camera_capture_interval_sec": 0.5
     },
     "audio": {
-      "input_device": "plughw:WebCamera,0",
+      "input_device": "pulse",
       "output_device": "default",
       "sample_rate": 16000,
       "channels": 1,
@@ -55,6 +55,12 @@
       "max_command_segment_ms": 15000,
       "reply_max_segment_ms": 10000,
       "normalize_factor": 8000,
+      "input_gain": {
+        "card_name": "WebCamera",
+        "alsa_control": "Mic",
+        "alsa_capture_percent": 100,
+        "pulse_source_percent": 105
+      },
       "vad_hpf_hz": 220.0,
       "spectrum_bands": 24,
       "spectrum_min_hz": 80.0,
@@ -66,7 +72,7 @@
       "spectrum_color_red_at": 0.85,
       "events_jsonl_sample_audio_level": 5
     },
-    "scene_worker_enabled": true,
+    "scene_worker_enabled": false,
     "scene_interval_sec": 4,
     "scene_stale_after_sec": 8,
     "scene_buffer_maxlen": 8,
@@ -97,8 +103,9 @@
       "language": "ru",
       "listening_silence_timeout_sec": 6,
       "reply_window_sec": 3.75,
-      "reply_silence_timeout_sec": 5.0,
+      "reply_silence_timeout_sec": 4,
       "post_tts_discard_window_ms": 300,
+      "pre_wake_buffer_ms": 1500,
       "endpointing_debounce_frames": 5,
       "endpointing_voiced_debounce_frames": 3,
       "sample_rate": 16000,
@@ -108,6 +115,13 @@
       "reply_window_expired_action": "standby",
       "silence_after_speech_ms": 1000,
       "silence_rms_threshold": 2100,
+      "silence_keywords": [
+        "стоп",
+        "тихо",
+        "замолчи",
+        "хватит",
+        "молчи"
+      ],
       "disable_local_fallback": true,
       "esp_open_timeout_sec": 8,
       "esp_probe_after_fails": 2,
@@ -119,9 +133,10 @@
       ],
       "esp_stream_restart_after_fails": 5,
       "esp_stream_restart_cooldown_sec": 120.0,
-      "vad_onset": 0.1,
+      "logprob_threshold": -1.7,
+      "vad_onset": 0.2,
       "vad_offset": 0.2,
-      "logprob_threshold": -1.7
+      "asr_pre_send_min_rms": 200
     },
     "tts": {
       "provider": "silero",
@@ -150,6 +165,7 @@
     "base_url": "http://10.10.10.171",
     "speaker_url": "http://10.10.10.171:82/speaker",
     "timeout_sec": 1,
+    "flora_timeout_sec": 3,
     "idle_scene": "boot_idle",
     "allowed_scenes": [
       "boot_idle",
@@ -166,28 +182,29 @@
   "flora": {
     "enabled": true,
     "light_channels": [
-      0,
-      1,
-      2,
-      3,
       4,
       5,
       6,
       7,
       8,
       9,
-      10
-    ],
-    "vibro_channels": [
+      10,
       11,
       12,
       13,
       14
     ],
+    "vibro_channels": [
+      0,
+      1,
+      2,
+      3
+    ],
     "tick_ms": 20,
     "crossfade_ms": 200,
+    "accent_hold_ms": 220,
     "external_timeout_ms": 500,
-    "max_duty_pct": 100,
+    "max_duty_pct": 71,
     "speech": {
       "frame_interval_ms": 80,
       "hdmi_latency_offset_ms": 150,
@@ -196,7 +213,7 @@
       "spark_probability": 0.15
     },
     "vibro": {
-      "intensity_pct": 30,
+      "intensity_pct": 95,
       "silent_states": [
         "attentive"
       ]
@@ -204,11 +221,12 @@
     "states": {
       "breathe": {
         "base_pct": 7,
-        "peak_pct": 71,
+        "peak_pct": 40,
         "period_ms": 4000,
         "vibro": false
       },
       "accent": {
+        "crossfade_ms": 10,
         "peak_pct": 71,
         "attack_ms": 250,
         "vibro": true,
@@ -223,11 +241,11 @@
         "wave_period_ms": 450
       },
       "think_pulse": {
-        "base_pct": 20,
+        "base_pct": 35,
         "peak_pct": 71,
-        "flash_ms": 500,
-        "wave_period_ms": 500,
-        "flicker_ms": 120,
+        "flash_ms": 200,
+        "wave_period_ms": 200,
+        "flicker_ms": 80,
         "vibro": "double_pulse"
       },
       "wake_bloom": {
@@ -256,10 +274,50 @@
   "wake_word": {
     "engine": "openwakeword",
     "model_path": "data/wake_word/adam.onnx",
-    "threshold": 0.05,
-    "debounce_hits": 1,
+    "threshold": 0.01,
+    "debounce_hits": 2,
     "vad_threshold": 0,
-    "wake_silence_timeout_sec": 6
+    "wake_silence_timeout_sec": 6,
+    "barge_in_debounce_hits": 3,
+    "barge_in_enabled": false
+  },
+  "skills": {
+    "weather": {
+      "enabled": true,
+      "provider": "open_meteo",
+      "base_url": "https://api.open-meteo.com/v1/forecast",
+      "latitude": 55.721265,
+      "longitude": 37.625647,
+      "location_name": "Москва",
+      "poll_interval_sec": 900,
+      "cache_ttl_sec": 1800,
+      "timeout_sec": 8,
+      "intent_keywords": [
+        "погод",
+        "на улице",
+        "за окном",
+        "холодно",
+        "тепло",
+        "жарко",
+        "дожд",
+        "снег",
+        "ветер",
+        "градус"
+      ]
+    },
+    "jokes": {
+      "enabled": true,
+      "pool_path": "Agent-Adam-Chip/About/Jokes.md",
+      "per_joke_cooldown_days": 3,
+      "intent_keywords": [
+        "пошути",
+        "анекдот",
+        "рассмеши",
+        "шутк",
+        "смешн",
+        "развесели"
+      ]
+    }
   },
   "tuning": {
     "memory": {
@@ -282,7 +340,7 @@
       },
       "semantic": {
         "enabled": true,
-        "max_chars": 2000
+        "max_chars": 4000
       },
       "recent_injection": {
         "enabled": true,
@@ -370,6 +428,14 @@
       }
     },
     "echoes": {
+      "selection_floor": 0.15,
+      "recency_window_days": 30,
+      "recency_min": 0.5,
+      "diversity_enabled": true,
+      "history_window_turns": 4,
+      "spontaneous_enabled": true,
+      "spontaneous_probability": 0.05,
+      "spontaneous_min_turns": 3,
       "enabled": true,
       "global_cooldown_turns": 12,
       "per_echo_cooldown_days": 7,
@@ -381,7 +447,15 @@
       "default_entry_weight": 0.5
     },
     "chinese": {
-      "enabled": false,
+      "selection_floor": 0.15,
+      "recency_window_days": 30,
+      "recency_min": 0.5,
+      "diversity_enabled": true,
+      "history_window_turns": 4,
+      "spontaneous_enabled": true,
+      "spontaneous_probability": 0.03,
+      "spontaneous_min_turns": 3,
+      "enabled": true,
       "global_cooldown_turns": 30,
       "per_echo_cooldown_days": 7,
       "match_threshold": 0.65,
@@ -409,16 +483,16 @@
     },
     "llm": {
       "temperature": 0.7,
-      "max_tokens": 100,
-      "response_word_target": 14
+      "max_tokens": 200,
+      "response_word_target": 30
     },
     "voice": {
       "speaker": "eugene",
       "speed_multiplier": 1.0,
-      "volume": 1.0,
+      "volume": 0.45,
       "dsp": {
         "enabled": true,
-        "hpf_hz": 240.0,
+        "hpf_hz": 180.0,
         "makeup_db": 6.0,
         "limiter_ceiling_dbfs": -1.0,
         "comp_enabled": true,
@@ -434,7 +508,7 @@
       }
     },
     "prompt": {
-      "history_turns": 4,
+      "history_turns": 8,
       "include_scene": true,
       "include_sensors": true
     },
@@ -443,6 +517,193 @@
       "metrics_enabled": true,
       "trace_prompts": false,
       "trace_post_tts_lag": false
+    },
+    "audio_input": {
+      "dsp": {
+        "enabled": true,
+        "hpf": {
+          "enabled": true,
+          "hz": 80.0
+        },
+        "bands": [
+          {
+            "enabled": true,
+            "type": "peaking",
+            "freq_hz": 285.0,
+            "gain_db": -6.4,
+            "q": 1.5
+          },
+          {
+            "enabled": true,
+            "type": "peaking",
+            "freq_hz": 1067.0,
+            "gain_db": -8.7,
+            "q": 0.9
+          },
+          {
+            "enabled": true,
+            "type": "highshelf",
+            "freq_hz": 4939.0,
+            "gain_db": -14.5,
+            "q": 0.7
+          }
+        ],
+        "monitor_tap": "post_eq"
+      },
+      "presets": [
+        {
+          "name": "зал (рекомендуемый)",
+          "hpf": {
+            "enabled": true,
+            "hz": 80.0
+          },
+          "bands": [
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 292.0,
+              "gain_db": -0.4,
+              "q": 1.5
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 803.0,
+              "gain_db": 0.0,
+              "q": 0.9
+            },
+            {
+              "enabled": true,
+              "type": "highshelf",
+              "freq_hz": 4939.0,
+              "gain_db": 0.0,
+              "q": 0.7
+            }
+          ]
+        },
+        {
+          "name": "без фильтров",
+          "hpf": {
+            "enabled": true,
+            "hz": 80.0
+          },
+          "bands": [
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 292.0,
+              "gain_db": -0.4,
+              "q": 1.5
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 803.0,
+              "gain_db": 0.0,
+              "q": 0.9
+            },
+            {
+              "enabled": true,
+              "type": "highshelf",
+              "freq_hz": 4939.0,
+              "gain_db": 0.0,
+              "q": 0.7
+            }
+          ]
+        },
+        {
+          "name": "комната",
+          "hpf": {
+            "enabled": true,
+            "hz": 80.0
+          },
+          "bands": [
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 288.0,
+              "gain_db": -9.6,
+              "q": 1.5
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 1073.0,
+              "gain_db": -13.8,
+              "q": 0.9
+            },
+            {
+              "enabled": true,
+              "type": "highshelf",
+              "freq_hz": 4939.0,
+              "gain_db": -14.5,
+              "q": 0.7
+            }
+          ]
+        },
+        {
+          "name": "A: только HPF (ASR max)",
+          "hpf": {
+            "enabled": true,
+            "hz": 80.0
+          },
+          "bands": []
+        },
+        {
+          "name": "B: шум улицы (ASR рек.)",
+          "hpf": {
+            "enabled": true,
+            "hz": 120.0
+          },
+          "bands": [
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 276.0,
+              "gain_db": -3.0,
+              "q": 1.5
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 450.0,
+              "gain_db": -2.0,
+              "q": 0.8
+            }
+          ]
+        },
+        {
+          "name": "C: highshelf -6dB (компромисс)",
+          "hpf": {
+            "enabled": true,
+            "hz": 80.0
+          },
+          "bands": [
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 276.0,
+              "gain_db": -0.2,
+              "q": 1.5
+            },
+            {
+              "enabled": true,
+              "type": "peaking",
+              "freq_hz": 803.0,
+              "gain_db": 0.0,
+              "q": 0.9
+            },
+            {
+              "enabled": true,
+              "type": "highshelf",
+              "freq_hz": 5083.0,
+              "gain_db": -6.0,
+              "q": 0.7
+            }
+          ]
+        }
+      ],
+      "active_preset": "комната"
     }
   }
 }

@@ -975,7 +975,7 @@ Plans:
 
 ---
 
-## Phase 30: Technoflora Reliability & Brightness Fixes
+## Phase 30 (main): Technoflora Reliability & Brightness Fixes
 
 **Branch:** `LuxFlora-modes_V1.1`
 
@@ -1005,6 +1005,120 @@ Plans:
 **Mode:** standard (debug-fix; firmware + Jetson, hardware-gated verification)
 
 **Requirement IDs:** FFIX-01 (R1), FFIX-02 (R2), FFIX-03 (R3), FFIX-04 (R4), FFIX-05 (R5 raw PWM), FFIX-06 (R6 idle), FFIX-07 (safe-ceiling), FFIX-08 (R7 gate manual), FFIX-09 (R8 recovery), FFIX-10 (R9 async envelope)
+
+---
+
+## Phase 30 (voice-loop-recovery): Voice Loop Recovery & Flora Integration
+
+**Branch:** `voice-loop-recovery` (создана от 9da07f9 — «Стабильная работа всего аудио-тракта с esp динамиками и usb cam&mic»)
+
+**Goal:** Восстановить корректную работу голосового цикла ПО ФАКТУ (живой тест, не анализ кода): mic→VAD→wake(«адам»)→ASR→LLM→TTS→выход. Затем интегрировать технофлору из коммита `47fd0c5` (origin/LuxFlora-modes_V1.1, автор 7teenzzz) с разрешением ВСЕХ конфликтов через глубокий анализ, не реактивируя поломки голосового цикла. Корневая причина прошлых поломок — runtime/host-слой ВНЕ git (мёртвые сервисы, Ollama держит VRAM, конфликт портов, битый ESP IP), поэтому откат коммитов её не лечил.
+
+**Requires:**
+- Ветка `voice-loop-recovery` от 9da07f9 (готово), BRANCH.md в корне
+- sudo-доступ для systemctl-операций (снос Ollama, старт adam-llm/adam-tts) — на стороне пользователя
+- Подключённый монитор VG27AQA1A (DP) ИЛИ виртуальный дисплей, если выход TTS уходит на локальный HDMI-аудио (`plughw:1,3`)
+
+**Delivers:**
+- Снос/выключение Ollama (инвариант проекта) → освобождение ~3.3 GB VRAM под llama.cpp
+- Поднятые и проверенные сервисы: llama.cpp(:8081), Silero TTS(:8082); устранённый конфликт порта 8095 (нативный ASR vs Docker)
+- Оркестратор запущен штатно (systemd, с NO_PROXY hardening), а не вручную
+- Jetson подключён к проводной сети 10.10.10.x (eno1 / W5500 Ethernet), ESP доступен на `10.10.10.171` — IP в Config ВЕРНЫЙ, менять не нужно (решение D-01)
+- Выход TTS — ТОЛЬКО через ESP-динамик (`esp32_speaker`); HDMI/`plughw:1,3` fallback не используется (решение D-02) → живой тест блокируется до восстановления сети ESP
+- Живой end-to-end тест голосового цикла через ESP, зафиксированный в VERIFICATION.md: wake «адам» → транскрипт → ответ LLM → озвучка TTS → слышимый звук из ESP-динамика
+- Влитый коммит `47fd0c5` (технофлора) с разрешением ВСЕХ конфликтов; flora-gate ПЕРЕРАБОТАН на сосуществование — моторика Адама (LLM action-layer) overlay поверх флоры, флора фон (решение D-03); FLORA-04 `feed_speech_wav` consumer интегрирован без поломки голоса
+- Перепрошитый ESP под флору (firmware 47fd0c5 — в теле коммита «Прошивка обязательна»)
+
+**Requirements:** REQ-VOICE-RECOVERY-01 (живой end-to-end голос), REQ-NO-OLLAMA (Ollama снесена, VRAM свободна), REQ-SERVICES-STABLE (8081/8082/8095 без конфликтов, через systemd), REQ-ESP-IP-FIX (корректный IP + доступность), REQ-FLORA-MERGE (47fd0c5 влит с разрешением конфликтов), REQ-ESP-REFLASH-FLORA (прошивка под флору)
+
+**Mode:** standard | **Priority:** P0 | **Effort:** M (несколько дней) | **Exhibition:** Critical
+
+**Связь с историей:** ветка luxflora (47fd0c5, автор 7teenzzz) внесла flora-gate, подавляющий action-layer, и сменила ESP IP; сегодня main откатывали (`backup/main-pre-rollback-2026-06-07`). Фаза наводит порядок: сначала рабочий голос, потом осознанная интеграция флоры.
+
+---
+
+## Phase 34: ASR Quality — пустые строки и галлюцинации
+
+**Branch:** `voice-loop-recovery` (текущая)
+
+**Goal:** Устранить два подтверждённых класса дефектов ASR: (1) пустые транскрипции после детекции wake-word, когда речевой буфер обнуляется до того как команда полностью произнесена; (2) галлюцинации (субтитры-фантомы типа «Спасибо за внимание», «Тревожная музыка» и т.д.), проходящие сквозь фильтры ASR-сервиса и оркестратора.
+
+**Requires:**
+- Все изменения из Phase 31 (barge-in fix, queue drain) уже закоммичены
+
+**Delivers:**
+- Wave 1: Pre-wake audio buffer — сохранять N секунд аудио до момента детекции wake-word и прикреплять к основному сегменту; strip wake-word из транскрипта в оркестраторе
+- Wave 2: Hallucination guard — расширить `_HALLUCINATION_PATTERNS` в ASR_WhisperX.py + добавить post-filter в оркестраторе как второй эшелон; пересобрать Docker-контейнер
+
+**Requirements:** REQ-ASR-EMPTY-PREWAKE (пустые после OWW), REQ-ASR-HALLUCINATION (фильтрация галлюцинаций)
+
+**Mode:** standard | **Priority:** P0 | **Effort:** S | **Exhibition:** Critical
+
+**Plans:** 2 plans
+
+Plans:
+- [ ] 34-PLAN-wave1.md — Pre-wake buffer fix: _pre_wake_buf в VoiceLoopController + Config param
+- [ ] 34-PLAN-wave2.md — Hallucination guard: asr_filter.py + second-tier в Orchestrator + Docker rebuild
+
+---
+
+## Phase 30: Echoes/Chinese Gate Activation — реальный инжект пулов About в диалог
+
+**Branch:** `MemoryFixes` (existing)
+
+**Goal:** Заставить пулы Echoes (`About/Echoes.md`) и Chinese (`About/Chinese_lines.md`) реально срабатывать в диалоге. Сейчас gate матчит теги-образы карточек («коридор», «эскалатор», «物是人非») против сырого транскрипта зрителя — пересечение словарей почти нулевое, поэтому echoes практически никогда не инжектятся, а Chinese-пул вовсе выключен. Цель — устранить корневую причину через тематический мост, мягкий вероятностный движок выбора, разнообразие и спонтанный канал; включить китайский пул с русскими подсказками для LLM.
+
+**Requires:**
+
+- Phase 6A/6B (Memory Foundation/Search) завершены ✓ — `EpisodicMemory`, `SessionAccumulator`, `EchoGate` существуют
+- Независима от Phase 18/19/20 (пересекается с Phase 19 в части «оживления mood», но не блокируется ей)
+
+**Delivers:**
+
+- **Слой A (тематический мост + окно истории):** `EchoGate` матчит теги карточек против множества `{acc.themes} ∪ {ключевые слова кластеров}` (нормализация уже делается в `SessionAccumulator.note_turn`), собранного из взвешенного окна последних N реплик (зритель + Адам), а не против одной сырой реплики. Чистые образы-теги остаются для редких буквальных совпадений.
+- **Слой B (мягкий вероятностный движок):** замена жёсткого порога `match_threshold=0.55` на скоринг `final = thematic_match × weight × recency_decay` с взвешенно-случайным выбором кандидата выше низкого пола; редкость держится на cooldown'ах, а не на обрыве.
+- **Слой C (спонтанный канал):** независимый низковероятный путь инжекта по внутренним сигналам (длинная пауза зрителя / глубина сессии / N-й turn), выбор по `weight` без тематического матча — «память всплывает сама» по лору.
+- **Слой D (разнообразие + починка mood):** анти-повтор семантического кластера за сессию; оживление либо удаление мёртвого `mood`/`mood_block` (сейчас `mood` жёстко прибит к `"neutral"`, `adam_state` передаётся в gate, но игнорируется — `mood_block` полностью инертен).
+- **Chinese-активация:** `tuning.chinese.enabled=true` + ослабление порога; `ru_hint` карточки прокидывается в `[hint]` для LLM (смысловая подсказка), т.к. Silero `v5_5_ru` не озвучит иероглифы корректно. Pre-rendered wav-озвучка по `audio_id` — **вне scope** (отдельная фаза).
+- Все новые числовые параметры — в `System/Config.json` + `Config.schema.json` (Config-First).
+- Тесты: матчинг по темам, вероятностный выбор, анти-повтор, спонтанный канал, активация Chinese.
+
+**Requirements:** ECHO-01, ECHO-02, ECHO-03, ECHO-04, ECHO-05, ECHO-06, ECHO-07, ECHO-08
+
+**Mode:** standard | **Priority:** P1 | **Exhibition:** H (напрямую обогащает речь персонажа)
+
+**Связь:** реализует цель «использовать все файлы из папки About в диалоге». Пересекается с Phase 19 (Mood LLM-driven) в части оживления mood-сигнала — Phase 30 делает минимальную починку (revive/remove), полноценный LLM-driven mood остаётся за Phase 19. Спонтанный канал (слой C) концептуально родственен Phase 24/28 (проактивность), но действует на уровне gate-инжекта, не отдельного речевого цикла.
+
+---
+
+## Phase 35: Live Integration Testing — ultimate-integration после всех слияний
+
+**Branch:** `ultimate-integration` (worktree `/tmp/adam-ult`, merge `15d23ca` ещё не запушен)
+
+**Goal:** Подтвердить живыми тёрнами на железе Jetson, что полностью собранная ветка `ultimate-integration` работает end-to-end после всех предыдущих слияний (voice-loop-recovery Phase 34 ASR, LuxFlora ремап каналов, MemoryFixes, Extra шутки+погода, и только что разрешённый merge с починкой мохибейка Config.json). Не косметика — реальный голос в микрофон, реальный звук из ESP-динамика, реальная запись эпизода в память.
+
+**Requires:**
+- Merge `15d23ca` в worktree (Config.json де-мохибейк + barge-in fix) — готов, не запушен
+- Живое железо: ESP на `10.10.10.171` (mic INMP441 + динамик PCM5102A), Jetson в сети `10.10.10.x`
+- Сервисы: llama.cpp(:8081), Silero TTS(:8082), WhisperX(:8095), оркестратор(:8080)
+
+**Delivers:**
+- Wave 1 — Bring-up & smoke: подъём сервисов, healthcheck, валидация конфига на железе (wake_words=«адам», persona грузится, flora.enabled, skills weather/jokes)
+- Wave 2 — Live voice E2E: wake «адам» → ASR → LLM → TTS → звук из ESP; barge-in (прерывание во время TTS); silence keyword «стоп»
+- Wave 3 — Integration surfaces: флора-сосуществование (моторика Адама overlay поверх фоновой флоры, не подавление), pre-LLM скиллы шутки/погода, запись эпизода в episodic memory
+- Wave 4 — Debug loop: для каждого дефекта из живых тёрнов — `/gsd-debug` (научный метод, persistent state), фикс, ре-тест; решение go/no-go на push
+
+**Requirements:** REQ-INT-VOICE-E2E (голос end-to-end через ESP), REQ-INT-FLORA-COEXIST (сосуществование моторики и флоры), REQ-INT-SKILLS (шутки/погода pre-LLM), REQ-INT-MEMORY (запись эпизода), REQ-INT-CONFIG-LIVE (конфиг валиден на железе)
+
+**Mode:** standard | **Priority:** P0 | **Effort:** M | **Exhibition:** Critical
+
+**Plans:** 4 plans (Wave 1 → 2 → 3 → 4)
+- [ ] 35-01-PLAN.md — Bring-up & smoke: checkout ultimate-integration в основной каталог, restart, healthcheck, валидация live-конфига, maintenance text-turn smoke (REQ-INT-CONFIG-LIVE)
+- [ ] 35-02-PLAN.md — Live voice E2E: exhibition power-gate, оператор «адам»+команда, trace oww→…→action + звук из ESP, barge-in, «стоп» (REQ-INT-VOICE-E2E)
+- [ ] 35-03-PLAN.md — Integration surfaces: флора-сосуществование (operator), pre-LLM шутки/погода, запись в dialogue_turns (REQ-INT-FLORA-COEXIST, REQ-INT-SKILLS, REQ-INT-MEMORY)
+- [ ] 35-04-PLAN.md — Debug loop & go/no-go: /gsd-debug по каждому дефекту, ре-тест, решение go/no-go, user-gated push на origin/ultimate-integration
+
+**Связь с историей:** `ultimate-integration` — пред-main интеграционная ветка, собравшая 4 линии разработки. До мёржа в main нужно живое подтверждение, что слияния не сломали голосовой тракт и что починка мохибейка (wake word на ult читался как «Р°РґР°Рj») восстановила распознавание.
 
 ---
 

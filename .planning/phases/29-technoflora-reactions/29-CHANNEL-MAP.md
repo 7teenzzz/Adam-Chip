@@ -29,9 +29,13 @@ follow, both answerable only on hardware:
    limited directional micro-effects come back onto the table — but ONLY along a
    line, never globally.
 
-We also need to confirm the **channel masks**: D-02 assumes light = channels 0–10,
-vibro motors = channels 11–14. The test verifies this empirically (light channels
-glow; vibro channels buzz).
+**Channel masks (confirmed 2026-06-07 by hardware — REVERSES the original D-02):**
+vibro motors = channels **0–3** (first 4), светофлора light = channels **4–14**
+(next 11). Config (`light_channels`/`vibro_channels`) + firmware
+(`kFloraLightChannelLo/Hi=4/14`, `kFloraVibroChannelLo/Hi=0/3`) updated to match.
+The light max_duty ceiling applies ONLY to light (4–14); vibro (0–3) is exempt and
+runs up to its own ~95% cap. The line test still maps which physical lamp = each of
+channels 4–14.
 
 ---
 
@@ -46,8 +50,8 @@ For each channel it (a) announces the index aloud via Silero TTS ("Линия н
 **Run (from repo root, on the Jetson):**
 ```bash
 python scripts/diagnostics/flora_line_identify.py                 # channels 0-14
-python scripts/diagnostics/flora_line_identify.py --channels 0-10 # light only
-python scripts/diagnostics/flora_line_identify.py --channels 11-14 --no-tts  # vibro
+python scripts/diagnostics/flora_line_identify.py --channels 4-14 # light only
+python scripts/diagnostics/flora_line_identify.py --channels 0-3 --no-tts  # vibro
 ```
 
 **Invariants honored (do not regress when extending the script):**

@@ -2,6 +2,11 @@
 Description=Adam Chip Orchestrator
 After=network-online.target adam-llm.service docker.service
 Wants=network-online.target adam-llm.service docker.service
+# StartLimit* MUST live in [Unit] — systemd ignores them under [Service], which is
+# why a kill/crash churn previously reached 69 restarts. After 3 failures within
+# 120s the unit enters failed state instead of looping forever.
+StartLimitIntervalSec=120
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -22,16 +27,26 @@ Environment=no_proxy=10.10.10.0/24,192.168.0.0/24,127.0.0.1,localhost,::1
 # Lets the service push/pull audio through the operator's PulseAudio session.
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+# Phase 30 audio architecture: the agent reads the mic COOPERATIVELY via PulseAudio
+# (Config media.audio.input_device=pulse -> arecord -D pulse) instead of an exclusive
+# `plughw` hw lock. That lets the agent, AnyDesk and GNOME share the same mic with no
+# "device busy" contention. PULSE_SOURCE pins the agent to the WebCamera mic regardless
+# of the system default source (device-specific name — update if the mic is replaced).
+# When migrated to PipeWire (step 2 / Phase 30-03), pipewire-pulse honours the same vars.
+Environment=PULSE_SOURCE=alsa_input.usb-WebCamera_WebCamera_202509021958-02.mono-fallback
 PermissionsStartOnly=true
 ExecStartPre=/home/i17jet/Agents/Adam-Chip/scripts/adam_power_maxn.sh
 # Start PulseAudio for this user session if not already running.
 ExecStartPre=-/usr/bin/pulseaudio --start --daemonize=yes
+# Re-assert mic input gain (ALSA capture + pulse source) from Config.json. USB capture
+# cards lose their +24 dB boost across a cold boot → wake-word goes deaf after an
+# unattended reboot. Runs AFTER pulseaudio --start so pactl has a server. `-` prefix:
+# never block orchestrator start (the script is best-effort and always exits 0 anyway).
+ExecStartPre=-/home/i17jet/Agents/Adam-Chip/scripts/adam_audio_input_gain.sh
 ExecStartPre=/usr/bin/test -x /home/i17jet/Agents/Adam-Chip/.venv/bin/python
 ExecStartPre=/bin/sh -c 'until curl --noproxy "*" -fsS http://127.0.0.1:8081/health >/dev/null 2>&1; do sleep 5; done'
 ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python /home/i17jet/Agents/Adam-Chip/System/Orchestrator.py
 Restart=on-failure
-StartLimitIntervalSec=120
-StartLimitBurst=5
 RestartSec=3
 TimeoutStartSec=300
 TimeoutStopSec=15

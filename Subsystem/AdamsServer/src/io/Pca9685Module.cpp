@@ -186,6 +186,40 @@ const Pca9685SceneConfig *findScene(const char *name) {
 
 }  // namespace
 
+// I2C bus recovery: if SDA is stuck low after an interrupted transaction
+// (PCA9685 mid-byte on previous run), the next Wire.beginTransmission will
+// receive a NACK and initPca9685 returns false → pca9685Ready stays false.
+// Fix: Wire.end() releases pins, 9 SCL clocks unstick SDA, Wire.begin() restores.
+// Called once at boot from initPca9685 before the first readRegister.
+static void tryI2cBusRecovery() {
+  Wire.end();
+  pinMode(I2C_SDA_PIN, INPUT_PULLUP);
+  delayMicroseconds(10);
+  if (digitalRead(I2C_SDA_PIN) == HIGH) {
+    // SDA already free — just reinit Wire
+    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, kI2cClockHz);
+    return;
+  }
+  bootLog("pca9685", "SDA stuck low — I2C bus recovery");
+  pinMode(I2C_SCL_PIN, OUTPUT);
+  digitalWrite(I2C_SCL_PIN, HIGH);
+  for (int i = 0; i < 9; ++i) {
+    digitalWrite(I2C_SCL_PIN, LOW);
+    delayMicroseconds(5);
+    digitalWrite(I2C_SCL_PIN, HIGH);
+    delayMicroseconds(5);
+    if (digitalRead(I2C_SDA_PIN) == HIGH) break;
+  }
+  // STOP condition: SCL high, SDA low → high
+  pinMode(I2C_SDA_PIN, OUTPUT);
+  digitalWrite(I2C_SDA_PIN, LOW);
+  delayMicroseconds(5);
+  pinMode(I2C_SDA_PIN, INPUT_PULLUP);
+  delayMicroseconds(5);
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, kI2cClockHz);
+  delay(1);
+}
+
 // Public (declared in Pca9685Module.h) so the flora animation task can write one
 // atomic 16-channel frame per tick. Internal anonymous-namespace helpers
 // (fillChannelPayload / writeRegisters / kLed0OnLowReg) remain visible here
@@ -212,6 +246,9 @@ bool writeAllChannelsRaw(const uint16_t *duties) {
 }
 
 bool initPca9685() {
+  // Recover from any stuck SDA before the first I2C transaction.
+  tryI2cBusRecovery();
+
   uint8_t oldMode = 0;
   if (!readRegister(kMode1Reg, oldMode)) {
     bootLogf("pca9685", "read MODE1 failed at address 0x%02x", kPca9685Address);

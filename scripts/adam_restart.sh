@@ -6,9 +6,9 @@
 #   ./scripts/adam_restart.sh --mode exhibition    # с режимом
 #   ./scripts/adam_restart.sh --all                # полный рестарт стека (stop+start)
 #
-# Оркестратор-only — быстро (не перезагружает модели). Сервисы, которые сейчас
-# подняты (по health-портам), передаются в ADAM_EXPECTED_SERVICES, чтобы
-# оркестратор их ожидал. Запускается тем же nohup-способом, что и adam_start.sh.
+# Оркестратор-only — быстро (не перезагружает модели). Перезапуск через systemd
+# (Phase 30 Option A — единый владелец); flock-singleton в Orchestrator.py не даёт
+# второго инстанса. ADAM_MODE / ожидаемые сервисы берутся из env-файла юнита.
 set -euo pipefail
 
 # ─── Proxy hard-clear (ESP — direct, без v2ray) ─────────────────────────────
@@ -73,65 +73,23 @@ if [[ -n "${strays}" ]]; then
 fi
 echo "  ✓ старый оркестратор остановлен"
 
-# Wait for port to be free before binding uvicorn — race condition on rapid restart.
-_wait_port_free() {
-  local port=$1 tries=${2:-20}
-  for _ in $(seq 1 "${tries}"); do
-    ss -tlnp 2>/dev/null | grep -q ":${port} " || return 0
-    sleep 0.3
-  done
-  echo "  ! порт ${port} всё ещё занят после ожидания" >&2
-  return 1
-}
-_wait_port_free "${PORT}" 20 || {
-  echo "  · принудительное освобождение порта ${PORT}…"
-  fuser -k "${PORT}/tcp" 2>/dev/null || true
-  sleep 1
-}
+# ─── 2. Запуск оркестратора через systemd (Phase 30 Option A — единый владелец) ─
+# Раньше тут был bare-nohup, который дрался с systemd-юнитом → дубликаты на
+# ребуте. Теперь — только systemd; flock-singleton в Orchestrator.py страхует от
+# любого второго инстанса. ADAM_MODE / EXPECTED_SERVICES берутся из env-файла
+# юнита (/etc/adam-chip/adam.env). Для смены режима: scripts/adam_set_mode.sh.
+rm -f "${PID_FILE}"
+if [[ "${EUID}" -ne 0 ]]; then sudo systemctl start adam-orchestrator.service
+else systemctl start adam-orchestrator.service; fi
 
-# ─── 2. Какие сервисы сейчас живы → ADAM_EXPECTED_SERVICES ───────────────────
-# Read ports from Config.json to avoid hardcoded values.
-_cfg() { python3 -c "import json; d=json.load(open('${ROOT_DIR}/System/Config.json')); print($1)" 2>/dev/null || echo "$2"; }
-LLM_HEALTH_PORT="$(_cfg "d['services']['llm']['base_url'].split(':')[-1].rstrip('/')" 8081)"
-TTS_HEALTH_PORT="$(_cfg "d['services']['tts']['base_url'].split(':')[-1].rstrip('/')" 8082)"
-ASR_HEALTH_PORT="$(_cfg "d['services']['asr']['base_url'].split(':')[-1].rstrip('/')" 8095)"
-VLM_HEALTH_PORT="$(_cfg "d['services']['vlm']['base_url'].split(':')[-1].rstrip('/')" 8084)"
-
-EXPECTED=""
-curl --noproxy '*' -fsS -m2 "http://127.0.0.1:${LLM_HEALTH_PORT}/health" >/dev/null 2>&1 && EXPECTED+="llm,"
-curl --noproxy '*' -fsS -m2 "http://127.0.0.1:${TTS_HEALTH_PORT}/health" >/dev/null 2>&1 && EXPECTED+="tts,"
-curl --noproxy '*' -fsS -m2 "http://127.0.0.1:${ASR_HEALTH_PORT}/health" >/dev/null 2>&1 && EXPECTED+="asr,"
-curl --noproxy '*' -fsS -m2 "http://127.0.0.1:${VLM_HEALTH_PORT}/"        >/dev/null 2>&1 && EXPECTED+="vlm,"
-EXPECTED="${EXPECTED%,}"
-echo "  ожидаемые сервисы: ${EXPECTED:-none}"
-
-# ─── 3. Запуск оркестратора (nohup, как в adam_start.sh) ─────────────────────
-mkdir -p "${LOG_DIR}"
-[[ -x "${VENV_PYTHON}" ]] || { echo "ERROR: ${VENV_PYTHON} нет — adam_bootstrap_venv.sh" >&2; exit 1; }
-
-cd "${ROOT_DIR}"
-PYTHONPATH="${ROOT_DIR}/System" \
-  ADAM_MODE="${MODE}" \
-  ADAM_ORCHESTRATOR_PORT="${PORT}" \
-  ADAM_MODELS_DIR="${MODELS_DIR}" \
-  ADAM_EXPECTED_SERVICES="${EXPECTED}" \
-  HF_HOME="${MODELS_DIR}/hf" \
-  HF_HUB_CACHE="${MODELS_DIR}/hf/hub" \
-  NO_PROXY="*" no_proxy="*" \
-  http_proxy="" https_proxy="" HTTP_PROXY="" HTTPS_PROXY="" \
-  nohup "${VENV_PYTHON}" "${ROOT_DIR}/System/Orchestrator.py" >>"${LOG_FILE}" 2>&1 &
-ORCH_PID=$!
-echo "${ORCH_PID}" > "${PID_FILE}"
-disown "${ORCH_PID}" 2>/dev/null || true
-
-for _ in $(seq 1 40); do
+for _ in $(seq 1 60); do
   curl --noproxy '*' -fsS "http://127.0.0.1:${PORT}/api/agent/status" >/dev/null 2>&1 && break
-  sleep 0.3
+  sleep 0.5
 done
-if kill -0 "${ORCH_PID}" 2>/dev/null; then
-  echo "  ✓ оркестратор перезапущен (PID ${ORCH_PID}, :${PORT})"
+if systemctl is-active --quiet adam-orchestrator.service 2>/dev/null; then
+  echo "  ✓ оркестратор перезапущен (systemd, :${PORT})"
 else
-  echo "✗ Оркестратор упал. Хвост лога:" >&2
-  tail -n 25 "${LOG_FILE}" >&2 || true
+  echo "✗ Оркестратор не поднялся (systemd). journalctl -u adam-orchestrator.service -n 25:" >&2
+  journalctl -u adam-orchestrator.service -n 25 --no-pager >&2 2>/dev/null || true
   exit 1
 fi

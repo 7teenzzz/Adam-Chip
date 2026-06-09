@@ -52,15 +52,58 @@ def _cfg_val(env_key: str, config_path: str, default: str) -> str:
     return str(cur)
 
 
-# pyannote VAD thresholds — whisperX default 0.500/0.363 is tuned for clean studio audio.
-# ESP32 INMP441 over WiFi is noisier; lower values make VAD more sensitive.
-# whisperX CLI docs: "reduce vad_onset if speech is not being detected".
-_VAD_ONSET = float(_cfg_val("ADAM_ASR_VAD_ONSET", "services.asr.vad_onset", "0.3"))
+# pyannote VAD thresholds passed to whisperX load_model() via vad_options.
+# Lower onset = more sensitive to brief/quiet/far-field speech.
+# 0.1 restores behavior from commit e390d16 for exhibition-distance commands.
+_VAD_ONSET = float(_cfg_val("ADAM_ASR_VAD_ONSET", "services.asr.vad_onset", "0.1"))
 _VAD_OFFSET = float(_cfg_val("ADAM_ASR_VAD_OFFSET", "services.asr.vad_offset", "0.2"))
 
-# avg_logprob threshold — segments below this score are discarded.
-# -0.8 tolerates quiet/distant speech from ESP32 mic (was -0.5, too strict).
-_LOGPROB_THRESHOLD = float(_cfg_val("ADAM_ASR_LOGPROB_THRESHOLD", "services.asr.logprob_threshold", "-0.8"))
+# avg_logprob threshold — segments below this score are discarded as noise/hallucination.
+# -1.7 keeps borderline segments from far-field or brief utterances (restored from e390d16).
+_LOGPROB_THRESHOLD = float(_cfg_val("ADAM_ASR_LOGPROB_THRESHOLD", "services.asr.logprob_threshold", "-1.7"))
+
+# Per-segment no_speech_prob: probability that segment contains no speech (faster-whisper field).
+# Conservative default 0.85 — only discard when Whisper itself is 85%+ certain of silence.
+# Uses safe .get() fallback (0.0) so filter never fires if the field is absent.
+# Set env ADAM_ASR_NO_SPEECH_THRESHOLD=1.0 to disable.
+_NO_SPEECH_THRESHOLD = float(os.environ.get("ADAM_ASR_NO_SPEECH_THRESHOLD", "0.85"))
+
+# Per-segment compression_ratio: low values indicate short repetitive token sequences
+# (characteristic of near-silence hallucinations like "Спасибо за внимание").
+# Real speech: typically 1.8+. Hallucinations on near-silence: often 1.0–1.4.
+# Conservative default 1.1 — only discard extremely template-like sequences.
+# Uses safe .get() fallback (999.0) so filter never fires if the field is absent.
+# Set env ADAM_ASR_COMPRESSION_RATIO_MIN=0.0 to disable.
+_COMPRESSION_RATIO_MIN = float(os.environ.get("ADAM_ASR_COMPRESSION_RATIO_MIN", "1.1"))
+
+# Whisper hallucinates these phrases on near-silence or very short audio clips.
+# They appear in the training data (YouTube subtitles) and have high logprob even
+# on garbage input, so logprob filtering alone doesn't catch them.
+# Synchronized with System/adam/asr_filter.HALLUCINATION_PATTERNS.
+# When adding patterns: update BOTH files. asr_filter.py is the canonical source.
+# NOTE: do NOT import adam.asr_filter here — it is not available inside the Docker container.
+# Patterns are stored in the form used by the lookup below (after text.lower().strip("[]().,!? ")):
+_HALLUCINATION_PATTERNS = {
+    # YouTube subtitle hallucinations (near-silence triggers)
+    "тревожная музыка", "интригующая музыка", "спокойная музыка",
+    "весёлая музыка", "грустная музыка", "музыка",
+    "субтитры добавлены", "спасибо за просмотр", "подписывайтесь на канал",
+    "продолжение следует", "не забудьте подписаться", "спасибо за внимание",
+    "до встречи", "увидимся в следующий раз", "оставайтесь с нами",
+    "продолжение в следующей части", "ссылки в описании",
+    # Bracket/noise markers (lookup strips brackets, so store without them)
+    "тихая музыка", "music", "applause", "blank_audio", "inaudible",
+    "шум", "тишина", "нет звука", "аплодисменты", "смех",
+    # Whisper-small Russian artefacts (near-silence hallucinations)
+    "компиция", "цыц", "ля ля ля", "да да", "нет нет",
+    "хорошо хорошо", "ок ок",
+    # YouTube/attention CTAs
+    "лайк и подписка", "колокольчик уведомлений", "смотрите также",
+    "следующее видео", "конец видео", "до следующего раза", "пока пока",
+    "поставьте лайк", "комментируйте", "поделитесь видео",
+    # Punctuation-only segments (silence artefacts)
+    ".", ",", "...",
+}
 
 _MODELS_DIR = Path(os.environ.get("ADAM_MODELS_DIR", "Subsystem/Models"))
 
@@ -174,15 +217,27 @@ def _get_model() -> Any:
 def _transcribe_audio(audio: np.ndarray) -> str:
     """Transcribe a numpy array (float32, 16kHz) directly — used for warmup and internal calls."""
     model = _get_model()
+    # vad_options are set at load_model() time (see _load_model_with_fallback).
+    # FasterWhisperPipeline.transcribe() does not accept vad_options directly.
     result = model.transcribe(audio, language=_LANGUAGE, batch_size=1)
     parts = []
     for seg in result.get("segments", []):
         # avg_logprob: lower = worse quality. Default 0.0 when key is absent so a
-        # missing key never silently drops the segment (bug: -1.0 default would drop it).
+        # missing key never silently drops the segment.
         if seg.get("avg_logprob", 0.0) < _LOGPROB_THRESHOLD:
             continue
+        # no_speech_prob: Whisper's own estimate that this segment has no speech.
+        # Available from faster-whisper which whisperx uses internally. Safe fallback 0.0
+        # means the filter never fires on segments where the field is absent.
+        if seg.get("no_speech_prob", 0.0) >= _NO_SPEECH_THRESHOLD:
+            continue
+        # compression_ratio: low value = short repetitive token sequence = likely hallucination.
+        # Real speech: ~1.8+. Template hallucinations on near-silence: ~1.0–1.4.
+        # Safe fallback 999.0 means the filter never fires if the field is absent.
+        if seg.get("compression_ratio", 999.0) <= _COMPRESSION_RATIO_MIN:
+            continue
         text = seg.get("text", "").strip()
-        if text:
+        if text and text.lower().strip("[]().,!? ") not in _HALLUCINATION_PATTERNS:
             parts.append(text)
     return " ".join(parts).strip()
 

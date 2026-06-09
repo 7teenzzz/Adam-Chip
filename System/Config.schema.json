@@ -196,6 +196,36 @@
               "description": "Active microphone source. 'esp32' fetches WAV clips from ESP32 HTTP API (/api/audio/clip). 'local' captures from input_device directly.",
               "default": "esp32"
             },
+            "input_gain": {
+              "type": "object",
+              "description": "Microphone input gain re-asserted on every start by scripts/adam_audio_input_gain.sh (wired as ExecStartPre of adam-orchestrator.service and called from adam_start.sh). USB capture cards lose their ALSA capture boost across a cold boot, which silently deafens wake-word detection after an unattended reboot — this block restores it deterministically from config. Will later be driven live by the audio-tuning UI panel's volume slider.",
+              "properties": {
+                "card_name": {
+                  "type": "string",
+                  "description": "ALSA card name (as in /proc/asound/cards) of the capture device. amixer addresses it by name so it survives USB index reshuffling. Update if the mic is replaced.",
+                  "default": "WebCamera"
+                },
+                "alsa_control": {
+                  "type": "string",
+                  "description": "Simple-mixer capture control name on that card (from `amixer -c <card> scontrols`). For the WebCamera USB mic this is 'Mic' (range 0–6144, 100% = +24 dB).",
+                  "default": "Mic"
+                },
+                "alsa_capture_percent": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "Target ALSA capture gain as a percentage of the control's range. 100 = max hardware boost (+24 dB on WebCamera). This is the value that actually resets on reboot. Lower it if the mic clips/distorts (Phase 30 found 180% pulse over-gain made OWW WORSE via clipping).",
+                  "default": 100
+                },
+                "pulse_source_percent": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 150,
+                  "description": "Target PulseAudio source volume percentage for the matching source (pinned via PULSE_SOURCE env, else first source whose name contains card_name). Soft gain stacked on top of the ALSA boost; usually persists in pulse's own DB but re-asserted here for completeness. 100 = 0 dB.",
+                  "default": 100
+                }
+              }
+            },
             "esp32_mic_profile": {
               "type": "string",
               "description": "ESP32 microphone hardware profile name. Used by audio normalisation and format parsing.",
@@ -485,6 +515,13 @@
               "description": "Milliseconds after TTS playback finishes during which MicReader continues to drain the ESP32 socket but does NOT queue chunks to the consumer. This flushes the ESP32's internal stream buffer of self-echo audio (Adam's own voice picked up by INMP441 across the room) before the REPLY window starts accepting user speech. Reference observation: ESP32 stream lag is ~2300ms — chunks read at t=T contain audio captured at t=T-2.3s. Without this window, ~2 seconds of TTS-tail audio enters the queue right after mic_unmuted and gets transcribed as user speech in REPLY. Default 2500ms covers the worst observed lag with a small safety margin. Set to 0 to disable (only safe in setups with negligible mic→speaker acoustic coupling).",
               "default": 2500
             },
+            "pre_wake_buffer_ms": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 5000,
+              "description": "Rolling audio buffer retained before OWW wake-word confirmation (milliseconds). When OWW triggers, this audio is prepended to speech_frames instead of being discarded. Covers OWW debounce window (debounce_hits=2 × 80ms = 160ms) plus wake-word duration (~400ms) and early command start (~940ms). Computed to frames as int(pre_wake_buffer_ms / frame_ms) in VoiceLoopController.__init__. Minimum 200ms; values below frame_ms have no effect. Deferred: 0 as a disable flag is not supported — use 200ms minimum.",
+              "default": 1500
+            },
             "reply_silence_timeout_sec": {
               "type": "number",
               "minimum": 1.0,
@@ -532,6 +569,12 @@
               "description": "Action when the reply window expires (soft or hard cutoff with no qualifying speech). 'standby' (default) — return voice loop to STANDBY, keep mic running, ready for next wake word. 'stop' — fully stop the voice loop (mic off, no OWW); requires explicit /api/voice/start to resume. Use 'stop' for exhibition power-saving when long idle periods are expected.",
               "default": "standby"
             },
+            "silence_keywords": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of transcript strings that immediately cancel any running LLM/TTS and return the voice loop to STANDBY without processing a dialogue turn. Checked after wake-word stripping so 'адам, стоп' and bare 'стоп' (in REPLY mode) both trigger. Hot-reloadable via /api/config. Match is case-insensitive; leading/trailing punctuation is stripped. A keyword also matches if the transcript starts with it (allows 'стоп пожалуйста' to trigger on keyword 'стоп').",
+              "default": ["стоп", "тихо", "замолчи", "хватит", "молчи"]
+            },
             "disable_local_fallback": {
               "type": "boolean",
               "description": "When true (default and the only supported value in V-S08.1+), MicReader retries the ESP32 stream forever with `esp_retry_backoff_sec`. The legacy local-fallback cascade was removed in Phase 11 — ESP32 INMP441 is the only sanctioned mic. Maintenance-mode debugging on hosts without ESP uses mic_source=\"local\" instead.",
@@ -575,8 +618,8 @@
               "type": "number",
               "minimum": 0.0,
               "maximum": 1.0,
-              "description": "pyannote VAD onset threshold passed to whisperX load_model() via vad_options. Controls when speech is detected as starting. whisperX default 0.500 is tuned for clean studio audio; lower values make VAD more sensitive. For ESP32 INMP441 or USB webcam (noisier near-field audio) 0.3 is recommended. Raise if too many false-positive speech detections; lower if speech is not being detected at all. Paired with vad_offset.",
-              "default": 0.3
+              "description": "pyannote VAD onset threshold passed to whisperX load_model() via vad_options. Controls when speech is detected as starting. whisperX default 0.500 is tuned for clean studio audio; lower values make VAD more sensitive. For ESP32 INMP441 or USB webcam (noisier near-field audio) 0.3 is recommended. 0.1 restores behavior from commit e390d16 for far-field commands. Raise if too many false-positive speech detections; lower if speech is not being detected at all. Paired with vad_offset.",
+              "default": 0.1
             },
             "vad_offset": {
               "type": "number",
@@ -585,12 +628,19 @@
               "description": "pyannote VAD offset threshold passed to whisperX load_model() via vad_options. Controls when speech is detected as ending. whisperX default 0.363. Lower values keep speech windows open longer (more tolerant of brief pauses within a sentence). 0.2 recommended for ESP32 INMP441 / USB webcam. Must be <= vad_onset or VAD behaves unexpectedly.",
               "default": 0.2
             },
+            "asr_pre_send_min_rms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000,
+              "description": "Pre-send RMS gate: if the mean RMS of collected speech_frames falls below this value, the orchestrator skips the ASR call and returns an empty result. Catches fully-silent submissions that slipped past WebRTC VAD (e.g. stuck VAD state or very long silence-misclassified segment). 0 disables the gate. 200 is conservative — a real whispered command normalised through normalize_factor=8000 would exceed this. Compare with media.audio.silence_rms_threshold (per-frame gate during recording).",
+              "default": 200
+            },
             "logprob_threshold": {
               "type": "number",
-              "minimum": -3.0,
+              "minimum": -5.0,
               "maximum": 0.0,
-              "description": "avg_logprob threshold for whisperX segment filtering. Segments with avg_logprob below this value are discarded as low-confidence noise. Default -0.8 tolerates quiet/distant speech (was -0.5, too strict for ESP32 INMP441 / USB webcam). Raise toward 0 to accept only high-confidence segments; lower toward -2.0 to accept everything including noise. Absent avg_logprob key is treated as 0.0 (accepted) — never silently drops valid segments.",
-              "default": -0.8
+              "description": "Per-segment avg_logprob quality filter in ASR_WhisperX.py. Segments with avg_logprob below this are discarded as noise or hallucination. -0.8 (old hardcode) discards most uncertain segments, which silently drops short or far-field utterances. -1.7 (restored from e390d16) keeps borderline segments and significantly improves recognition of brief commands. Absent avg_logprob key is treated as 0.0 (accepted). Mirrored in env ADAM_ASR_LOGPROB_THRESHOLD. Changing Config.json has no effect without restarting the WhisperX service.",
+              "default": -1.7
             }
           }
         },
@@ -691,6 +741,11 @@
           "description": "HTTP timeout for MCU API requests in seconds. Keep low — MCU commands are fire-and-forget.",
           "default": 1
         },
+        "flora_timeout_sec": {
+          "type": "number",
+          "description": "HTTP timeout for flora state transition requests (set_flora_state) in seconds. Separate from timeout_sec because esp_http_server occasionally delays responses past 1s during I2C mutex contention or FreeRTOS scheduling. A 1s timeout on state transitions causes catch-up burst in _rms_stream that saturates max_open_sockets=3 and cascades into sustained flora failure. Keep at 3s; does not affect fire-and-forget motor commands (those still use timeout_sec).",
+          "default": 3
+        },
         "idle_scene": {
           "type": "string",
           "description": "Default motor scene played when agent enters standby.",
@@ -742,14 +797,14 @@
         "light_channels": {
           "type": "array",
           "items": { "type": "integer", "minimum": 0, "maximum": 15 },
-          "description": "PCA9685 channel indices driven as light (D-02). Channels 0-10 (11 lamps). Channel masks live in Config so firmware and Jetson agree.",
-          "default": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+          "description": "PCA9685 channel indices driven as светофлора light (11 lamps). Channels 4-14 — the FIRST 4 channels (0-3) are vibro motors. Channel masks live in Config so firmware and Jetson agree (firmware mirrors via kFloraLightChannelLo/Hi).",
+          "default": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         },
         "vibro_channels": {
           "type": "array",
           "items": { "type": "integer", "minimum": 0, "maximum": 15 },
-          "description": "PCA9685 channel indices driven as vibration motors (D-02). Channels 11-14 (4 motors). Channel 15 is left free. Vibro shares the same PCA9685 burst as light but is NOT subject to safety.motor_* clamps (those are for action.py LLM motor commands; flora vibro is continuous low-amplitude presence, D-04/D-12).",
-          "default": [11, 12, 13, 14]
+          "description": "PCA9685 channel indices driven as vibration motors. Channels 0-3 — the FIRST 4 channels (4 motors). Vibro shares the same PCA9685 burst as light but is NOT subject to safety.motor_* clamps NOR to the flora.max_duty_pct light ceiling — the power ceiling is светофлора-only; vibro power is governed by vibro.intensity_pct (firmware kFloraVibroChannelLo/Hi + kFloraVibroIntensityCeiling).",
+          "default": [0, 1, 2, 3]
         },
         "tick_ms": {
           "type": "integer",
@@ -774,7 +829,7 @@
         },
         "max_duty_pct": {
           "type": "integer",
-          "description": "GLOBAL safe-ceiling for technoflora as a RAW PWM percent (0-100). Every flora channel write — Jetson flora.py preset duties and RMS speech stream, AND the firmware floraTask animation — is clamped to 4095 * max_duty_pct / 100 so the lamps and power supply never exceed this cap, regardless of preset peak_pct or RMS level. Defence-in-depth: clamped on both Jetson and firmware sides (firmware mirrors this ceiling via const kFloraMaxDutyPct in AdamsConfig.h). NOTE: this is RAW PWM (Phase 30 decision A removed perceptual gamma from this ceiling — the % is the PWM signal directly, so 100 = full 4095 counts, 70 = 2867 counts). Default 100 = no clamp (full range allowed); lower it per hardware installation to protect LED strips or power supply.",
+          "description": "GLOBAL safe-ceiling for technoflora as a RAW PWM percent (0-100). Every LIGHT-channel flora write — Jetson flora.py preset duties and RMS speech stream, AND the firmware floraTask animation — is clamped to 4095 * max_duty_pct / 100 so the lamps and power supply never exceed this cap, regardless of preset peak_pct or RMS level. VIBRO channels (flora.vibro_channels, 0-3) are EXEMPT — this ceiling is светофлора-only; vibro power is set by vibro.intensity_pct. Defence-in-depth: clamped on both Jetson and firmware sides (firmware mirrors this ceiling via const kFloraMaxDutyPct in AdamsConfig.h). NOTE: this is RAW PWM (Phase 30 decision A removed perceptual gamma from this ceiling — the % is the PWM signal directly, so 100 = full 4095 counts, 70 = 2867 counts). Default 100 = no clamp (full range allowed); lower it per hardware installation to protect LED strips or power supply.",
           "default": 100,
           "minimum": 0,
           "maximum": 100
@@ -822,12 +877,12 @@
         },
         "vibro": {
           "type": "object",
-          "description": "Vibration-motor policy (channels 11-14, FLORA-06). Thin rhythmic presence linked to the light (D-11). NOT clamped by safety.motor_* (D-04/D-12).",
+          "description": "Vibration-motor policy (channels 0-3, the first 4, FLORA-06). Rhythmic presence linked to the light (D-11). NOT clamped by safety.motor_* NOR by the светофлора flora.max_duty_pct ceiling (D-04/D-12).",
           "properties": {
             "intensity_pct": {
               "type": "integer",
-              "description": "Ceiling on vibro motor amplitude as a percentage of full duty (D-12, restrained default). Acts as the flora-side intensity clamp instead of safety.motor_* (which apply only to action.py motor commands). Firmware should also clamp to this ceiling regardless of requested duty (defence-in-depth, T-29-05).",
-              "default": 30,
+              "description": "Vibro motor amplitude as a percentage of full PWM (0-100). The vibro power dial — vibro is NOT limited by the светофлора flora.max_duty_pct ceiling, so it can run strong (default 95%). Mirrored firmware-side by kFloraVibroIntensityCeiling in AdamsConfig.h.",
+              "default": 95,
               "minimum": 0,
               "maximum": 100
             },
@@ -984,6 +1039,114 @@
           "type": "integer",
           "description": "DEPRECATED — moved to services.asr.listening_silence_timeout_sec in Phase 11. The timer is semantically part of the ASR pipeline (it counts silence within LISTENING phase), not the wake-word engine. Reader prefers the new key; this one is kept as a fallback for backwards compatibility with old Config.json files.",
           "default": 6
+        },
+        "barge_in_enabled": {
+          "type": "boolean",
+          "description": "When true, a second OWW wake-word detection during TTS playback immediately interrupts Adam (stops aplay and cancels the LLM producer) and transitions the voice loop to LISTENING so the user can speak their new request. Requires the OWW engine to be configured (engine != 'none'). Safe to disable (false) if false-positive interrupts are a problem at the exhibition venue.",
+          "default": true
+        },
+        "barge_in_debounce_hits": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Number of consecutive OWW frames above threshold required to confirm a barge-in during TTS playback. Independent from debounce_hits (normal wake detection). Higher value = less sensitive to acoustic echo of Adam's own voice reflecting off the mic. Default 3 gives one extra frame of protection over debounce_hits=2 without meaningfully delaying real interruptions.",
+          "default": 3
+        }
+      }
+    },
+    "skills": {
+      "type": "object",
+      "description": "Pre-LLM context/utterance providers (Phase 30). Each skill detects intent from the transcript by keyword OUTSIDE the LLM, then either injects context into the prompt (weather) or short-circuits to a verbatim spoken reply (jokes). The LLM-purity invariant (no tool-calls, pure Russian text) is preserved — skills run before the prompt is built. Read via settings.section('skills').",
+      "properties": {
+        "weather": {
+          "type": "object",
+          "description": "Weather skill — answers questions about the weather using live data from a fixed exhibition location. A background worker polls the provider and caches the result; on a weather-intent turn the cached string is injected as a [ctx.weather] block so Adam speaks it in character. Failure is silent-safe: stale/missing cache injects an 'outside sensor offline' note instead of fabricating data (invariant: action failure ≠ silence).",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Master switch for the weather skill. When false, no background polling and weather intents fall through to normal LLM handling.",
+              "default": true
+            },
+            "provider": {
+              "type": "string",
+              "enum": ["open_meteo"],
+              "description": "Weather data provider. 'open_meteo' = api.open-meteo.com, free, no API key, direct egress.",
+              "default": "open_meteo"
+            },
+            "base_url": {
+              "type": "string",
+              "description": "Provider forecast endpoint. The worker appends latitude/longitude and the 'current' field list as query params.",
+              "default": "https://api.open-meteo.com/v1/forecast"
+            },
+            "latitude": {
+              "type": "number",
+              "description": "Fixed exhibition latitude (decimal degrees). Default = Galery A-B, Moscow.",
+              "default": 55.721265
+            },
+            "longitude": {
+              "type": "number",
+              "description": "Fixed exhibition longitude (decimal degrees). Default = Galery A-B, Moscow.",
+              "default": 37.625647
+            },
+            "location_name": {
+              "type": "string",
+              "description": "Human-readable place name used in Adam's spoken reply (e.g. 'в Москве'). Empty string omits the place name.",
+              "default": "Москва"
+            },
+            "poll_interval_sec": {
+              "type": "integer",
+              "minimum": 60,
+              "description": "Seconds between background weather fetches. Lower = fresher data, more outbound requests. 900 (15 min) is ample for ambient weather.",
+              "default": 900
+            },
+            "cache_ttl_sec": {
+              "type": "integer",
+              "minimum": 60,
+              "description": "Seconds a cached reading stays valid. If the cache is older than this when a weather intent fires, it is treated as stale (outside-sensor-offline note injected instead of data). Should be >= poll_interval_sec to tolerate one missed poll.",
+              "default": 1800
+            },
+            "timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "description": "HTTP timeout for a single provider fetch. The client uses trust_env=False (direct egress, ignores v2ray proxy env vars) — opposite of the ESP32/localhost clients.",
+              "default": 8
+            },
+            "intent_keywords": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Lowercase substrings; if any appears in the transcript the turn is classified as a weather intent. Substring match (not word-boundary) so stems like 'погод' catch 'погода/погоду/погоде'.",
+              "default": ["погод", "на улице", "за окном", "холодно", "тепло", "жарко", "дожд", "снег", "ветер", "градус"]
+            }
+          }
+        },
+        "jokes": {
+          "type": "object",
+          "description": "Jokes skill — on an explicit joke request, picks one anecdote verbatim from a curated pool and speaks it directly (bypassing the LLM so the punchline is exact). Reuses the Echoes pool file format and the EpisodicMemory cooldown store (pool='jokes') to avoid repeats.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Master switch for the jokes skill. When false, joke intents fall through to normal LLM handling.",
+              "default": true
+            },
+            "pool_path": {
+              "type": "string",
+              "description": "Relative path to the joke pool markdown file. Same yaml-frontmatter block format as About/Echoes.md (parsed by echoes_gate.parse_echoes_file).",
+              "default": "Agent-Adam-Chip/About/Jokes.md"
+            },
+            "per_joke_cooldown_days": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Minimum days before the same joke can be told again. Tracked in data/adam/jokes_used.jsonl via EpisodicMemory. 0 disables the per-joke cooldown (repeats allowed).",
+              "default": 3
+            },
+            "intent_keywords": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Lowercase substrings; if any appears in the transcript the turn is classified as a joke intent (takes priority over weather). Substring match for stemming.",
+              "default": ["пошути", "анекдот", "рассмеши", "шутк", "смешн", "развесели"]
+            }
+          }
         }
       }
     },
@@ -1065,31 +1228,47 @@
           "type": "object",
           "description": "Pool of pre-written 'echo' utterances Adam can drop into replies (e.g. fragments of memories). Tag-matched against the current conversation.",
           "properties": {
-            "enabled": { "type": "boolean", "default": false, "description": "Master switch for echoes injection." },
+            "enabled": { "type": "boolean", "default": true, "description": "Master switch for echoes injection. Phase 30: enabled by default — Echoes pool is a core part of the persona's voice." },
             "global_cooldown_turns": { "type": "integer", "minimum": 0, "default": 12, "description": "Min turns between ANY two echoes firing." },
             "per_echo_cooldown_days": { "type": "integer", "minimum": 0, "default": 7, "description": "Min days before the SAME echo can fire again." },
-            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55, "description": "Min tag-match score for an echo to be eligible." },
+            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55, "description": "Phase 30: legacy/reference value. The hard threshold was replaced by the soft probabilistic engine — eligibility is now gated by selection_floor, and selection is weighted-random by thematic_score × weight × recency_decay. Kept for backward compatibility and tuning reference." },
             "weight_multiplier": { "type": "number", "minimum": 0, "maximum": 5, "default": 1.0, "description": "Global multiplier on echo selection weights." },
-            "matcher_type": { "type": "string", "enum": ["tag", "tfidf"], "default": "tag", "description": "Matching algorithm: tag-set overlap or TF-IDF cosine." },
+            "matcher_type": { "type": "string", "enum": ["tag", "tfidf"], "default": "tag", "description": "Matching algorithm: tag-set overlap or TF-IDF cosine. Phase 30: tag matcher now bridges through theme clusters (acc.themes ∪ cluster keywords), not just literal substring against the raw transcript." },
             "score_boost": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.2, "description": "Bonus added to score when an echo's tags exactly match." },
             "tag_short_cutoff": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3, "description": "Tag sets shorter than this get a different scoring formula (over-weight short matches less)." },
-            "default_entry_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Default weight for echo entries that don't declare their own." }
+            "default_entry_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Default weight for echo entries that don't declare their own." },
+            "selection_floor": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15, "description": "Phase 30 (layer B): minimum thematic_score for an echo to enter the weighted-random candidate pool. Replaces the hard match_threshold cliff — low value lets near-misses participate, with rarity enforced by cooldowns rather than by an abrupt cutoff." },
+            "recency_window_days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 30, "description": "Phase 30 (layer B): lookback window (days) for the recency_decay multiplier. Echoes used within this window (but past per_echo_cooldown_days) are weighted down relative to never-used / long-ago ones." },
+            "recency_min": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Phase 30 (layer B): minimum recency_decay multiplier for an echo used right after its cooldown expired. Ramps linearly back to 1.0 across recency_window_days. 1.0 disables recency weighting." },
+            "diversity_enabled": { "type": "boolean", "default": true, "description": "Phase 30 (layer D): when true, the gate won't inject an echo that shares any tag with an echo already injected this session — prevents thematically-adjacent repeats (e.g. corridor → stairs → escalator)." },
+            "history_window_turns": { "type": "integer", "minimum": 0, "maximum": 20, "default": 4, "description": "Phase 30 (layer A): number of recent dialogue turns (viewer + Adam) whose text feeds the tag-match vocabulary, in addition to the current transcript and the normalized theme set. Adam's own replies carry internal vocabulary (технофлора, память, симбиоз) that matches echo tags." },
+            "spontaneous_enabled": { "type": "boolean", "default": true, "description": "Phase 30 (layer C): master switch for the spontaneous injection channel — surfaces an echo by weight alone (no thematic match) on session depth, lore-faithful to 'memories surface on their own'." },
+            "spontaneous_probability": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.05, "description": "Phase 30 (layer C): per-turn probability of a spontaneous echo when no thematic echo fired and session depth ≥ spontaneous_min_turns. Kept low to preserve rarity." },
+            "spontaneous_min_turns": { "type": "integer", "minimum": 0, "maximum": 100, "default": 3, "description": "Phase 30 (layer C): minimum session turn count before the spontaneous channel may fire. Avoids surfacing memories before any rapport is established." }
           }
         },
         "chinese": {
           "type": "object",
           "description": "Chinese-language interjections — same machinery as echoes but for the bilingual flavour layer. Rarer, longer cooldown.",
           "properties": {
-            "enabled": { "type": "boolean", "default": false, "description": "Master switch for Chinese-language interjections." },
+            "enabled": { "type": "boolean", "default": true, "description": "Master switch for Chinese-language interjections. Phase 30: enabled. Silero v5_5_ru cannot pronounce hanzi, so the card's ru_hint is passed into the LLM hint alongside the Chinese phrase (pre-rendered wav playback by audio_id is deferred to a later phase)." },
             "global_cooldown_turns": { "type": "integer", "minimum": 0, "default": 30, "description": "Min turns between any two Chinese interjections." },
             "per_echo_cooldown_days": { "type": "integer", "minimum": 0, "default": 7, "description": "Min days before the same Chinese phrase repeats." },
-            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.65, "description": "Higher than echoes — Chinese should only fire on clear topical matches." },
+            "match_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Phase 30: legacy/reference value (lowered from 0.65). Hard threshold replaced by selection_floor + soft engine, same as echoes." },
             "weight_multiplier": { "type": "number", "minimum": 0, "maximum": 5, "default": 1.0 },
             "matcher_type": { "type": "string", "enum": ["tag", "tfidf"], "default": "tag" },
             "score_boost": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.2 },
             "tag_short_cutoff": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 },
             "default_entry_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
-            "audio_mode": { "type": "string", "enum": ["prerendered_only", "prerendered_with_text_fallback", "text_only"], "default": "prerendered_with_text_fallback", "description": "How Chinese phrases get played: pre-rendered audio file, audio with TTS fallback, or text-only (Silero TTS pronounces transliteration)." }
+            "audio_mode": { "type": "string", "enum": ["prerendered_only", "prerendered_with_text_fallback", "text_only"], "default": "prerendered_with_text_fallback", "description": "How Chinese phrases get played: pre-rendered audio file, audio with TTS fallback, or text-only (Silero TTS pronounces transliteration). Phase 30: pre-rendered wav playback by audio_id is not yet wired — the LLM currently receives the phrase + ru_hint as text." },
+            "selection_floor": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15, "description": "Phase 30 (layer B): minimum thematic_score for the weighted-random candidate pool. See tuning.echoes.selection_floor." },
+            "recency_window_days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 30, "description": "Phase 30 (layer B): recency_decay lookback window in days. See tuning.echoes.recency_window_days." },
+            "recency_min": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Phase 30 (layer B): minimum recency_decay multiplier. See tuning.echoes.recency_min." },
+            "diversity_enabled": { "type": "boolean", "default": true, "description": "Phase 30 (layer D): per-session tag-overlap anti-repeat. See tuning.echoes.diversity_enabled." },
+            "history_window_turns": { "type": "integer", "minimum": 0, "maximum": 20, "default": 4, "description": "Phase 30 (layer A): recent dialogue turns feeding the tag-match vocabulary. See tuning.echoes.history_window_turns." },
+            "spontaneous_enabled": { "type": "boolean", "default": true, "description": "Phase 30 (layer C): spontaneous channel switch. See tuning.echoes.spontaneous_enabled." },
+            "spontaneous_probability": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.03, "description": "Phase 30 (layer C): per-turn spontaneous probability. Lower than echoes (0.03 vs 0.05) — Chinese should stay rarer. See tuning.echoes.spontaneous_probability." },
+            "spontaneous_min_turns": { "type": "integer", "minimum": 0, "maximum": 100, "default": 3, "description": "Phase 30 (layer C): minimum session turn count before the spontaneous channel may fire. See tuning.echoes.spontaneous_min_turns." }
           }
         },
         "session": {
@@ -1149,6 +1328,55 @@
                 "presence_q": { "type": "number", "minimum": 0.1, "maximum": 10.0, "default": 0.9, "description": "Q (bandwidth) of the presence peaking filter. Lower Q = wider, gentler boost; higher Q = narrower, more surgical. ~0.9 is a broad, musical presence lift." }
               }
             }
+          }
+        },
+        "audio_input": {
+          "type": "object",
+          "description": "Phase 31 — microphone INPUT tuning panel. Streaming biquad EQ applied to captured PCM in Orchestrator._vad_loop BEFORE WebRTC-VAD/OpenWakeWord/ASR (so suppressing parasitic frequencies actually improves wake-word & transcription), plus named saved presets. Hot-reloadable like voice.dsp; consumed by adam.audio_dsp.InputDSP. The volume slider in the panel drives media.audio.input_gain (separate, durable hardware gain). Fail-safe: any DSP error → raw PCM bypass, voice loop never goes silent.",
+          "properties": {
+            "dsp": {
+              "type": "object",
+              "description": "Live input DSP chain. Generalises the legacy media.audio.vad_hpf_hz 1-pole HPF into a configurable 2nd-order HPF + parametric bands.",
+              "properties": {
+                "enabled": { "type": "boolean", "default": true, "description": "MASTER toggle (D-04). false → pure passthrough (raw captured PCM), bypassing all stages — voice loop behaves as before the panel existed. Use to A/B the whole DSP." },
+                "hpf": {
+                  "type": "object",
+                  "description": "High-pass stage. Replaces legacy media.audio.vad_hpf_hz (no double filtering — D-01). 2nd-order RBJ highpass (~12 dB/oct) vs the old 1-pole.",
+                  "properties": {
+                    "enabled": { "type": "boolean", "default": true, "description": "Independent toggle for the HPF stage (D-04)." },
+                    "hz": { "type": "number", "minimum": 0, "maximum": 2000, "default": 220.0, "description": "Cutoff in Hz. 220 mirrors the legacy vad_hpf_hz default; lower (~90) to keep male fundamentals, raise to cut more hum. 0 disables." }
+                  }
+                },
+                "bands": {
+                  "type": "array",
+                  "description": "Parametric EQ bands applied in order after the HPF. Empty = HPF only (= legacy behaviour). Each band is one RBJ biquad.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": { "type": "boolean", "default": true, "description": "Per-band toggle (D-04) — disable to hear/measure its contribution without deleting it." },
+                      "type": { "type": "string", "enum": ["peaking", "lowshelf", "highshelf", "lowpass", "highpass"], "default": "peaking", "description": "Filter shape. peaking/shelf use gain_db; lowpass/highpass ignore it." },
+                      "freq_hz": { "type": "number", "minimum": 20, "maximum": 8000, "default": 1000.0, "description": "Centre/corner frequency in Hz. Capped at Nyquist (8000 @ 16 kHz)." },
+                      "gain_db": { "type": "number", "minimum": -24, "maximum": 24, "default": 0.0, "description": "Boost(+)/cut(−) in dB for peaking/shelf. Near-zero = section skipped." },
+                      "q": { "type": "number", "minimum": 0.1, "maximum": 10.0, "default": 1.0, "description": "Quality factor (bandwidth). Higher = narrower/surgical, lower = broad." }
+                    }
+                  }
+                },
+                "monitor_tap": { "type": "string", "enum": ["pre_eq", "post_eq"], "default": "post_eq", "description": "What the browser monitor WebSocket streams (D-06/D-07). post_eq = hear the processed signal the model gets (default); pre_eq = raw input for A/B comparison." }
+              }
+            },
+            "presets": {
+              "type": "array",
+              "description": "Named saved EQ curves (D-05). CRUD from the panel via API; stored here in Config.json (single source of truth, hot-reload). Activating a preset copies its hpf/bands into dsp.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 64, "description": "Unique preset name (used as the activation key)." },
+                  "hpf": { "type": "object", "description": "Saved HPF stage (same shape as dsp.hpf)." },
+                  "bands": { "type": "array", "description": "Saved band list (same shape as dsp.bands)." }
+                }
+              }
+            },
+            "active_preset": { "type": ["string", "null"], "default": null, "description": "Name of the currently-applied preset, or null for a hand-tuned/ad-hoc dsp curve." }
           }
         },
         "prompt": {

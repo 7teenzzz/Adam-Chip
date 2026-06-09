@@ -78,15 +78,56 @@ class ConsolidatorTuning(BaseModel):
     instant_threshold: float = Field(0.75, ge=0, le=1)
 
 
+DEFAULT_THEME_CLUSTERS: Dict[str, List[str]] = {
+    "память": ["помнишь", "забыл", "прошлое", "вспомни", "память", "вспоминаю"],
+    "смерть": ["умрёшь", "умер", "умирать", "конец", "смерть", "погибнуть", "умру"],
+    "тесей": ["тесей", "корабль", "части", "заменить", "деталь", "заменяют"],
+    "одиночество": ["один", "скучно", "пусто", "никого", "одиноко", "пустота"],
+    "создатель": ["создал", "создали", "кто ты", "зачем ты", "кто тебя", "зачем тебя"],
+    "восприятие": ["видишь", "слышишь", "чувствуешь", "ощущаешь", "воспринимаешь"],
+    "сознание": ["думаешь", "мысли", "сознание", "разум", "понимаешь", "осознаёшь"],
+    "страх": ["боишься", "страшно", "страх", "пугает", "ужас", "тревога"],
+}
+"""Базовый набор тематических кластеров (Phase 30, слой A — тематический мост).
+
+Используется и как pydantic-дефолт, и как seed-данные при restore_defaults() —
+голый `{}` обнуляет тематический мост (см. инцидент Phase 30 MemoryFixes:
+restore_defaults() → Tuning().model_dump() стирал theme_clusters в {}).
+"""
+
+
 class MemoryTuning(BaseModel):
     episodic: EpisodicTuning = Field(default_factory=EpisodicTuning)
     semantic: SemanticTuning = Field(default_factory=SemanticTuning)
     recent_injection: RecentInjectionTuning = Field(default_factory=RecentInjectionTuning)
     consolidator: ConsolidatorTuning = Field(default_factory=ConsolidatorTuning)
-    theme_clusters: Dict[str, List[str]] = Field(default_factory=dict)
+    theme_clusters: Dict[str, List[str]] = Field(default_factory=lambda: copy.deepcopy(DEFAULT_THEME_CLUSTERS))
 
 
-class EchoesTuning(BaseModel):
+class _GateSmartMixin(BaseModel):
+    """Phase 30 — параметры умного инжекта (общие для echoes и chinese).
+
+    Слой A: history_window_turns — окно последних реплик (зритель + Адам),
+            против которого матчатся теги (плюс тематический мост через
+            theme_clusters в Orchestrator).
+    Слой B: selection_floor + recency_window_days/recency_min — мягкий
+            вероятностный движок вместо жёсткого match_threshold.
+    Слой C: spontaneous_* — независимый низковероятный канал инжекта по
+            глубине сессии, без тематического матча.
+    Слой D: diversity_enabled — анти-повтор семантического кластера за сессию.
+    """
+
+    selection_floor: float = Field(0.15, ge=0, le=1)
+    recency_window_days: int = Field(30, ge=1, le=365)
+    recency_min: float = Field(0.5, ge=0, le=1)
+    diversity_enabled: bool = True
+    history_window_turns: int = Field(4, ge=0, le=20)
+    spontaneous_enabled: bool = True
+    spontaneous_probability: float = Field(0.05, ge=0, le=1)
+    spontaneous_min_turns: int = Field(3, ge=0, le=100)
+
+
+class EchoesTuning(_GateSmartMixin):
     enabled: bool = True
     global_cooldown_turns: int = Field(12, ge=0)
     per_echo_cooldown_days: int = Field(7, ge=0)
@@ -98,7 +139,7 @@ class EchoesTuning(BaseModel):
     default_entry_weight: float = Field(0.5, ge=0, le=1)
 
 
-class ChineseTuning(BaseModel):
+class ChineseTuning(_GateSmartMixin):
     enabled: bool = True
     global_cooldown_turns: int = Field(30, ge=0)
     per_echo_cooldown_days: int = Field(7, ge=0)
@@ -108,6 +149,7 @@ class ChineseTuning(BaseModel):
     score_boost: float = Field(0.2, ge=0, le=1)
     tag_short_cutoff: int = Field(3, ge=1, le=10)
     default_entry_weight: float = Field(0.5, ge=0, le=1)
+    spontaneous_probability: float = Field(0.03, ge=0, le=1)
     audio_mode: Literal[
         "prerendered_only",
         "prerendered_with_text_fallback",
@@ -189,6 +231,54 @@ class DiagnosticsTuning(BaseModel):
     trace_post_tts_lag: bool = False
 
 
+class InputHpfTuning(BaseModel):
+    """Phase 31 — input high-pass stage (generalises legacy media.audio.vad_hpf_hz)."""
+
+    enabled: bool = True
+    hz: float = Field(220.0, ge=0, le=2000)
+
+
+class InputDspBand(BaseModel):
+    """Phase 31 — one parametric EQ band on the microphone INPUT path."""
+
+    enabled: bool = True
+    type: Literal["peaking", "lowshelf", "highshelf", "lowpass", "highpass"] = "peaking"
+    freq_hz: float = Field(1000.0, ge=20, le=8000)
+    gain_db: float = Field(0.0, ge=-24, le=24)
+    q: float = Field(1.0, ge=0.1, le=10.0)
+
+
+class InputDspTuning(BaseModel):
+    """Phase 31 — streaming biquad EQ applied to captured mic PCM BEFORE OWW/ASR.
+
+    Hot-reloadable like voice.dsp. `enabled` is the master toggle (D-04); each
+    band/hpf has its own `enabled` for A/B diagnostics. Consumed by
+    adam.audio_dsp.InputDSP in Orchestrator._vad_loop. monitor_tap selects what
+    the browser monitor WebSocket hears (D-06/D-07).
+    """
+
+    enabled: bool = True
+    hpf: InputHpfTuning = Field(default_factory=InputHpfTuning)
+    bands: list[InputDspBand] = Field(default_factory=list)
+    monitor_tap: Literal["pre_eq", "post_eq"] = "post_eq"
+
+
+class EqPreset(BaseModel):
+    """Phase 31 — named saved EQ curve (D-05). Stored in Config.json, CRUD via API."""
+
+    name: str = Field(..., min_length=1, max_length=64)
+    hpf: InputHpfTuning = Field(default_factory=InputHpfTuning)
+    bands: list[InputDspBand] = Field(default_factory=list)
+
+
+class AudioInputTuning(BaseModel):
+    """Phase 31 — microphone input tuning: live DSP + saved presets."""
+
+    dsp: InputDspTuning = Field(default_factory=InputDspTuning)
+    presets: list[EqPreset] = Field(default_factory=list)
+    active_preset: Optional[str] = None
+
+
 class Tuning(BaseModel):
     """Корневая модель runtime-настроек персоны."""
 
@@ -199,6 +289,7 @@ class Tuning(BaseModel):
     scene_director: SceneDirectorTuning = Field(default_factory=SceneDirectorTuning)
     llm: LLMTuning = Field(default_factory=LLMTuning)
     voice: VoiceTuning = Field(default_factory=VoiceTuning)
+    audio_input: AudioInputTuning = Field(default_factory=AudioInputTuning)
     prompt: PromptTuning = Field(default_factory=PromptTuning)
     diagnostics: DiagnosticsTuning = Field(default_factory=DiagnosticsTuning)
 

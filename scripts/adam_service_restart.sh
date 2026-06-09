@@ -43,11 +43,15 @@ fi
 echo "▶ Adam Chip — restart"
 echo
 
-# --------- Systemd services --------------------------------------------------
+# --------- Systemd services (LLM + TTS) --------------------------------------
+# ASR is NOT here: native adam-asr-whisperx.service is masked (CPU-only, deprecated).
+# ASR runs exclusively via the Docker CUDA container — handled in its own block below.
+# Restarts are issued PER-UNIT (not multi-arg) because the NOPASSWD sudoers rules whitelist
+# only single-unit `systemctl restart adam-<name>.service` — a multi-arg `restart A B`
+# would not match and would prompt for a password.
 SYSD_SERVICES=()
 ${DO_LLM} && SYSD_SERVICES+=(adam-llm.service)
 ${DO_TTS} && SYSD_SERVICES+=(adam-tts-silero.service)
-${DO_ASR} && SYSD_SERVICES+=(adam-asr-whisperx.service)
 
 if [[ ${#SYSD_SERVICES[@]} -gt 0 ]]; then
   # Kill stray llama-server before LLM restart to avoid port 8081 conflict.
@@ -60,12 +64,14 @@ if [[ ${#SYSD_SERVICES[@]} -gt 0 ]]; then
     fi
   fi
 
-  echo "⏵ Перезапуск сервисов (sudo):"
-  if [[ "${EUID}" -ne 0 ]]; then
-    sudo systemctl restart "${SYSD_SERVICES[@]}" || true
-  else
-    systemctl restart "${SYSD_SERVICES[@]}" || true
-  fi
+  echo "⏵ Перезапуск сервисов (sudo, по одному):"
+  for s in "${SYSD_SERVICES[@]}"; do
+    if [[ "${EUID}" -ne 0 ]]; then
+      sudo systemctl restart "${s}" || true
+    else
+      systemctl restart "${s}" || true
+    fi
+  done
 
   sleep 2
   for s in "${SYSD_SERVICES[@]}"; do
@@ -77,46 +83,57 @@ if [[ ${#SYSD_SERVICES[@]} -gt 0 ]]; then
   done
 fi
 
-# --------- Orchestrator (PID-process) ----------------------------------------
+# --------- ASR (WhisperX — Docker CUDA, canonical) ---------------------------
+if ${DO_ASR}; then
+  echo "⏵ Перезапуск ASR (WhisperX Docker, CUDA):"
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "  ! docker не найден — ASR не перезапущен"
+  elif (cd "${ROOT_DIR}" && docker compose restart adam-asr-whisperx >/dev/null 2>&1); then
+    # Wait for CUDA model load + verify device.
+    for _ in $(seq 1 40); do
+      d="$(curl --noproxy '*' -fsS http://127.0.0.1:8095/health 2>/dev/null || true)"
+      echo "${d}" | grep -q '"model_loaded":true' && break
+      sleep 2
+    done
+    if echo "${d}" | grep -q '"device":"cuda"'; then
+      echo "  ✓ adam-asr-whisperx (Docker, :8095, device=cuda)"
+    elif echo "${d}" | grep -q '"model_loaded":true'; then
+      echo "  ⚠ adam-asr-whisperx работает, но device≠cuda — проверь docker logs adam-asr-whisperx"
+    else
+      echo "  ✗ adam-asr-whisperx не ответил на /health — docker logs adam-asr-whisperx"
+    fi
+  else
+    echo "  ✗ docker compose restart adam-asr-whisperx failed"
+  fi
+fi
+
+# --------- Orchestrator (systemd — единый владелец, Phase 30 Option A) --------
+# Раньше скрипт запускал bare-python и делал pkill — это дралось с systemd-юнитом
+# (тот рестартил убитый инстанс) и плодило дубликаты. Теперь — только systemd.
+# flock-singleton в Orchestrator.py гарантирует один инстанс (defence-in-depth).
 if ${DO_ORCH}; then
   [[ ${#SYSD_SERVICES[@]} -gt 0 ]] && echo
-  existing_pids="$(pgrep -f 'System/Orchestrator\.py' || true)"
-  if [[ -n "${existing_pids}" ]]; then
-    echo "⏵ Останавливаю orchestrator: ${existing_pids}"
-    kill ${existing_pids} 2>/dev/null || true
-    sleep 1
-    remaining="$(pgrep -f 'System/Orchestrator\.py' || true)"
-    [[ -n "${remaining}" ]] && kill -9 ${remaining} 2>/dev/null || true
-    rm -f "${PID_FILE}"
-  fi
+  echo "⏵ orchestrator → systemd restart (единый владелец)…"
+  if [[ "${EUID}" -ne 0 ]]; then sudo systemctl stop adam-orchestrator.service 2>/dev/null || true
+  else systemctl stop adam-orchestrator.service 2>/dev/null || true; fi
+  # Подчистить legacy bare-инстансы (до миграции на systemd-only).
+  strays="$(pgrep -f 'System/Orchestrator\.py' || true)"
+  if [[ -n "${strays}" ]]; then kill ${strays} 2>/dev/null || true; sleep 1; kill -9 ${strays} 2>/dev/null || true; fi
+  rm -f "${PID_FILE}"
+  if [[ "${EUID}" -ne 0 ]]; then sudo systemctl start adam-orchestrator.service
+  else systemctl start adam-orchestrator.service; fi
 
-  VENV_PYTHON="${ROOT_DIR}/.venv/bin/python"
-  MODELS_DIR="${ADAM_MODELS_DIR:-${ROOT_DIR}/Subsystem/Models}"
-  echo "⏵ Запуск orchestrator…"
-  cd "${ROOT_DIR}"
-  PYTHONPATH="${ROOT_DIR}/System" \
-    ADAM_MODE="${MODE}" \
-    ADAM_ORCHESTRATOR_PORT="${PORT}" \
-    ADAM_MODELS_DIR="${MODELS_DIR}" \
-    HF_HOME="${MODELS_DIR}/hf" \
-    HF_HUB_CACHE="${MODELS_DIR}/hf/hub" \
-    nohup "${VENV_PYTHON}" "${ROOT_DIR}/System/Orchestrator.py" >>"${LOG_FILE}" 2>&1 &
-  ORCH_PID=$!
-  echo "${ORCH_PID}" > "${PID_FILE}"
-  disown "${ORCH_PID}" 2>/dev/null || true
-
-  for i in $(seq 1 40); do
+  for i in $(seq 1 60); do
     if curl --noproxy '*' -fsS "http://127.0.0.1:${PORT}/api/agent/status" >/dev/null 2>&1; then
       break
     fi
-    sleep 0.3
+    sleep 0.5
   done
 
-  if kill -0 "${ORCH_PID}" 2>/dev/null; then
-    echo "  ✓ orchestrator (PID=${ORCH_PID})"
+  if systemctl is-active --quiet adam-orchestrator.service 2>/dev/null; then
+    echo "  ✓ orchestrator (systemd)"
   else
-    echo "  ✗ orchestrator упал:" >&2
-    tail -n 20 "${LOG_FILE}" >&2 || true
+    echo "  ✗ orchestrator (см. journalctl -u adam-orchestrator.service -n 30)" >&2
   fi
 fi
 
