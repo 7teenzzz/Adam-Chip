@@ -238,6 +238,15 @@ Knowledge-graphs/**/.graphify_uncached.txt
 Knowledge-graphs/**/manifest.json
 Knowledge-graphs/**/cost.json
 
+# Graphify AST cache (build artifacts — not useful in VCS)
+**/graphify-out/cache/
+
+# Secondary graphify-out dirs (canonical code graph is System/graphify-out/)
+Agent-Adam-Chip/graphify-out/
+Knowledge-graphs/graphify-out/
+Subsystem/graphify-out/
+docs/graphify-out/
+
 # Windows shortcuts
 *.lnk
 
