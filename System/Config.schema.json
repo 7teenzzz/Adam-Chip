@@ -618,8 +618,8 @@
               "type": "number",
               "minimum": 0.01,
               "maximum": 0.99,
-              "description": "Silero VAD speech-onset probability threshold passed to whisperx model.transcribe() via vad_options. A frame is considered speech start when Silero's probability exceeds this. Lower = more sensitive to brief or quiet speech. Default whisperx value is ~0.5, which misses 1-2s far-field commands. 0.1 restores behavior from commit e390d16. Mirrored in env ADAM_ASR_VAD_ONSET (systemd/Docker service). Changing Config.json has no effect without restarting the WhisperX service.",
-              "default": 0.1
+              "description": "Silero VAD speech-onset probability threshold passed to whisperx model.transcribe() via vad_options. A frame is considered speech start when Silero's probability exceeds this. Lower = more sensitive to brief or quiet speech. 0.2 is the recommended production value (reduced from 0.3 stable at 9da07f92; 0.1 caused near-silence hallucinations by triggering on room noise/hum). Mirrored in env ADAM_ASR_VAD_ONSET (systemd/Docker service). Changing Config.json has no effect without restarting the WhisperX service.",
+              "default": 0.2
             },
             "vad_offset": {
               "type": "number",
@@ -627,6 +627,13 @@
               "maximum": 0.99,
               "description": "Silero VAD speech-offset probability threshold passed to whisperx model.transcribe() via vad_options. Speech segment ends when Silero probability drops below this. Lower = more permissive in continuing a segment through quiet frames (breath gaps, hesitations). Mirrored in env ADAM_ASR_VAD_OFFSET. Changing Config.json has no effect without restarting the WhisperX service.",
               "default": 0.2
+            },
+            "asr_pre_send_min_rms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000,
+              "description": "Pre-send RMS gate: if the mean RMS of collected speech_frames falls below this value, the orchestrator skips the ASR call and returns an empty result. Catches fully-silent submissions that slipped past WebRTC VAD (e.g. stuck VAD state or very long silence-misclassified segment). 0 disables the gate. 200 is conservative — a real whispered command normalised through normalize_factor=8000 would exceed this. Compare with media.audio.silence_rms_threshold (per-frame gate during recording).",
+              "default": 200
             },
             "logprob_threshold": {
               "type": "number",

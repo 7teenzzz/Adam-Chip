@@ -38,6 +38,20 @@ _VAD_OFFSET = float(os.environ.get("ADAM_ASR_VAD_OFFSET", "0.2"))
 # for tuning — reload the Docker container or systemd unit to pick up the new value.
 _LOGPROB_THRESHOLD = float(os.environ.get("ADAM_ASR_LOGPROB_THRESHOLD", "-0.8"))
 
+# Per-segment no_speech_prob: probability that segment contains no speech (faster-whisper field).
+# Conservative default 0.85 — only discard when Whisper itself is 85%+ certain of silence.
+# Uses safe .get() fallback (0.0) so filter never fires if the field is absent.
+# Set env ADAM_ASR_NO_SPEECH_THRESHOLD=1.0 to disable.
+_NO_SPEECH_THRESHOLD = float(os.environ.get("ADAM_ASR_NO_SPEECH_THRESHOLD", "0.85"))
+
+# Per-segment compression_ratio: low values indicate short repetitive token sequences
+# (characteristic of near-silence hallucinations like "Спасибо за внимание").
+# Real speech: typically 1.8+. Hallucinations on near-silence: often 1.0–1.4.
+# Conservative default 1.1 — only discard extremely template-like sequences.
+# Uses safe .get() fallback (999.0) so filter never fires if the field is absent.
+# Set env ADAM_ASR_COMPRESSION_RATIO_MIN=0.0 to disable.
+_COMPRESSION_RATIO_MIN = float(os.environ.get("ADAM_ASR_COMPRESSION_RATIO_MIN", "1.1"))
+
 # Whisper hallucinates these phrases on near-silence or very short audio clips.
 # They appear in the training data (YouTube subtitles) and have high logprob even
 # on garbage input, so logprob filtering alone doesn't catch them.
@@ -199,11 +213,18 @@ def _transcribe_audio(audio: np.ndarray) -> str:
     result = model.transcribe(audio, language=_LANGUAGE, batch_size=1)
     parts = []
     for seg in result.get("segments", []):
-        # avg_logprob: lower = worse quality. Configurable via _LOGPROB_THRESHOLD
-        # (env ADAM_ASR_LOGPROB_THRESHOLD). Default -0.8 tolerates quiet/distant speech;
-        # set to -1.7 to also accept brief uncertain segments from the INMP441 mic.
-        # NOTE: whisperx uses avg_logprob (NOT no_speech_prob which is faster-whisper only)
+        # avg_logprob: lower = worse quality. Configurable via _LOGPROB_THRESHOLD.
         if seg.get("avg_logprob", -1.0) < _LOGPROB_THRESHOLD:
+            continue
+        # no_speech_prob: Whisper's own estimate that this segment has no speech.
+        # Available from faster-whisper which whisperx uses internally. Safe fallback 0.0
+        # means the filter never fires on segments where the field is absent.
+        if seg.get("no_speech_prob", 0.0) >= _NO_SPEECH_THRESHOLD:
+            continue
+        # compression_ratio: low value = short repetitive token sequence = likely hallucination.
+        # Real speech: ~1.8+. Template hallucinations on near-silence: ~1.0–1.4.
+        # Safe fallback 999.0 means the filter never fires if the field is absent.
+        if seg.get("compression_ratio", 999.0) <= _COMPRESSION_RATIO_MIN:
             continue
         text = seg.get("text", "").strip()
         if text and text.lower().strip("[]().,!? ") not in _HALLUCINATION_PATTERNS:

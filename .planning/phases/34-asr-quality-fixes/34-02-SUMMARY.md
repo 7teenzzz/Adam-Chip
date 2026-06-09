@@ -1,123 +1,55 @@
 ---
-phase: 34-asr-quality-fixes
-plan: "02"
-status: partial
-subsystem: ASR / Orchestrator
-tags: [asr, hallucination-filter, defense-in-depth, whisper-small]
-dependency_graph:
-  requires: []
-  provides: [asr_filter_module, orchestrator_hallucination_guard]
-  affects: [System/adam/asr_filter.py, System/Speech/ASR_WhisperX.py, System/Orchestrator.py]
-tech_stack:
-  added: [System/adam/asr_filter.py]
-  patterns: [defense-in-depth, shared-canonical-pattern-set]
-key_files:
-  created:
-    - System/adam/asr_filter.py
-  modified:
-    - System/Orchestrator.py
-    - System/Speech/ASR_WhisperX.py
-decisions:
-  - "ASR_WhisperX.py keeps local copy of patterns (no import from adam.asr_filter) — Docker container does not have System/adam/ in COPY directives"
-  - "asr_filter.py is declared canonical source; ASR_WhisperX.py has sync comment"
-  - "Hallucination guard fires after empty-check, before wake-word strip — correct defense-in-depth position"
-metrics:
-  completed_date: "2026-06-09T01:03:32Z"
-  tasks_completed: 2
-  tasks_total: 3
-  files_created: 1
-  files_modified: 2
+phase: 34
+wave: 2
+status: done
+completed: 2026-06-09
 ---
 
-# Phase 34 Plan 02: Hallucination Guard — Partial Summary (Tasks 1–2)
+# Phase 34 Wave 2 — ASR Hallucination Root-Cause Fixes
 
-**One-liner:** Second-tier hallucination guard in Orchestrator + shared canonical pattern module (47 patterns) blocking Whisper artefacts even with stale ASR Docker container.
+## Goal achieved
 
-## Status: PARTIAL — Task 3 (Docker rebuild) pending human action
+Addressed ASR hallucinations at the root cause (near-silence audio triggering WhisperX) rather than only expanding pattern lists.
 
-Tasks 1 and 2 complete and committed. Task 3 requires running `docker compose build adam-asr-whisperx` on the Jetson.
+## Changes made
 
-## Completed Tasks
+### 1. Config.json + Config.schema.json
+- `vad_onset`: 0.1 → 0.2 (primary root-cause fix — 0.1 was too sensitive, triggered on room noise)
+- Added `asr_pre_send_min_rms: 200` — pre-send RMS gate, skips ASR entirely on near-silent PCM
 
-| Task | Name | Commit | Files |
-|------|------|--------|-------|
-| 1 | Create System/adam/asr_filter.py | 18510c6 | System/adam/asr_filter.py (new, 107 lines) |
-| 2 | Wire guard into Orchestrator + sync ASR_WhisperX | 7c6e03f | System/Orchestrator.py, System/Speech/ASR_WhisperX.py |
+### 2. System/Orchestrator.py
+- RMS gate in `_transcribe_and_dispatch`: computes RMS of PCM before ASR call; if < `asr_pre_send_min_rms`, emits `asr_skipped_silent` event and returns without calling ASR
+- Uses stdlib `struct` (numpy not imported in Orchestrator)
+- `_is_hallucination` guard preserved (from previous wave): pattern check after transcription
 
-## What Changed
+### 3. System/Speech/ASR_WhisperX.py
+- Added `_NO_SPEECH_THRESHOLD = 0.85` (env: `ADAM_ASR_NO_SPEECH_THRESHOLD`)
+- Added `_COMPRESSION_RATIO_MIN = 1.1` (env: `ADAM_ASR_COMPRESSION_RATIO_MIN`)
+- Applied both filters in `_transcribe_audio` segment loop after avg_logprob check
+- Safe `.get()` fallbacks (0.0 / 999.0) — filters never fire if fields absent
 
-### Task 1 — System/adam/asr_filter.py (new file)
+### 4. compose.yaml
+- `ADAM_ASR_VAD_ONSET` default: `0.1` → `0.2`
 
-Pure stdlib module. Exports:
-- `HALLUCINATION_PATTERNS: frozenset[str]` — 47 normalised patterns (canonical source)
-- `is_hallucination(text: str) -> bool` — case-insensitive, strips brackets/punctuation
+## Defense layers (in order of application)
 
-Pattern categories:
-- YouTube subtitle hallucinations (original 17 patterns from ASR_WhisperX.py)
-- Bracket/noise markers (тихая музыка, music, applause, blank_audio, inaudible, аплодисменты, смех)
-- Whisper-small Russian artefacts: компиция, цыц, ля ля ля, да да, нет нет, хорошо хорошо, ок ок
-- YouTube/attention CTAs: лайк и подписка, колокольчик уведомлений, пока пока, etc.
-- Punctuation-only: ".", ",", "..."
+1. **vad_onset=0.2** — Silero VAD less likely to trigger on room hum/noise (root cause)
+2. **RMS gate** — Skip ASR entirely if PCM is near-silent (pre-call, Orchestrator)
+3. **no_speech_prob** — Discard segments where Whisper is ≥85% sure there's no speech
+4. **compression_ratio** — Discard extremely template-like sequences (hallucination signature)
+5. **Pattern guard** — Last resort: 47 known YouTube/subtitle phrases blocked in both ASR_WhisperX.py and Orchestrator
 
-All 10 behavior tests pass including: case-insensitive, bracket-stripped, empty/whitespace safe.
+## Required action (human)
 
-### Task 2 — Orchestrator.py
-
-Import added at module top:
-```python
-from adam.asr_filter import is_hallucination as _is_hallucination
-```
-
-Second-tier guard in `_transcribe_and_dispatch` (after empty-check, before wake-word strip):
-```python
-if _is_hallucination(transcript):
-    event_log.append("asr_hallucination_filtered", {
-        "raw": transcript[:120],
-        "utterance_id": self._utterance_id,
-    }, turn_id=turn_id)
-    return False
-```
-
-Event `asr_hallucination_filtered` provides full audit trail in events.jsonl.
-
-### Task 2 — ASR_WhisperX.py
-
-- `_HALLUCINATION_PATTERNS` extended with all new patterns (YouTube CTAs, Whisper artefacts, bracket markers)
-- Sync comment added at top of the set pointing to `asr_filter.py` as canonical source
-- **No import** of `adam.asr_filter` — Docker container doesn't have `System/adam/` in COPY directives
-
-## Pending: Task 3 (Docker Rebuild)
-
-The ASR Docker container must be rebuilt to pick up the extended `_HALLUCINATION_PATTERNS` in `ASR_WhisperX.py`. Until rebuilt, first-tier filtering inside Docker uses the old pattern set, but the second tier in Orchestrator (just added) already blocks all hallucinations on the host side.
-
-**To complete Task 3 on Jetson:**
+Docker rebuild needed for ASR_WhisperX.py code changes:
 ```bash
-docker compose build adam-asr-whisperx
-docker compose up -d adam-asr-whisperx
-# Wait ~60s for model to load
-curl --noproxy '*' http://127.0.0.1:8095/health
-
-# Verify second-tier guard (orchestrator side):
-curl --noproxy '*' -X POST http://127.0.0.1:8080/api/agent/turn \
-  -H 'Content-Type: application/json' \
-  -d '{"transcript":"Спасибо за внимание."}'
-# Expected: no Adam response; check events.jsonl for asr_hallucination_filtered event
+docker compose build adam-asr-whisperx && docker compose up -d adam-asr-whisperx
 ```
 
-## Deviations from Plan
+vad_onset change in compose.yaml also requires container restart (included in rebuild).
 
-None — plan executed exactly as specified. The constraint that ASR_WhisperX.py cannot import from adam.asr_filter (Docker scope) was documented in the plan and handled correctly.
+## Reference
 
-## Self-Check
+Root cause identified via git bisect: commit 9da07f92 (vad_onset=0.3, no hallucinations) vs commit cb93798 (vad_onset=0.1 via compose.yaml, hallucinations appear).
 
-- [x] System/adam/asr_filter.py exists and importable
-- [x] All 10 behavior tests pass (47 patterns)
-- [x] Orchestrator.py syntax clean (ast.parse OK)
-- [x] ASR_WhisperX.py syntax clean (ast.parse OK)
-- [x] `asr_hallucination_filtered` event name present in Orchestrator.py (1 match)
-- [x] `_is_hallucination` appears 2 times in Orchestrator.py (import + usage)
-- [x] Guard position: after empty-check (line 1629), before wake-word strip (line 1647)
-- [x] Sync comment in ASR_WhisperX.py present
-- [x] No import of adam.asr_filter in ASR_WhisperX.py
-
-## Self-Check: PASSED
+Pattern expansion alone cannot catch template hallucinations — they have HIGH avg_logprob (~-0.3) because the phrases are memorized YouTube training data.

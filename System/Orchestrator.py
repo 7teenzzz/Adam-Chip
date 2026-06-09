@@ -1612,6 +1612,23 @@ class VoiceLoopController:
             "provider": self.asr_client.__class__.__name__,
             "utterance_id": self._utterance_id,
         }, turn_id=turn_id)
+        # Pre-send RMS gate: skip ASR if audio is near-silent (catches frames that slipped
+        # past WebRTC VAD but contain no actual speech — prevents WhisperX hallucinations).
+        _rms_gate = int(settings.section("services").get("asr", {}).get("asr_pre_send_min_rms", 200))
+        if _rms_gate > 0 and pcm:
+            import struct as _struct
+            _n = len(pcm) // 2
+            if _n > 0:
+                _samples = _struct.unpack(f"<{_n}h", pcm[:_n * 2])
+                _rms = (sum(s * s for s in _samples) / _n) ** 0.5
+                if _rms < _rms_gate:
+                    event_log.append("asr_skipped_silent", {
+                        "rms": round(_rms),
+                        "rms_gate": _rms_gate,
+                        "pcm_ms": pcm_ms,
+                    }, turn_id=turn_id)
+                    return False
+
         t_asr = time.perf_counter()
         try:
             transcript = (await self.asr_client.transcribe_pcm(pcm)).strip()
