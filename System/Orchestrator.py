@@ -478,6 +478,13 @@ class VoiceLoopController:
         # 4 × 20ms frames = 80ms chunks for openWakeWord
         self._ww_buf: list[bytes] = []
         self._ww_frames_needed = 4
+        # Pre-wake rolling buffer: retains audio from before OWW debounce confirmation
+        # so that single-phrase utterances like "адам скажи что-нибудь" are not truncated.
+        # On OWW trigger, list(_pre_wake_buf) is prepended to speech_frames instead of
+        # the legacy speech_frames.clear(). Configured by services.asr.pre_wake_buffer_ms.
+        self._pre_wake_buffer_ms: int = int(asr_cfg.get("pre_wake_buffer_ms", 1500))
+        _pre_wake_frames = max(1, self._pre_wake_buffer_ms // self.frame_ms)
+        self._pre_wake_buf: deque[bytes] = deque(maxlen=_pre_wake_frames)
         self._standby_entry_time: float = 0.0   # set on reply→standby; arms the OWW guard window
         self._STANDBY_GUARD_SEC: float = 0.3    # post-TTS ALSA drain; boot guard not needed (entry_time=0.0 at boot)
         self._REPLY_GUARD_SEC: float = 0.6      # post-TTS guard for reply state — suppress echo of own TTS picked up by ESP32 mic
@@ -1142,6 +1149,10 @@ class VoiceLoopController:
                         if time.perf_counter() - self._standby_entry_time < self._STANDBY_GUARD_SEC:
                             self.vad_state = "standby_guard"
                             continue
+                        # Rolling pre-wake buffer: capture every standby frame so that
+                        # audio uttered before OWW debounce confirmation is not lost.
+                        # Uses processed `chunk` (post-EQ) matching what ASR will see.
+                        self._pre_wake_buf.append(chunk)
                         self._ww_buf.append(_raw_chunk_for_monitor)
                         if len(self._ww_buf) >= self._ww_frames_needed:
                             pcm_80ms = b"".join(self._ww_buf)
@@ -1168,9 +1179,20 @@ class VoiceLoopController:
                                 self._set_voice_state("listening", "wake_word")
                                 self._webrtc_vad.reset_states()
                                 self._wake_detected_at = time.perf_counter()
-                                speech_frames.clear()
-                                speech_ms = 0
+                                # Prepend pre-wake audio to capture any speech uttered
+                                # before OWW debounce confirmation (BUG-1 fix).
+                                # speech_frames is normally empty here (standby → listening
+                                # transition) but the prepend is safe even if not empty.
+                                _pre_wake_list = list(self._pre_wake_buf)
+                                speech_frames = _pre_wake_list + speech_frames
+                                self._pre_wake_buf.clear()
+                                speech_ms = len(speech_frames) * self.frame_ms
                                 silence_ms = 0
+                                event_log.append("pre_wake_prepend", {
+                                    "pre_wake_frames": len(_pre_wake_list),
+                                    "pre_wake_ms": len(_pre_wake_list) * self.frame_ms,
+                                    "total_speech_frames": len(speech_frames),
+                                })
                     elif not self.wake_word_required and voiced:
                         # No wake word required (maintenance / local-dev mode).
                         # VAD-based entry: any voiced frame after the guard period opens listening.
