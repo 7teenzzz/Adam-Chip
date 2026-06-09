@@ -953,6 +953,31 @@ Plans:
 
 ---
 
+## Phase 35: Live Integration Testing — ultimate-integration после всех слияний
+
+**Branch:** `ultimate-integration` (worktree `/tmp/adam-ult`, merge `15d23ca` ещё не запушен)
+
+**Goal:** Подтвердить живыми тёрнами на железе Jetson, что полностью собранная ветка `ultimate-integration` работает end-to-end после всех предыдущих слияний (voice-loop-recovery Phase 34 ASR, LuxFlora ремап каналов, MemoryFixes, Extra шутки+погода, и только что разрешённый merge с починкой мохибейка Config.json). Не косметика — реальный голос в микрофон, реальный звук из ESP-динамика, реальная запись эпизода в память.
+
+**Requires:**
+- Merge `15d23ca` в worktree (Config.json де-мохибейк + barge-in fix) — готов, не запушен
+- Живое железо: ESP на `10.10.10.171` (mic INMP441 + динамик PCM5102A), Jetson в сети `10.10.10.x`
+- Сервисы: llama.cpp(:8081), Silero TTS(:8082), WhisperX(:8095), оркестратор(:8080)
+
+**Delivers:**
+- Wave 1 — Bring-up & smoke: подъём сервисов, healthcheck, валидация конфига на железе (wake_words=«адам», persona грузится, flora.enabled, skills weather/jokes)
+- Wave 2 — Live voice E2E: wake «адам» → ASR → LLM → TTS → звук из ESP; barge-in (прерывание во время TTS); silence keyword «стоп»
+- Wave 3 — Integration surfaces: флора-сосуществование (моторика Адама overlay поверх фоновой флоры, не подавление), pre-LLM скиллы шутки/погода, запись эпизода в episodic memory
+- Wave 4 — Debug loop: для каждого дефекта из живых тёрнов — `/gsd-debug` (научный метод, persistent state), фикс, ре-тест; решение go/no-go на push
+
+**Requirements:** REQ-INT-VOICE-E2E (голос end-to-end через ESP), REQ-INT-FLORA-COEXIST (сосуществование моторики и флоры), REQ-INT-SKILLS (шутки/погода pre-LLM), REQ-INT-MEMORY (запись эпизода), REQ-INT-CONFIG-LIVE (конфиг валиден на железе)
+
+**Mode:** standard | **Priority:** P0 | **Effort:** M | **Exhibition:** Critical
+
+**Связь с историей:** `ultimate-integration` — пред-main интеграционная ветка, собравшая 4 линии разработки. До мёржа в main нужно живое подтверждение, что слияния не сломали голосовой тракт и что починка мохибейка (wake word на ult читался как «Р°РґР°Рj») восстановила распознавание.
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.
