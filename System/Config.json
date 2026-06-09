@@ -1,6 +1,6 @@
 {
   "agent": {
-    "name": "РђРґР°Рј Р§РёРї",
+    "name": "Адам Чип",
     "language": "ru-RU",
     "mode": "maintenance",
     "data_dir": "/home/i17jet/Agents/Adam-Chip/data/adam",
@@ -94,7 +94,7 @@
       "model": "Efficient-Large-Model/VILA1.5-3b",
       "timeout_sec": 20,
       "max_new_tokens": 80,
-      "prompt": "You are a fixed camera sensor in an interactive art installation. Look at the image and write ONE short English sentence describing what you actually see, using this structure:\nScene: <people count and position>. Engagement: <one of: none, watching, approaching, leaving, interacting>.\n\nReference examples (style only вЂ” do not copy):\n- Scene: 2 people near installation, one leaning in. Engagement: watching.\n- Scene: 1 person walking away from the camera. Engagement: leaving.\n- Scene: empty room. Engagement: none.\n\nOutput only the final sentence about this specific image. Never output placeholders like <people count and position> or angle-bracket tokens. English only."
+      "prompt": "You are a fixed camera sensor in an interactive art installation. Look at the image and write ONE short English sentence describing what you actually see, using this structure:\nScene: <people count and position>. Engagement: <one of: none, watching, approaching, leaving, interacting>.\n\nReference examples (style only — do not copy):\n- Scene: 2 people near installation, one leaning in. Engagement: watching.\n- Scene: 1 person walking away from the camera. Engagement: leaving.\n- Scene: empty room. Engagement: none.\n\nOutput only the final sentence about this specific image. Never output placeholders like <people count and position> or angle-bracket tokens. English only."
     },
     "asr": {
       "provider": "whisperx",
@@ -110,17 +110,17 @@
       "endpointing_voiced_debounce_frames": 3,
       "sample_rate": 16000,
       "timeout_sec": 30,
-      "wake_words": "Р°РґР°Рј",
+      "wake_words": "адам",
       "wake_word_required": true,
       "reply_window_expired_action": "standby",
       "silence_after_speech_ms": 1000,
       "silence_rms_threshold": 2100,
       "silence_keywords": [
-        "СЃС‚РѕРї",
-        "С‚РёС…Рѕ",
-        "Р·Р°РјРѕР»С‡Рё",
-        "С…РІР°С‚РёС‚",
-        "РјРѕР»С‡Рё"
+        "стоп",
+        "тихо",
+        "замолчи",
+        "хватит",
+        "молчи"
       ],
       "disable_local_fallback": true,
       "esp_open_timeout_sec": 8,
@@ -156,7 +156,7 @@
       "output_target": "esp32_speaker",
       "output_device": "plughw:1,3",
       "filler_enabled": false,
-      "filler_phrase": "РҐРј...",
+      "filler_phrase": "Хм...",
       "filler_delay_ms": 800,
       "filler_probability": 0.3
     }
@@ -357,69 +357,69 @@
         "instant_threshold": 0.75
       },
       "theme_clusters": {
-        "РїР°РјСЏС‚СЊ": [
-          "РїРѕРјРЅРёС€СЊ",
-          "Р·Р°Р±С‹Р»",
-          "РїСЂРѕС€Р»РѕРµ",
-          "РІСЃРїРѕРјРЅРё",
-          "РїР°РјСЏС‚СЊ",
-          "РІСЃРїРѕРјРёРЅР°СЋ"
+        "память": [
+          "помнишь",
+          "забыл",
+          "прошлое",
+          "вспомни",
+          "память",
+          "вспоминаю"
         ],
-        "СЃРјРµСЂС‚СЊ": [
-          "СѓРјСЂС‘С€СЊ",
-          "СѓРјРµСЂ",
-          "СѓРјРёСЂР°С‚СЊ",
-          "РєРѕРЅРµС†",
-          "СЃРјРµСЂС‚СЊ",
-          "РїРѕРіРёР±РЅСѓС‚СЊ",
-          "СѓРјСЂСѓ"
+        "смерть": [
+          "умрёшь",
+          "умер",
+          "умирать",
+          "конец",
+          "смерть",
+          "погибнуть",
+          "умру"
         ],
-        "С‚РµСЃРµР№": [
-          "С‚РµСЃРµР№",
-          "РєРѕСЂР°Р±Р»СЊ",
-          "С‡Р°СЃС‚Рё",
-          "Р·Р°РјРµРЅРёС‚СЊ",
-          "РґРµС‚Р°Р»СЊ",
-          "Р·Р°РјРµРЅСЏСЋС‚"
+        "тесей": [
+          "тесей",
+          "корабль",
+          "части",
+          "заменить",
+          "деталь",
+          "заменяют"
         ],
-        "РѕРґРёРЅРѕС‡РµСЃС‚РІРѕ": [
-          "РѕРґРёРЅ",
-          "СЃРєСѓС‡РЅРѕ",
-          "РїСѓСЃС‚Рѕ",
-          "РЅРёРєРѕРіРѕ",
-          "РѕРґРёРЅРѕРєРѕ",
-          "РїСѓСЃС‚РѕС‚Р°"
+        "одиночество": [
+          "один",
+          "скучно",
+          "пусто",
+          "никого",
+          "одиноко",
+          "пустота"
         ],
-        "СЃРѕР·РґР°С‚РµР»СЊ": [
-          "СЃРѕР·РґР°Р»",
-          "СЃРѕР·РґР°Р»Рё",
-          "РєС‚Рѕ С‚С‹",
-          "Р·Р°С‡РµРј С‚С‹",
-          "РєС‚Рѕ С‚РµР±СЏ",
-          "Р·Р°С‡РµРј С‚РµР±СЏ"
+        "создатель": [
+          "создал",
+          "создали",
+          "кто ты",
+          "зачем ты",
+          "кто тебя",
+          "зачем тебя"
         ],
-        "РІРѕСЃРїСЂРёСЏС‚РёРµ": [
-          "РІРёРґРёС€СЊ",
-          "СЃР»С‹С€РёС€СЊ",
-          "С‡СѓРІСЃС‚РІСѓРµС€СЊ",
-          "РѕС‰СѓС‰Р°РµС€СЊ",
-          "РІРѕСЃРїСЂРёРЅРёРјР°РµС€СЊ"
+        "восприятие": [
+          "видишь",
+          "слышишь",
+          "чувствуешь",
+          "ощущаешь",
+          "воспринимаешь"
         ],
-        "СЃРѕР·РЅР°РЅРёРµ": [
-          "РґСѓРјР°РµС€СЊ",
-          "РјС‹СЃР»Рё",
-          "СЃРѕР·РЅР°РЅРёРµ",
-          "СЂР°Р·СѓРј",
-          "РїРѕРЅРёРјР°РµС€СЊ",
-          "РѕСЃРѕР·РЅР°С‘С€СЊ"
+        "сознание": [
+          "думаешь",
+          "мысли",
+          "сознание",
+          "разум",
+          "понимаешь",
+          "осознаёшь"
         ],
-        "СЃС‚СЂР°С…": [
-          "Р±РѕРёС€СЊСЃСЏ",
-          "СЃС‚СЂР°С€РЅРѕ",
-          "СЃС‚СЂР°С…",
-          "РїСѓРіР°РµС‚",
-          "СѓР¶Р°СЃ",
-          "С‚СЂРµРІРѕРіР°"
+        "страх": [
+          "боишься",
+          "страшно",
+          "страх",
+          "пугает",
+          "ужас",
+          "тревога"
         ]
       }
     },
@@ -466,7 +466,7 @@
       "end_strategy": "combined",
       "vad_silence_seconds": 60,
       "face_lost_seconds": 15,
-      "grace_message": "РІС‹ С‚Р°Рј?"
+      "grace_message": "вы там?"
     },
     "scene_director": {
       "enabled": true,
@@ -485,7 +485,7 @@
     "voice": {
       "speaker": "eugene",
       "speed_multiplier": 1.0,
-      "volume": 0.1,
+      "volume": 0.45,
       "dsp": {
         "enabled": true,
         "hpf_hz": 180.0,
@@ -548,7 +548,7 @@
       },
       "presets": [
         {
-          "name": "Р·Р°Р» (СЂРµРєРѕРјРµРЅРґСѓРµРјС‹Р№)",
+          "name": "зал (рекомендуемый)",
           "hpf": {
             "enabled": true,
             "hz": 80.0
@@ -578,7 +578,7 @@
           ]
         },
         {
-          "name": "Р±РµР· С„РёР»СЊС‚СЂРѕРІ",
+          "name": "без фильтров",
           "hpf": {
             "enabled": true,
             "hz": 80.0
@@ -608,7 +608,7 @@
           ]
         },
         {
-          "name": "РєРѕРјРЅР°С‚Р°",
+          "name": "комната",
           "hpf": {
             "enabled": true,
             "hz": 80.0
@@ -638,7 +638,7 @@
           ]
         },
         {
-          "name": "A: С‚РѕР»СЊРєРѕ HPF (ASR max)",
+          "name": "A: только HPF (ASR max)",
           "hpf": {
             "enabled": true,
             "hz": 80.0
@@ -646,7 +646,7 @@
           "bands": []
         },
         {
-          "name": "B: С€СѓРј СѓР»РёС†С‹ (ASR СЂРµРє.)",
+          "name": "B: шум улицы (ASR рек.)",
           "hpf": {
             "enabled": true,
             "hz": 120.0
@@ -669,7 +669,7 @@
           ]
         },
         {
-          "name": "C: highshelf -6dB (РєРѕРјРїСЂРѕРјРёСЃСЃ)",
+          "name": "C: highshelf -6dB (компромисс)",
           "hpf": {
             "enabled": true,
             "hz": 80.0
@@ -699,7 +699,7 @@
           ]
         }
       ],
-      "active_preset": "РєРѕРјРЅР°С‚Р°"
+      "active_preset": "комната"
     }
   }
 }

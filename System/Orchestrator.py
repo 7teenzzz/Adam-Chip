@@ -168,6 +168,11 @@ prompt_trace: deque[dict[str, Any]] = deque(maxlen=_PROMPT_TRACE_MAX)
 # Pre-compiled sentence boundary regex for streaming LLM→TTS pipeline.
 # Matches .!?。！？ and em-dash (—, common in Russian) followed by whitespace.
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？—])\s+")
+# Chunks that contain no speakable content: only punctuation, ellipses, dashes,
+# whitespace, or Markdown fences. Silero /wav returns None for these, producing
+# tts_chunk_failed events (observed with "..." as joke-ending chunk from Gemma).
+# Filter in _producer before enqueuing so _consumer never sees them.
+_PUNCT_ONLY_RE = re.compile(r"^[\s.,!?\u2026\-\u2014\u2013`'*_#\[\]()]+$")
 
 
 def _apply_wav_speed(wav: bytes, speed: float) -> bytes:
@@ -951,6 +956,7 @@ class VoiceLoopController:
         _bi_debounce = max(1, int(_ww_cfg.get("barge_in_debounce_hits", 3)))
         _bi_hits = 0
         _buf: list[bytes] = []
+        _was_speaking = False
         try:
             while self.running:
                 # Only scan when Adam is actually speaking (TTS playing).
@@ -968,8 +974,24 @@ class VoiceLoopController:
                                 bq.get_nowait()
                             except Exception:
                                 break
+                    _was_speaking = False
                     await asyncio.sleep(0.05)
                     continue
+                # Reset OWW model state on the False→True transition so accumulated
+                # LSTM state from the previous wake-word detection doesn't carry over
+                # and produce an immediate high score on the first audio frame of TTS.
+                # NOTE: do NOT flush the queue here — audio the user speaks at the
+                # very start of TTS (the barge-in attempt) lands in _barge_in_q
+                # during this gap. Flushing it would discard exactly the "адам"
+                # we are trying to detect and prevent OWW from ever accumulating
+                # the required debounce_hits. The queue is already drained every
+                # 50 ms while speaking=False, so no stale pre-TTS audio survives.
+                if not _was_speaking:
+                    _buf.clear()
+                    _bi_hits = 0
+                    self._wake_engine.reset()
+                    event_log.append("barge_in_monitor_active", {"barge_in_q_is_none": bq is None})
+                _was_speaking = True
                 bq = self._barge_in_q
                 if bq is None:
                     await asyncio.sleep(0.05)
@@ -987,14 +1009,35 @@ class VoiceLoopController:
                     continue
                 pcm_80ms = b"".join(_buf)
                 _buf.clear()
+                # Log RMS every 20 OWW evaluations during barge-in for audio level diagnostics.
+                _bi_eval_count = getattr(self, "_bi_eval_count", 0) + 1
+                self._bi_eval_count = _bi_eval_count
+                if _bi_eval_count % 20 == 0:
+                    import audioop as _ao2
+                    _pcm_rms = _ao2.rms(pcm_80ms, 2)
+                    event_log.append("barge_in_audio_rms", {"rms": _pcm_rms, "size": len(pcm_80ms)})
                 # Advance the OWW model state but use local hit counter (not
                 # the engine's internal debounce) so barge-in and wake-word
                 # detection have independent thresholds.
-                self._wake_engine.process_chunk(pcm_80ms)
+                try:
+                    self._wake_engine.process_chunk(pcm_80ms)
+                except Exception as exc:
+                    event_log.append("barge_in_oww_error", {
+                        "error": str(exc),
+                        "chunk_size": len(pcm_80ms),
+                    })
+                    _buf.clear()
+                    continue
                 score = getattr(self._wake_engine, "last_score", None)
                 _ww_threshold = getattr(self._wake_engine, "_threshold", 0.02)
+                # Log every 10th score during barge-in monitoring for diagnostics.
+                _bi_frame_count = getattr(self, "_bi_diag_frame", 0) + 1
+                self._bi_diag_frame = _bi_frame_count
+                if _bi_frame_count % 10 == 0:
+                    event_log.append("barge_in_score", {"score": round(float(score), 4) if score is not None else None, "n": _bi_frame_count})
                 if score is not None and float(score) >= _ww_threshold:
                     _bi_hits += 1
+                    event_log.append("barge_in_hit", {"score": round(float(score), 4), "hits": _bi_hits})
                 else:
                     _bi_hits = 0
                 triggered = _bi_hits >= _bi_debounce
@@ -1411,12 +1454,18 @@ class VoiceLoopController:
                         # Start a parallel arecord dedicated to OWW-only during
                         # TTS. Its output never reaches VAD/ASR — only _barge_in_q.
                         # ESP32 path doesn't need this: _drain_loop feeds the queue.
+                        event_log.append("barge_in_proc_check", {
+                            "using_process": _using_process,
+                            "barge_in_q": self._barge_in_q is not None,
+                            "barge_in_enabled": self._barge_in_enabled,
+                        })
                         if _using_process and self._barge_in_q is not None:
                             self._barge_in_proc = self._start_arecord()
                             self._barge_in_feed_task = asyncio.create_task(
                                 self._local_barge_in_feed(self._barge_in_proc),
                                 name="adam_local_barge_in_feed",
                             )
+                            event_log.append("barge_in_proc_started", {})
 
                         spoke = await self._transcribe_and_dispatch(pcm)
 
@@ -1479,8 +1528,11 @@ class VoiceLoopController:
                             )
                             if _diag_on:
                                 self.mic_reader.begin_lag_diag(4000.0, "post_transcribe")
-                        # Barge-in: wake word fired during TTS → skip reply window,
-                        # go directly to listening for the user's new request.
+                        # Barge-in: wake word fired during TTS → open a short reply window
+                        # so the user's follow-up ("тихо", "стоп", or a new request) is
+                        # captured by VAD and processed immediately without requiring another
+                        # wake word. Silence keywords are checked in reply state too (see
+                        # _transcribe_and_dispatch), so "Адам, тихо" works end-to-end.
                         if self._barge_in_triggered:
                             self._barge_in_triggered = False
                             self._current_producer_task = None
@@ -1491,12 +1543,17 @@ class VoiceLoopController:
                             self._ww_buf.clear()
                             if self._wake_engine is not None:
                                 self._wake_engine.reset()
-                            self._wake_detected_at = time.perf_counter()
-                            event_log.append("barge_in_listening", {
+                            self._reply_start = time.perf_counter()
+                            _bi_total_timeout = (
+                                self._post_tts_discard_window_ms / 1000.0
+                                + self._reply_silence_timeout_sec
+                            )
+                            event_log.append("barge_in_reply", {
                                 "utterance_id": self._utterance_id,
-                                "silence_timeout_sec": self._listening_silence_timeout_sec,
+                                "timeout_sec": round(_bi_total_timeout, 2),
+                                "silence_timeout_sec": self._reply_silence_timeout_sec,
                             })
-                            self._set_voice_state("listening", "barge_in")
+                            self._set_voice_state("reply", "barge_in")
                             continue
                         # Manual interrupt (button / API): go to standby, skip reply window.
                         if self._manual_interrupt_triggered:
@@ -1557,13 +1614,33 @@ class VoiceLoopController:
         """
         if proc.stdout is None:
             return
-        read_fn = proc.stdout.read
+        raw_read = proc.stdout.read
         fb = max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
+
+        def _read_exact_bi(n: int) -> bytes:
+            # PipeWire/PulseAudio delivers audio in small quanta (e.g. 160 bytes = 5ms
+            # at 16kHz) instead of the requested frame size (640 bytes = 20ms).
+            # Accumulate until we have exactly n bytes so OWW always gets full frames.
+            buf = raw_read(n)
+            while buf and len(buf) < n:
+                tail = raw_read(n - len(buf))
+                if not tail:
+                    return buf
+                buf += tail
+            return buf
+
+        _feed_chunk_count = 0
         try:
             while True:
-                chunk = await asyncio.to_thread(read_fn, fb)
-                if not chunk:
-                    break
+                chunk = await asyncio.to_thread(_read_exact_bi, fb)
+                if len(chunk) < fb:
+                    event_log.append("barge_in_feed_eof", {"chunks_sent": _feed_chunk_count, "last_size": len(chunk)})
+                    break  # EOF
+                _feed_chunk_count += 1
+                if _feed_chunk_count <= 10:
+                    import audioop as _ao
+                    _rms = _ao.rms(chunk, 2)
+                    event_log.append("barge_in_feed_chunk", {"n": _feed_chunk_count, "size": len(chunk), "rms": _rms})
                 bq = self._barge_in_q
                 if bq is None:
                     break
@@ -1697,11 +1774,13 @@ class VoiceLoopController:
             return False
 
         # Silence-keyword gate: only fires when voice_state == "listening" (OWW already detected).
-        # Requires the user to say "адам + stop word" — wake word stripped, only stop word remains.
-        # Not active in REPLY window so normal follow-up phrases never accidentally cancel Adam.
+        # Active in both listening (wake-word + stop-word) and reply (barge-in follow-up after TTS
+        # interruption). Reply window is intentionally included because barge-in now transitions to
+        # reply instead of listening — the user's "тихо/стоп" after "адам" during TTS arrives in
+        # the reply window, not the listening window.
         _silence_kws = settings.section("services").get("asr", {}).get("silence_keywords", [])
         _cleaned_norm = cleaned.lower().strip(".,!?- ")
-        if (self._voice_state == "listening"
+        if (self._voice_state in ("listening", "reply")
                 and _silence_kws
                 and any(_cleaned_norm == kw.lower() or _cleaned_norm.startswith(kw.lower() + " ")
                         for kw in _silence_kws)):
@@ -3568,23 +3647,29 @@ async def _stream_llm_and_speak(
                     sentence = buf[: m.start()].strip()
                     buf = buf[m.end() :]
                     if sentence:
-                        cleaned = noise_filter.accept(sentence)
-                        if cleaned is None:
-                            dropped_leading.append(sentence)
-                            event_log.append(
-                                "llm_partial_dropped",
-                                {"text": sentence, "reason": "leading_noise"},
-                            )
+                        if _PUNCT_ONLY_RE.match(sentence):
+                            # Punct-only chunk (e.g. "...", "—"): skip silently.
+                            # Silero cannot synthesize these and returns wav=None,
+                            # which would produce a tts_chunk_failed event.
+                            pass
                         else:
-                            parts.append(cleaned)
-                            await queue.put(cleaned)
-                            event_log.append(
-                                "llm_partial", {"text": cleaned, "index": len(parts) - 1}
-                            )
+                            cleaned = noise_filter.accept(sentence)
+                            if cleaned is None:
+                                dropped_leading.append(sentence)
+                                event_log.append(
+                                    "llm_partial_dropped",
+                                    {"text": sentence, "reason": "leading_noise"},
+                                )
+                            else:
+                                parts.append(cleaned)
+                                await queue.put(cleaned)
+                                event_log.append(
+                                    "llm_partial", {"text": cleaned, "index": len(parts) - 1}
+                                )
                     m = _SENTENCE_BOUNDARY_RE.search(buf)
         finally:
             remainder = buf.strip()
-            if remainder:
+            if remainder and not _PUNCT_ONLY_RE.match(remainder):
                 cleaned = noise_filter.accept(remainder)
                 if cleaned is None:
                     dropped_leading.append(remainder)
