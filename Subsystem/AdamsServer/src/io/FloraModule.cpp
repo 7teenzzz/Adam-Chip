@@ -310,14 +310,14 @@ void floraTick(uint32_t nowMs) {
     }
   }
 
-  // Phase 30 D-03: safe-ceiling firmware clamp (defence-in-depth).
-  // Clamp every channel to kFloraMaxDutyPct of full 12-bit scale before writing.
-  // Mirrors Config.json flora.max_duty_pct — structural default duplicated
-  // firmware-side. Ensures no animation frame exceeds the safe PWM cap regardless
-  // of preset params, Jetson-side values, or floating-point rounding.
+  // Phase 30 D-03: safe-ceiling firmware clamp (defence-in-depth) — LIGHT ONLY.
+  // Clamp the light channels to kFloraMaxDutyPct of full 12-bit scale before
+  // writing. Mirrors Config.json flora.max_duty_pct. Vibro channels
+  // (kFloraVibroChannelLo..Hi) are EXEMPT: the power ceiling is a светофлора
+  // limit; vibro power is governed only by its own kFloraVibroIntensityCeiling.
   {
     const uint16_t maxDuty = (4095u * kFloraMaxDutyPct) / 100u;
-    for (uint8_t ch = 0; ch < 16; ++ch) {
+    for (uint8_t ch = kFloraLightChannelLo; ch <= kFloraLightChannelHi; ++ch) {
       duties[ch] = min<uint16_t>(duties[ch], maxDuty);
     }
   }

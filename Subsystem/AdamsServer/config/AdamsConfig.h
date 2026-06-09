@@ -138,16 +138,16 @@ inline constexpr size_t kPca9685SceneCount = sizeof(kPca9685Scenes) / sizeof(kPc
 // the Jetson via /api/flora/state and override the in-code preset defaults.
 // ---------------------------------------------------------------------------
 inline constexpr uint32_t kFloraTickMs = 20;            // ~50 Hz animation task period
-inline constexpr uint8_t kFloraLightChannelLo = 0;      // D-02: light = channels 0-10
-inline constexpr uint8_t kFloraLightChannelHi = 10;
-inline constexpr uint8_t kFloraVibroChannelLo = 11;     // D-02: vibro = channels 11-14
-inline constexpr uint8_t kFloraVibroChannelHi = 14;
+inline constexpr uint8_t kFloraLightChannelLo = 4;      // light = channels 4-14 (11 lamps)
+inline constexpr uint8_t kFloraLightChannelHi = 14;
+inline constexpr uint8_t kFloraVibroChannelLo = 0;      // vibro motors = channels 0-3 (first 4)
+inline constexpr uint8_t kFloraVibroChannelHi = 3;
 inline constexpr float kFloraGamma = 2.2f;              // D-13: perceptual gamma — now UNUSED by the light path (Phase 30 R5/decision A: raw PWM, no gamma)
 inline constexpr uint32_t kFloraDefaultCrossfadeMs = 200;  // D-09: 150-250 ms preset crossfade
 // Vibro is NOT subject to safety.motor_* clamps (D-04/FLORA-06): those guard
 // action.py timed actuations. Flora vibro is continuous low-amplitude presence,
 // so it gets its own intensity ceiling instead (D-12, restrained default ~30%).
-inline constexpr uint16_t kFloraVibroIntensityCeiling = 1228;  // ~30% of 4095
+inline constexpr uint16_t kFloraVibroIntensityCeiling = 3890;  // ~95% of 4095 — vibro runs strong; NOT subject to the light max_duty ceiling (per user)
 // External-preset watchdog: if no HTTP /api/pca9685/* frame arrives for this long
 // while flora is in External (Jetson RMS/calibration stream died), floraTask
 // auto-recovers to breathe so the lamps never freeze. Mirrors Config.json

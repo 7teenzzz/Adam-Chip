@@ -526,9 +526,10 @@ class FloraController:
                         for ch in self._light_channels
                     ]
 
-                # Vibro: scaled RMS duty — throbs subtly with voice (D-12).
-                # D-03: clamp vibro duty to safe ceiling as well.
-                vibro_duty = min(int(round(duty * vibro_scale)), max_duty)
+                # Vibro: scaled RMS duty — throbs with the voice (vibro_scale =
+                # vibro.intensity_pct). NOT clamped to the light max_duty ceiling:
+                # the power ceiling is a светофлора limit; vibro runs at its own level.
+                vibro_duty = int(round(duty * vibro_scale))
                 updates.extend(
                     {"channel": ch, "value": vibro_duty}
                     for ch in self._vibro_channels
