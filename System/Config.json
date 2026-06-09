@@ -165,6 +165,7 @@
     "base_url": "http://10.10.10.171",
     "speaker_url": "http://10.10.10.171:82/speaker",
     "timeout_sec": 1,
+    "flora_timeout_sec": 3,
     "idle_scene": "boot_idle",
     "allowed_scenes": [
       "boot_idle",

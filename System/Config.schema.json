@@ -741,6 +741,11 @@
           "description": "HTTP timeout for MCU API requests in seconds. Keep low — MCU commands are fire-and-forget.",
           "default": 1
         },
+        "flora_timeout_sec": {
+          "type": "number",
+          "description": "HTTP timeout for flora state transition requests (set_flora_state) in seconds. Separate from timeout_sec because esp_http_server occasionally delays responses past 1s during I2C mutex contention or FreeRTOS scheduling. A 1s timeout on state transitions causes catch-up burst in _rms_stream that saturates max_open_sockets=3 and cascades into sustained flora failure. Keep at 3s; does not affect fire-and-forget motor commands (those still use timeout_sec).",
+          "default": 3
+        },
         "idle_scene": {
           "type": "string",
           "description": "Default motor scene played when agent enters standby.",

@@ -515,6 +515,12 @@ class FloraController:
             for i, duty in enumerate(duties):
                 target_t = t0 + offset_s + i * interval_s
                 delay = target_t - perf_counter()
+                # Skip frames that fell behind by more than one interval (e.g. after
+                # a set_channels timeout). Without this guard a 1-second timeout
+                # schedules ~12 frames for the past; they burst out simultaneously,
+                # saturate ESP max_open_sockets=3 and cascade into more failures.
+                if delay < -interval_s:
+                    continue
                 if delay > 0:
                     await asyncio.sleep(delay)
 
