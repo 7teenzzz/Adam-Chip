@@ -105,7 +105,6 @@
       "reply_window_sec": 3.75,
       "reply_silence_timeout_sec": 4,
       "post_tts_discard_window_ms": 300,
-      "pre_wake_buffer_ms": 1500,
       "endpointing_debounce_frames": 5,
       "endpointing_voiced_debounce_frames": 3,
       "sample_rate": 16000,
@@ -113,6 +112,7 @@
       "wake_words": "адам",
       "wake_word_required": true,
       "reply_window_expired_action": "standby",
+      "pre_wake_buffer_ms": 1500,
       "silence_after_speech_ms": 1000,
       "silence_rms_threshold": 800,
       "silence_keywords": [
@@ -354,7 +354,7 @@
     "voice": {
       "speaker": "eugene",
       "speed_multiplier": 1.0,
-      "volume": 0.1,
+      "volume": 0.45,
       "dsp": {
         "enabled": true,
         "hpf_hz": 240.0,
@@ -371,17 +371,6 @@
         "presence_db": 2.5,
         "presence_q": 0.9
       }
-    },
-    "prompt": {
-      "history_turns": 4,
-      "include_scene": true,
-      "include_sensors": true
-    },
-    "diagnostics": {
-      "log_level": "info",
-      "metrics_enabled": true,
-      "trace_prompts": false,
-      "trace_post_tts_lag": false
     },
     "audio_input": {
       "dsp": {
@@ -569,6 +558,17 @@
         }
       ],
       "active_preset": "комната"
+    },
+    "prompt": {
+      "history_turns": 4,
+      "include_scene": true,
+      "include_sensors": true
+    },
+    "diagnostics": {
+      "log_level": "info",
+      "metrics_enabled": true,
+      "trace_prompts": false,
+      "trace_post_tts_lag": false
     }
   }
 }

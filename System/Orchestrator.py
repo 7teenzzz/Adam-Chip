@@ -958,6 +958,7 @@ class VoiceLoopController:
                     _buf.clear()
                     _bi_hits = 0
                     self._wake_engine.reset()
+                    event_log.append("barge_in_monitor_active", {"barge_in_q_is_none": bq is None})
                 _was_speaking = True
                 bq = self._barge_in_q
                 if bq is None:
@@ -976,14 +977,35 @@ class VoiceLoopController:
                     continue
                 pcm_80ms = b"".join(_buf)
                 _buf.clear()
+                # Log RMS every 20 OWW evaluations during barge-in for audio level diagnostics.
+                _bi_eval_count = getattr(self, "_bi_eval_count", 0) + 1
+                self._bi_eval_count = _bi_eval_count
+                if _bi_eval_count % 20 == 0:
+                    import audioop as _ao2
+                    _pcm_rms = _ao2.rms(pcm_80ms, 2)
+                    event_log.append("barge_in_audio_rms", {"rms": _pcm_rms, "size": len(pcm_80ms)})
                 # Advance the OWW model state but use local hit counter (not
                 # the engine's internal debounce) so barge-in and wake-word
                 # detection have independent thresholds.
-                self._wake_engine.process_chunk(pcm_80ms)
+                try:
+                    self._wake_engine.process_chunk(pcm_80ms)
+                except Exception as exc:
+                    event_log.append("barge_in_oww_error", {
+                        "error": str(exc),
+                        "chunk_size": len(pcm_80ms),
+                    })
+                    _buf.clear()
+                    continue
                 score = getattr(self._wake_engine, "last_score", None)
                 _ww_threshold = getattr(self._wake_engine, "_threshold", 0.02)
+                # Log every 10th score during barge-in monitoring for diagnostics.
+                _bi_frame_count = getattr(self, "_bi_diag_frame", 0) + 1
+                self._bi_diag_frame = _bi_frame_count
+                if _bi_frame_count % 10 == 0:
+                    event_log.append("barge_in_score", {"score": round(float(score), 4) if score is not None else None, "n": _bi_frame_count})
                 if score is not None and float(score) >= _ww_threshold:
                     _bi_hits += 1
+                    event_log.append("barge_in_hit", {"score": round(float(score), 4), "hits": _bi_hits})
                 else:
                     _bi_hits = 0
                 triggered = _bi_hits >= _bi_debounce
@@ -1402,12 +1424,18 @@ class VoiceLoopController:
                         # Start a parallel arecord dedicated to OWW-only during
                         # TTS. Its output never reaches VAD/ASR — only _barge_in_q.
                         # ESP32 path doesn't need this: _drain_loop feeds the queue.
+                        event_log.append("barge_in_proc_check", {
+                            "using_process": _using_process,
+                            "barge_in_q": self._barge_in_q is not None,
+                            "barge_in_enabled": self._barge_in_enabled,
+                        })
                         if _using_process and self._barge_in_q is not None:
                             self._barge_in_proc = self._start_arecord()
                             self._barge_in_feed_task = asyncio.create_task(
                                 self._local_barge_in_feed(self._barge_in_proc),
                                 name="adam_local_barge_in_feed",
                             )
+                            event_log.append("barge_in_proc_started", {})
 
                         spoke = await self._transcribe_and_dispatch(pcm)
 
@@ -1556,13 +1584,33 @@ class VoiceLoopController:
         """
         if proc.stdout is None:
             return
-        read_fn = proc.stdout.read
+        raw_read = proc.stdout.read
         fb = max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
+
+        def _read_exact_bi(n: int) -> bytes:
+            # PipeWire/PulseAudio delivers audio in small quanta (e.g. 160 bytes = 5ms
+            # at 16kHz) instead of the requested frame size (640 bytes = 20ms).
+            # Accumulate until we have exactly n bytes so OWW always gets full frames.
+            buf = raw_read(n)
+            while buf and len(buf) < n:
+                tail = raw_read(n - len(buf))
+                if not tail:
+                    return buf
+                buf += tail
+            return buf
+
+        _feed_chunk_count = 0
         try:
             while True:
-                chunk = await asyncio.to_thread(read_fn, fb)
-                if not chunk:
-                    break
+                chunk = await asyncio.to_thread(_read_exact_bi, fb)
+                if len(chunk) < fb:
+                    event_log.append("barge_in_feed_eof", {"chunks_sent": _feed_chunk_count, "last_size": len(chunk)})
+                    break  # EOF
+                _feed_chunk_count += 1
+                if _feed_chunk_count <= 10:
+                    import audioop as _ao
+                    _rms = _ao.rms(chunk, 2)
+                    event_log.append("barge_in_feed_chunk", {"n": _feed_chunk_count, "size": len(chunk), "rms": _rms})
                 bq = self._barge_in_q
                 if bq is None:
                     break
