@@ -149,7 +149,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "frame_interval_ms": 80,
             "hdmi_latency_offset_ms": 150,
             "base_duty_pct": 25,
-            "peak_duty_pct": 90,
+            "peak_duty_pct": 71,
             "spark_probability": 0.15,
         },
         "vibro": {
@@ -157,8 +157,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "silent_states": ["attentive"],
         },
         "states": {
-            "breathe": {"base_pct": 8, "peak_pct": 30, "period_ms": 7000, "vibro": False},
-            "accent": {"peak_pct": 75, "attack_ms": 250, "vibro": True, "vibro_pulse_ms": 120},
+            "breathe": {"base_pct": 7, "peak_pct": 71, "period_ms": 4000, "vibro": False},
+            "accent": {"base_pct": 10, "peak_pct": 71, "attack_ms": 250, "vibro": True, "vibro_pulse_ms": 120, "period_ms": 1400},
             "attentive": {"plateau_pct": 40, "vibro": False},
             "think_pulse": {"base_pct": 20, "flash_ms": 1750, "vibro": "double_pulse"},
             "wake_bloom": {"from_dark": True, "settle_to": "breathe", "vibro": True},

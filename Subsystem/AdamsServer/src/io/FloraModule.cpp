@@ -12,7 +12,7 @@
 // A static FreeRTOS task ticks at ~50 Hz (kFloraTickMs), runs a preset state
 // machine, crossfades from the last-written duties to the new preset over
 // crossfade_ms, and writes one atomic 16-channel frame per tick via
-// writeAllChannelsRaw. Light = ch 0-10, vibro = ch 11-14.
+// writeAllChannelsRaw. Light = ch 4-14 (11 lamps), vibro = ch 0-3 (4 motors).
 // Phase 30 R5 (decision A): raw PWM, no perceptual gamma. The Jetson already
 // sends raw pct->duty values (linear), so gammaApply is now an identity pass-
 // through. The gamma LUT (sGammaLut/buildGammaLut) is retained but unused.
@@ -250,7 +250,7 @@ void floraTick(uint32_t nowMs) {
 
   uint16_t duties[16] = {0};
 
-  // --- Light channels 0-10 (D-02) ---
+  // --- Light channels 4-14 (kFloraLightChannelLo..Hi, D-02) ---
   for (uint8_t ch = kFloraLightChannelLo; ch <= kFloraLightChannelHi; ++ch) {
     uint16_t d = lightDuty;
     if (t.preset == FloraPreset::Attentive) {
@@ -284,7 +284,7 @@ void floraTick(uint32_t nowMs) {
     duties[ch] = d;
   }
 
-  // --- Vibro channels 11-14 (D-11 / D-12 / FLORA-06) ---
+  // --- Vibro channels 0-3 (kFloraVibroChannelLo..Hi, D-11 / D-12 / FLORA-06) ---
   // Belt-and-suspenders: force vibro to 0 whenever preset==attentive regardless
   // of vibroEnabled, protecting ASR from motor->mic coupling.
   uint16_t vibroDuty = 0;

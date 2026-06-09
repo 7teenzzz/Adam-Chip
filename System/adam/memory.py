@@ -118,6 +118,7 @@ class EpisodicMemory:
         self.diary_path = self.root / "diary.md"
         self.echoes_used_path = self.root / "echoes_used.jsonl"
         self.chinese_used_path = self.root / "chinese_used.jsonl"
+        self.jokes_used_path = self.root / "jokes_used.jsonl"
         self.state_path = self.root / "consolidator_state.json"
         self.consolidator_log = self.root / "consolidator.log"
         self.episodes_dir.mkdir(parents=True, exist_ok=True)
@@ -389,6 +390,8 @@ class EpisodicMemory:
     def _gate_log_path(self, pool: str) -> Path:
         if pool == "chinese":
             return self.chinese_used_path
+        if pool == "jokes":
+            return self.jokes_used_path
         return self.echoes_used_path
 
     def _iter_jsonl(self, path: Path) -> Iterator[Episode]:

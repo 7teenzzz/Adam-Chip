@@ -121,6 +121,8 @@ chinese_gate = EchoGate(
 _skills_cfg = settings.section("skills")
 _weather_cfg = _skills_cfg.get("weather", {}) if isinstance(_skills_cfg, dict) else {}
 _jokes_cfg = _skills_cfg.get("jokes", {}) if isinstance(_skills_cfg, dict) else {}
+# NOTE: keywords loaded once at startup — skills.*.intent_keywords changes in
+# Config.json require an orchestrator restart to take effect (not hot-reload).
 intent_router = IntentRouter(
     joke_keywords=list(_jokes_cfg.get("intent_keywords", [])),
     weather_keywords=list(_weather_cfg.get("intent_keywords", [])),
@@ -2360,7 +2362,7 @@ async def lifespan(_: FastAPI):
     # Phase 30: background weather poll — caches readings so dialogue turns never
     # block on HTTP. Only started when the weather skill is enabled.
     weather_task: asyncio.Task | None = None
-    if bool(_weather_cfg.get("enabled", False)):
+    if bool(_weather_cfg.get("enabled", True)):
         weather_task = asyncio.create_task(weather_provider.poll_loop(), name="weather_poll")
     try:
         yield
@@ -3237,7 +3239,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
     # a [ctx.weather] block so the LLM speaks the cached reading in character.
     weather_ctx: str | None = None
     intent = intent_router.classify(transcript)
-    if intent == "joke" and bool(_jokes_cfg.get("enabled", False)):
+    if intent == "joke" and bool(_jokes_cfg.get("enabled", True)):
         joke = joke_gate.pick(cooldown_days=int(_jokes_cfg.get("per_joke_cooldown_days", 3)))
         if joke is not None:
             return await _run_joke_turn(
@@ -3251,13 +3253,14 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
                 t_total=t_total,
                 asr_ms=asr_ms,
             )
-    elif intent == "weather" and bool(_weather_cfg.get("enabled", False)):
+    elif intent == "weather" and bool(_weather_cfg.get("enabled", True)):
         # Failure ≠ silence (invariant): stale/missing cache → offline note, not
         # fabricated data. Adam acknowledges he can't sense outside right now.
-        weather_ctx = weather_provider.cached() or "(датчик улицы сейчас недоступен)"
+        cached_str = weather_provider.cached()
+        weather_ctx = cached_str or "(датчик улицы сейчас недоступен)"
         event_log.append(
             "skill_weather",
-            {"ctx": weather_ctx, "cached": weather_provider.cached() is not None},
+            {"ctx": weather_ctx, "cached": cached_str is not None},
             turn_id=turn_id,
         )
 

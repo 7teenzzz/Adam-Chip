@@ -15,7 +15,7 @@
 1. Все три ветки влиты без регрессий
 2. Channel map прошивки (AdamsConfig.h) = Config.json = flora.py — консистентно
 3. Python синтаксис чистый, JSON валидный
-4. `/gsd-debug` проверка пройдена
+4. `/gsd-debug` проверка пройдена ✓
 5. Knowledge graph обновлён (`graphify update System/`)
 
 **Global changes:** ДА — firmware (reflash обязателен после LuxFlora), Config.json (каналы, параметры), новые модули skills.py + asr_filter.py.
