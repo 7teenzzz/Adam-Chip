@@ -204,7 +204,6 @@ export function mount(target) {
   const unsub = state.subscribe("status", paintScene);
 
   return () => {
-    clearJetTimer();
     unsub();
   };
 }
