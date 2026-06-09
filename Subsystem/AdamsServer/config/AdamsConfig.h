@@ -158,7 +158,7 @@ inline constexpr uint32_t kFloraExternalTimeoutMs = 500;
 // firmware-side, like kFloraExternalTimeoutMs. Applied in floraTick immediately
 // before writeAllChannelsRaw as defence-in-depth so no animation frame can
 // exceed this ceiling regardless of preset params or Jetson-side values.
-inline constexpr uint8_t kFloraMaxDutyPct = 100;
+inline constexpr uint8_t kFloraMaxDutyPct = 71;
 
 inline constexpr size_t kStatusJsonCapacity = 16384;
 inline constexpr size_t kSensorJsonCapacity = 768;

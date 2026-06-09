@@ -72,7 +72,7 @@ class FloraController:
         self._frame_interval_ms: int = int(self._speech_cfg.get("frame_interval_ms", 80))
         self._hdmi_offset_ms: int = int(self._speech_cfg.get("hdmi_latency_offset_ms", 150))
         self._base_duty_pct: float = float(self._speech_cfg.get("base_duty_pct", 25))
-        self._peak_duty_pct: float = float(self._speech_cfg.get("peak_duty_pct", 90))
+        self._peak_duty_pct: float = float(self._speech_cfg.get("peak_duty_pct", 71))
         self._spark_probability: float = float(self._speech_cfg.get("spark_probability", 0.15))
 
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
@@ -258,10 +258,15 @@ class FloraController:
         # Belt-and-suspenders using cached set (D-11 invariant must survive hot-reload errors).
         if state in self._silent_states:
             params["vibro_enabled"] = False
-        await self._mcu.set_flora_state(state, params)
+        result = await self._mcu.set_flora_state(state, params)
+        if not result.ok:
+            logger.warning("flora set_state %r -> MCU error %s: %s", state, result.status, result.error)
         if self._event_log is not None:
             try:
-                self._event_log.append("flora_state_change", {"state": state})
+                payload: dict[str, Any] = {"state": state}
+                if not result.ok:
+                    payload["mcu_error"] = result.status
+                self._event_log.append("flora_state_change", payload)
             except Exception:
                 pass
 
@@ -461,7 +466,7 @@ class FloraController:
         await self._rms_stream(duties)
 
     async def _rms_stream(self, duties: list[int]) -> None:
-        """Stream brightness frames to light channels 0-10 in lockstep with playback.
+        """Stream brightness frames to light channels 4-14 in lockstep with playback.
 
         Algorithm (D-07):
           t0 = perf_counter() at task-start (≈ same instant playback dispatched)
@@ -472,11 +477,11 @@ class FloraController:
         spark_probability boost a random channel subset to full peak for one frame.
         This adds subtle texture — cluster-friendly (random, no spatial centre, D-01).
 
-        Vibro (channels 11-14): driven from the same phase as lights at the
+        Vibro (channels 0-3): driven from the same phase as lights at the
         configured intensity_pct ceiling (D-11); NOT forced silent here —
         only 'attentive' state silences vibro.  The RMS modulation shares the
         lamp duty scaled to vibro_intensity_pct so the motors throb subtly with
-        the voice without overwhelming (D-12 restrained default 30%).
+        the voice without overwhelming (D-12, intensity_pct=95).
 
         Frame rate ceiling: frame_interval_ms from config defaults to 80 ms
         (~12.5 fps) — well within the ESP LWIP socket budget (T-29-10).
