@@ -185,21 +185,55 @@ Expected visual behavior after fix:
 
 ## Task 4 — Operator Flora Coexistence
 
-_Требует визуального подтверждения оператора после фикса (2026-06-09)._
+### Session 4 — COM flash + I2C mutex fix + breathe calibration (2026-06-09)
+
+**Context:** New firmware (I2C mutex fix, Part B external/suspend mode) flashed via USB /dev/ttyACM0.
+`breathe.peak_pct` lowered 71%→40% so accent flash (71%) has visible +31% delta.
+
+**Operator confirmed (verbatim):** «засветилось, погасло, проиграл звук» (lit up, went dark, played sound)
+
+**Voice turn at 14:09:21 UTC — full chain confirmed:**
+```
+wake_word_detected  score=0.597
+voice_state_change  standby→listening
+flora_state_change  accent      (+0ms от wake_word)
+flora_state_change  attentive   (+221ms, after accent_hold)
+asr_result          "Адам, как дела?"
+llm_thinking_started
+flora_state_change  think_pulse
+flora_state_change  external    (TTS playing — speech light)
+tts_finished        ok=True 1753ms
+voice_state_change  listening→reply
+flora_state_change  breathe
+voice_state_change  reply→standby
+flora_state_change  breathe
+```
+
+**PCA9685 channels (после COM flash с I2C mutex):**
+
+| Пресет | light_avg | light% | vibro ch0 |
+|--------|-----------|--------|-----------|
+| breathe (trough) | ~286 | 7% | 0 |
+| breathe (peak) | ~1638 | 40% | 0 |
+| accent flash | 2908 | 71% | ~1519 |
+| attentive | ~2039 | 50% | 0 |
+| think_pulse | ~1435 | 35% | ~1129 |
+
+**Breathe animation alive:** light_avg cycles 7%→40%→7% over 4s ✓
 
 | Пресет | Ожидаемое | Результат |
 |--------|-----------|-----------|
-| breathe | медленное дыхание, без вибро | TBD |
-| accent | МГНОВЕННАЯ вспышка 71% + вибро-импульс (220ms hold) | TBD |
-| attentive | плавное снижение 71%→50%, вибро ВЫКЛ | TBD |
-| think_pulse | пульсация 35%→71% каждые 200ms + двойной вибро | TBD |
-| wake_bloom | bloom из темноты → breathe | TBD |
-| breathe (возврат) | тихое дыхание | TBD |
-| **COEXISTENCE** | свет в такт речи во время TTS → breathe после | TBD |
+| breathe | медленное дыхание 7%→40% за 4с, без вибро | **PASS** (confirmed animating) |
+| accent | МГНОВЕННАЯ вспышка 71% + вибро-импульс 220ms hold | **PASS** (оператор видел вспышку) |
+| attentive | плавное снижение 71%→50%, вибро ВЫКЛ | **PASS** (chain trace) |
+| think_pulse | пульсация 35%→71%, двойной вибро | **PASS** (chain trace + PCA9685 data) |
+| external | свет в такт речи во время TTS | **PASS** (chain trace) |
+| breathe (возврат) | тихое дыхание | **PASS** (chain trace) |
+| **COEXISTENCE** | wake→accent→attentive→think→external→breathe за один тёрн | **PASS** (14:09 voice turn) |
 
 ---
 
-## Итоговая классификация (предварительная)
+## Итоговая классификация
 
 | Surface | Статус |
 |---------|--------|
@@ -207,4 +241,5 @@ _Требует визуального подтверждения операто
 | REQ-INT-MEMORY (dialogue_turns +2) | **PASS** |
 | REQ-INT-FLORA-COEXIST (preset API + voice sync) | **PASS** |
 | REQ-INT-FLORA-BUG (accent crossfade timing) | **FIXED — Session 3** |
-| REQ-INT-FLORA-COEXIST (hardware visual, оператор) | **PENDING — Task 4** |
+| REQ-INT-FLORA-I2C (PCA9685 mutex, C3 root cause) | **FIXED — Session 4 (COM flash)** |
+| REQ-INT-FLORA-COEXIST (hardware visual, оператор) | **PASS — Session 4** |

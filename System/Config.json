@@ -220,7 +220,7 @@
     "states": {
       "breathe": {
         "base_pct": 7,
-        "peak_pct": 71,
+        "peak_pct": 40,
         "period_ms": 4000,
         "vibro": false
       },
