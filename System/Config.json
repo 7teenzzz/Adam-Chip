@@ -275,7 +275,8 @@
     "debounce_hits": 2,
     "vad_threshold": 0,
     "wake_silence_timeout_sec": 6,
-    "barge_in_debounce_hits": 3
+    "barge_in_debounce_hits": 3,
+    "barge_in_enabled": false
   },
   "skills": {
     "weather": {
