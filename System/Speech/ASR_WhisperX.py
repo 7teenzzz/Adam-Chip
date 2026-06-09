@@ -42,21 +42,18 @@ _LOGPROB_THRESHOLD = float(os.environ.get("ADAM_ASR_LOGPROB_THRESHOLD", "-0.8"))
 # They appear in the training data (YouTube subtitles) and have high logprob even
 # on garbage input, so logprob filtering alone doesn't catch them.
 _HALLUCINATION_PATTERNS = {
-    "тревожная музыка",
-    "интригующая музыка",
-    "спокойная музыка",
-    "весёлая музыка",
-    "грустная музыка",
-    "музыка",
-    "субтитры добавлены",
-    "спасибо за просмотр",
-    "подписывайтесь на канал",
-    "продолжение следует",
-    "[тихая музыка]",
-    "[music]",
-    "[applause]",
-    "[blank_audio]",
-    "[inaudible]",
+    # YouTube subtitle hallucinations (near-silence triggers)
+    "тревожная музыка", "интригующая музыка", "спокойная музыка",
+    "весёлая музыка", "грустная музыка", "музыка",
+    "субтитры добавлены", "спасибо за просмотр", "подписывайтесь на канал",
+    "продолжение следует", "не забудьте подписаться", "спасибо за внимание",
+    "до встречи", "увидимся в следующий раз", "оставайтесь с нами",
+    "продолжение в следующей части", "ссылки в описании",
+    # Bracket/noise markers
+    "[тихая музыка]", "[music]", "[applause]", "[blank_audio]", "[inaudible]",
+    "[шум]", "[тишина]", "[нет звука]",
+    # Punctuation-only segments (silence artefacts)
+    ".", ",", "...",
 }
 
 _MODELS_DIR = Path(os.environ.get("ADAM_MODELS_DIR", "Subsystem/Models"))

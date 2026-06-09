@@ -60,7 +60,6 @@ from adam.config import PROJECT_ROOT
 from adam.sound import play_local_sound
 from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
 from adam.tuning import TuningStore, get_store as _get_tuning_store
-from adam.ui import agent_page, dash_page, debug_page
 from adam.wake_word import create_engine as _create_wake_engine
 from adam.webrtc_vad import WebRtcVadWrapper
 
@@ -537,6 +536,7 @@ class VoiceLoopController:
         # Queue lives on voice_loop; mic_reader reads it via getattr(_voice_loop, "_barge_in_q").
         self._barge_in_enabled: bool = bool(ww_cfg.get("barge_in_enabled", True))
         self._barge_in_triggered: bool = False
+        self._manual_interrupt_triggered: bool = False
         self._barge_in_q: asyncio.Queue[bytes] | None = None
         self._barge_in_task: asyncio.Task[None] | None = None
         # Local-mic barge-in feeder: parallel arecord + asyncio task that run
@@ -904,12 +904,30 @@ class VoiceLoopController:
         """
         if not self._barge_in_enabled or self._wake_engine is None:
             return
+        # Barge-in uses a SEPARATE debounce counter from normal wake detection.
+        # wake_word.barge_in_debounce_hits (default 3) > debounce_hits (2) so
+        # acoustic echo of Adam's own voice rarely triggers a false barge-in.
+        _ww_cfg = settings.section("wake_word") or {}
+        _bi_debounce = max(1, int(_ww_cfg.get("barge_in_debounce_hits", 3)))
+        _bi_hits = 0
         _buf: list[bytes] = []
         try:
             while self.running:
                 # Only scan when Adam is actually speaking (TTS playing).
                 if not runtime_state.get("speaking"):
                     _buf.clear()
+                    _bi_hits = 0
+                    # Drain stale audio: frames accumulated during ASR/LLM thinking
+                    # contain the user's wake word "адам". If fed to OWW when TTS
+                    # starts, they score high (0.7+) and fire an immediate false
+                    # barge-in (observed: 50ms after tts_started, score=0.724).
+                    bq = self._barge_in_q
+                    if bq is not None:
+                        while True:
+                            try:
+                                bq.get_nowait()
+                            except Exception:
+                                break
                     await asyncio.sleep(0.05)
                     continue
                 bq = self._barge_in_q
@@ -929,8 +947,19 @@ class VoiceLoopController:
                     continue
                 pcm_80ms = b"".join(_buf)
                 _buf.clear()
-                triggered = self._wake_engine.process_chunk(pcm_80ms)
+                # Advance the OWW model state but use local hit counter (not
+                # the engine's internal debounce) so barge-in and wake-word
+                # detection have independent thresholds.
+                self._wake_engine.process_chunk(pcm_80ms)
                 score = getattr(self._wake_engine, "last_score", None)
+                _ww_threshold = getattr(self._wake_engine, "_threshold", 0.02)
+                if score is not None and float(score) >= _ww_threshold:
+                    _bi_hits += 1
+                else:
+                    _bi_hits = 0
+                triggered = _bi_hits >= _bi_debounce
+                if triggered:
+                    _bi_hits = 0
                 if triggered and not self._barge_in_triggered:
                     event_log.append("barge_in_detected", {
                         "score": round(float(score), 3) if score is not None else None,
@@ -1416,6 +1445,15 @@ class VoiceLoopController:
                             })
                             self._set_voice_state("listening", "barge_in")
                             continue
+                        # Manual interrupt (button / API): go to standby, skip reply window.
+                        if self._manual_interrupt_triggered:
+                            self._manual_interrupt_triggered = False
+                            self._set_voice_state("standby", "manual_interrupt")
+                            self._standby_entry_time = time.perf_counter()
+                            if self._wake_engine is not None:
+                                self._wake_engine.reset()
+                            event_log.append("manual_interrupt_standby", {})
+                            continue
                         if spoke:
                             self._set_voice_state("reply", "agent_spoke")
                             self._reply_start = time.perf_counter()
@@ -1578,13 +1616,15 @@ class VoiceLoopController:
             event_log.append("asr_wake_only", {"raw": transcript, "reason": "only_wake_word"}, turn_id=turn_id)
             return False
 
-        # Silence-keyword gate: if the transcript matches a stop/silence trigger,
-        # cancel any running LLM/TTS and return to standby without starting a new turn.
-        # Keywords are read live from Config so /api/config patching takes effect instantly.
+        # Silence-keyword gate: only fires when voice_state == "listening" (OWW already detected).
+        # Requires the user to say "адам + stop word" — wake word stripped, only stop word remains.
+        # Not active in REPLY window so normal follow-up phrases never accidentally cancel Adam.
         _silence_kws = settings.section("services").get("asr", {}).get("silence_keywords", [])
         _cleaned_norm = cleaned.lower().strip(".,!?- ")
-        if _silence_kws and any(_cleaned_norm == kw.lower() or _cleaned_norm.startswith(kw.lower())
-                                for kw in _silence_kws):
+        if (self._voice_state == "listening"
+                and _silence_kws
+                and any(_cleaned_norm == kw.lower() or _cleaned_norm.startswith(kw.lower() + " ")
+                        for kw in _silence_kws)):
             pt = self._current_producer_task
             if pt and not pt.done():
                 runtime_state["interrupt_tts"] = True
@@ -2257,35 +2297,6 @@ async def index() -> RedirectResponse:
     return RedirectResponse("/ui/", status_code=307)
 
 
-@app.get("/legacy/agent", response_class=HTMLResponse)
-async def legacy_agent() -> str:
-    return agent_page()
-
-
-@app.get("/legacy/dash", response_class=HTMLResponse)
-async def legacy_dash() -> str:
-    return dash_page(_ui_settings_public())
-
-
-@app.get("/legacy/debug", response_class=HTMLResponse)
-async def legacy_debug() -> str:
-    return debug_page(_ui_settings_public())
-
-
-@app.get("/agent", response_class=HTMLResponse)
-async def agent() -> RedirectResponse:
-    return RedirectResponse("/legacy/agent", status_code=307)
-
-
-@app.get("/dash", response_class=HTMLResponse)
-async def dash() -> RedirectResponse:
-    return RedirectResponse("/legacy/dash", status_code=307)
-
-
-@app.get("/debug", response_class=HTMLResponse)
-async def debug() -> RedirectResponse:
-    return RedirectResponse("/legacy/debug", status_code=307)
-
 
 @app.get("/api/ui/status")
 async def ui_status() -> dict[str, Any]:
@@ -2748,6 +2759,8 @@ async def interrupt_turn() -> dict[str, Any]:
     pt = voice_loop._current_producer_task
     if pt is not None and not pt.done():
         pt.cancel()
+    # Signal _vad_loop to go to standby (not reply) after this turn completes.
+    voice_loop._manual_interrupt_triggered = True
     event_log.append("manual_interrupt", {})
     return {"ok": True}
 

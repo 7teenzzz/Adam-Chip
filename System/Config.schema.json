@@ -862,6 +862,13 @@
           "type": "boolean",
           "description": "When true, a second OWW wake-word detection during TTS playback immediately interrupts Adam (stops aplay and cancels the LLM producer) and transitions the voice loop to LISTENING so the user can speak their new request. Requires the OWW engine to be configured (engine != 'none'). Safe to disable (false) if false-positive interrupts are a problem at the exhibition venue.",
           "default": true
+        },
+        "barge_in_debounce_hits": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Number of consecutive OWW frames above threshold required to confirm a barge-in during TTS playback. Independent from debounce_hits (normal wake detection). Higher value = less sensitive to acoustic echo of Adam's own voice reflecting off the mic. Default 3 gives one extra frame of protection over debounce_hits=2 without meaningfully delaying real interruptions.",
+          "default": 3
         }
       }
     },
