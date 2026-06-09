@@ -146,6 +146,11 @@ prompt_trace: deque[dict[str, Any]] = deque(maxlen=_PROMPT_TRACE_MAX)
 # Pre-compiled sentence boundary regex for streaming LLM→TTS pipeline.
 # Matches .!?。！？ and em-dash (—, common in Russian) followed by whitespace.
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？—])\s+")
+# Chunks that contain no speakable content: only punctuation, ellipses, dashes,
+# whitespace, or Markdown fences. Silero /wav returns None for these, producing
+# tts_chunk_failed events (observed with "..." as joke-ending chunk from Gemma).
+# Filter in _producer before enqueuing so _consumer never sees them.
+_PUNCT_ONLY_RE = re.compile(r"^[\s.,!?\u2026\-\u2014\u2013`'*_#\[\]()]+$")
 
 
 def _apply_wav_speed(wav: bytes, speed: float) -> bytes:
@@ -3328,23 +3333,29 @@ async def _stream_llm_and_speak(
                     sentence = buf[: m.start()].strip()
                     buf = buf[m.end() :]
                     if sentence:
-                        cleaned = noise_filter.accept(sentence)
-                        if cleaned is None:
-                            dropped_leading.append(sentence)
-                            event_log.append(
-                                "llm_partial_dropped",
-                                {"text": sentence, "reason": "leading_noise"},
-                            )
+                        if _PUNCT_ONLY_RE.match(sentence):
+                            # Punct-only chunk (e.g. "...", "—"): skip silently.
+                            # Silero cannot synthesize these and returns wav=None,
+                            # which would produce a tts_chunk_failed event.
+                            pass
                         else:
-                            parts.append(cleaned)
-                            await queue.put(cleaned)
-                            event_log.append(
-                                "llm_partial", {"text": cleaned, "index": len(parts) - 1}
-                            )
+                            cleaned = noise_filter.accept(sentence)
+                            if cleaned is None:
+                                dropped_leading.append(sentence)
+                                event_log.append(
+                                    "llm_partial_dropped",
+                                    {"text": sentence, "reason": "leading_noise"},
+                                )
+                            else:
+                                parts.append(cleaned)
+                                await queue.put(cleaned)
+                                event_log.append(
+                                    "llm_partial", {"text": cleaned, "index": len(parts) - 1}
+                                )
                     m = _SENTENCE_BOUNDARY_RE.search(buf)
         finally:
             remainder = buf.strip()
-            if remainder:
+            if remainder and not _PUNCT_ONLY_RE.match(remainder):
                 cleaned = noise_filter.accept(remainder)
                 if cleaned is None:
                     dropped_leading.append(remainder)
