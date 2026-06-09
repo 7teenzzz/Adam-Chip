@@ -919,6 +919,7 @@ class VoiceLoopController:
         _bi_debounce = max(1, int(_ww_cfg.get("barge_in_debounce_hits", 3)))
         _bi_hits = 0
         _buf: list[bytes] = []
+        _was_speaking = False
         try:
             while self.running:
                 # Only scan when Adam is actually speaking (TTS playing).
@@ -936,8 +937,25 @@ class VoiceLoopController:
                                 bq.get_nowait()
                             except Exception:
                                 break
+                    _was_speaking = False
                     await asyncio.sleep(0.05)
                     continue
+                # Reset OWW model state on the False→True transition so accumulated
+                # LSTM state from the previous wake-word detection doesn't carry over
+                # and produce an immediate high score on the first audio frame of TTS.
+                # Also flush any chunks that arrived during the speaking=False→True gap.
+                if not _was_speaking:
+                    _buf.clear()
+                    _bi_hits = 0
+                    self._wake_engine.reset()
+                    bq_flush = self._barge_in_q
+                    if bq_flush is not None:
+                        while True:
+                            try:
+                                bq_flush.get_nowait()
+                            except Exception:
+                                break
+                _was_speaking = True
                 bq = self._barge_in_q
                 if bq is None:
                     await asyncio.sleep(0.05)
@@ -1449,8 +1467,11 @@ class VoiceLoopController:
                             )
                             if _diag_on:
                                 self.mic_reader.begin_lag_diag(4000.0, "post_transcribe")
-                        # Barge-in: wake word fired during TTS → skip reply window,
-                        # go directly to listening for the user's new request.
+                        # Barge-in: wake word fired during TTS → open a short reply window
+                        # so the user's follow-up ("тихо", "стоп", or a new request) is
+                        # captured by VAD and processed immediately without requiring another
+                        # wake word. Silence keywords are checked in reply state too (see
+                        # _transcribe_and_dispatch), so "Адам, тихо" works end-to-end.
                         if self._barge_in_triggered:
                             self._barge_in_triggered = False
                             self._current_producer_task = None
@@ -1461,12 +1482,17 @@ class VoiceLoopController:
                             self._ww_buf.clear()
                             if self._wake_engine is not None:
                                 self._wake_engine.reset()
-                            self._wake_detected_at = time.perf_counter()
-                            event_log.append("barge_in_listening", {
+                            self._reply_start = time.perf_counter()
+                            _bi_total_timeout = (
+                                self._post_tts_discard_window_ms / 1000.0
+                                + self._reply_silence_timeout_sec
+                            )
+                            event_log.append("barge_in_reply", {
                                 "utterance_id": self._utterance_id,
-                                "silence_timeout_sec": self._listening_silence_timeout_sec,
+                                "timeout_sec": round(_bi_total_timeout, 2),
+                                "silence_timeout_sec": self._reply_silence_timeout_sec,
                             })
-                            self._set_voice_state("listening", "barge_in")
+                            self._set_voice_state("reply", "barge_in")
                             continue
                         # Manual interrupt (button / API): go to standby, skip reply window.
                         if self._manual_interrupt_triggered:
@@ -1667,11 +1693,13 @@ class VoiceLoopController:
             return False
 
         # Silence-keyword gate: only fires when voice_state == "listening" (OWW already detected).
-        # Requires the user to say "адам + stop word" — wake word stripped, only stop word remains.
-        # Not active in REPLY window so normal follow-up phrases never accidentally cancel Adam.
+        # Active in both listening (wake-word + stop-word) and reply (barge-in follow-up after TTS
+        # interruption). Reply window is intentionally included because barge-in now transitions to
+        # reply instead of listening — the user's "тихо/стоп" after "адам" during TTS arrives in
+        # the reply window, not the listening window.
         _silence_kws = settings.section("services").get("asr", {}).get("silence_keywords", [])
         _cleaned_norm = cleaned.lower().strip(".,!?- ")
-        if (self._voice_state == "listening"
+        if (self._voice_state in ("listening", "reply")
                 and _silence_kws
                 and any(_cleaned_norm == kw.lower() or _cleaned_norm.startswith(kw.lower() + " ")
                         for kw in _silence_kws)):
