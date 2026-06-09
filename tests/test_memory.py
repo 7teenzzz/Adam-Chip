@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "System"))
 
-from adam.echoes_gate import EchoGate, _parse_text  # noqa: E402
+from adam.echoes_gate import EchoEntry, EchoGate, InjectedEcho, _parse_text  # noqa: E402
 from adam.episodic import (  # noqa: E402
     Episode,
     SessionAccumulator,
@@ -27,6 +27,7 @@ from adam.episodic import (  # noqa: E402
 )
 from adam.memory import EpisodicMemory  # noqa: E402
 from adam.tuning import (  # noqa: E402
+    ChineseTuning,
     EchoesTuning,
     EpisodicTuning,
     EpisodicWeights,
@@ -186,9 +187,10 @@ class EpisodicMemoryTests(unittest.TestCase):
         self.assertIn("echo_03", all_uses)
 
     def test_semantic_roundtrip(self) -> None:
+        # semantic.md был переименован в diary.md (read_diary/write_diary).
         text = "## Постоянные посетители\n- **Михаил**: память."
-        self.em.write_semantic(text)
-        self.assertEqual(self.em.read_semantic(), text)
+        self.em.write_diary(text)
+        self.assertEqual(self.em.read_diary(), text)
 
 
 # ---------- EchoesGate ----------
@@ -245,7 +247,7 @@ class EchoesGateTests(unittest.TestCase):
     def test_match_and_inject(self) -> None:
         injected = self.gate.maybe_inject(
             transcript="расскажи про коридор и свет",
-            mood="neutral", adam_state="Ac-Or",
+            mood="neutral",
             tuning=self.tuning,
         )
         self.assertIsNotNone(injected)
@@ -254,13 +256,13 @@ class EchoesGateTests(unittest.TestCase):
     def test_global_cooldown(self) -> None:
         self.gate.maybe_inject(
             transcript="коридор и свет",
-            mood="neutral", adam_state="Ac-Or",
+            mood="neutral",
             tuning=self.tuning,
         )
         # сразу после инжекта — cooldown активен
         r2 = self.gate.maybe_inject(
             transcript="коридор и свет",
-            mood="neutral", adam_state="Ac-Or",
+            mood="neutral",
             tuning=self.tuning,
         )
         self.assertIsNone(r2)
@@ -269,7 +271,6 @@ class EchoesGateTests(unittest.TestCase):
         r = self.gate.maybe_inject(
             transcript="коридор",
             mood="hostile",  # echo_test_a заблокирован
-            adam_state="Ac-Ch",
             tuning=self.tuning,
         )
         # echo_b не заблокирован, но не матчит "коридор"
@@ -279,10 +280,182 @@ class EchoesGateTests(unittest.TestCase):
         tuning = EchoesTuning(enabled=False)
         r = self.gate.maybe_inject(
             transcript="коридор",
-            mood="neutral", adam_state="Ac-Or",
+            mood="neutral",
             tuning=tuning,
         )
         self.assertIsNone(r)
+
+
+# ---------- Phase 30: smart injection (layers A/B/C/D + chinese) ----------
+
+
+SAMPLE_SMART = """
+```yaml
+---
+id: s_lonely
+tags: [одиночество, пустота, тишина, ожидание]
+weight: 1.0
+mood_block: []
+---
+```
+зал ожидания, в котором никого не было.
+
+```yaml
+---
+id: s_corridor
+tags: [коридор, свет, путь, ожидание]
+weight: 1.0
+mood_block: []
+---
+```
+длинный коридор с лампами.
+"""
+
+# Кластеры для тематического моста: «одиноко» → тема «одиночество».
+SMART_CLUSTERS = {"одиночество": ["один", "одиноко", "пусто", "никого"]}
+
+
+class SmartGateTests(unittest.TestCase):
+    """Phase 30: тематический мост, мягкий движок, diversity, спонтанный канал."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.pool_path = Path(self.tmp.name) / "Echoes.md"
+        self.pool_path.write_text(SAMPLE_SMART, encoding="utf-8")
+        self.em = EpisodicMemory(Path(self.tmp.name))
+        self.gate = EchoGate(
+            pool_path=self.pool_path,
+            memory=self.em,
+            pool="echoes",
+            rng=random.Random(0),
+        )
+
+    def _tuning(self, **over) -> EchoesTuning:
+        base = dict(
+            global_cooldown_turns=0,
+            per_echo_cooldown_days=1,
+            selection_floor=0.15,
+        )
+        base.update(over)
+        return EchoesTuning(**base)
+
+    def test_theme_bridge_matches_normalized_theme(self) -> None:
+        # «одиноко» не является подстрокой тега «одиночество», но тематический
+        # мост через acc.themes даёт совпадение (слой A).
+        inj = self.gate.maybe_inject(
+            transcript="мне так одиноко здесь",
+            tuning=self._tuning(),
+            themes=["одиночество"],
+            theme_clusters=SMART_CLUSTERS,
+        )
+        self.assertIsNotNone(inj)
+        self.assertEqual(inj.entry.id, "s_lonely")
+
+    def test_history_window_feeds_match(self) -> None:
+        # Текущая реплика нейтральна, но окно истории содержит «коридор» →
+        # s_corridor матчится (слой A — окно истории).
+        inj = self.gate.maybe_inject(
+            transcript="и что дальше",
+            tuning=self._tuning(),
+            history_text="ты говорил про длинный коридор и свет",
+        )
+        self.assertIsNotNone(inj)
+        self.assertEqual(inj.entry.id, "s_corridor")
+
+    def test_soft_engine_passes_near_miss_below_old_threshold(self) -> None:
+        # 1 из 4 тегов → score≈0.45. Старый жёсткий порог 0.9 бы отверг,
+        # мягкий движок (floor 0.15) пропускает (слой B).
+        inj = self.gate.maybe_inject(
+            transcript="расскажи про свет",
+            tuning=self._tuning(match_threshold=0.9),
+        )
+        self.assertIsNotNone(inj)
+        self.assertEqual(inj.entry.id, "s_corridor")
+
+    def test_diversity_blocks_shared_tag(self) -> None:
+        sid = "sess-div"
+        t = self._tuning(diversity_enabled=True)
+        a = self.gate.maybe_inject(
+            transcript="коридор свет путь", tuning=t, session_id=sid
+        )
+        self.assertIsNotNone(a)
+        self.assertEqual(a.entry.id, "s_corridor")
+        # s_lonely делит тег «ожидание» с s_corridor → блок; s_corridor на cooldown.
+        b = self.gate.maybe_inject(
+            transcript="одиночество пустота тишина", tuning=t, session_id=sid
+        )
+        self.assertIsNone(b)
+
+    def test_diversity_off_allows_second(self) -> None:
+        sid = "sess-nodiv"
+        t = self._tuning(diversity_enabled=False)
+        self.gate.maybe_inject(transcript="коридор свет путь", tuning=t, session_id=sid)
+        b = self.gate.maybe_inject(
+            transcript="одиночество пустота тишина", tuning=t, session_id=sid
+        )
+        self.assertIsNotNone(b)
+        self.assertEqual(b.entry.id, "s_lonely")
+
+    def test_spontaneous_injects_without_match(self) -> None:
+        t = self._tuning(
+            spontaneous_enabled=True,
+            spontaneous_probability=1.0,
+            spontaneous_min_turns=0,
+        )
+        inj = self.gate.maybe_inject_spontaneous(
+            tuning=t, turn_count=5, session_id="sp"
+        )
+        self.assertIsNotNone(inj)
+        self.assertIn(inj.entry.id, {"s_lonely", "s_corridor"})
+
+    def test_spontaneous_respects_min_turns(self) -> None:
+        t = self._tuning(
+            spontaneous_enabled=True,
+            spontaneous_probability=1.0,
+            spontaneous_min_turns=10,
+        )
+        inj = self.gate.maybe_inject_spontaneous(tuning=t, turn_count=2)
+        self.assertIsNone(inj)
+
+    def test_spontaneous_disabled(self) -> None:
+        t = self._tuning(spontaneous_enabled=False, spontaneous_probability=1.0)
+        inj = self.gate.maybe_inject_spontaneous(tuning=t, turn_count=99)
+        self.assertIsNone(inj)
+
+
+class ChineseHintTests(unittest.TestCase):
+    """Phase 30: ru_hint прокидывается в hint_text для chinese-пула."""
+
+    def test_chinese_hint_includes_ru_hint(self) -> None:
+        entry = EchoEntry(
+            id="zh_x",
+            tags=["память"],
+            weight=0.5,
+            mood_block=[],
+            body="物是人非",
+            ru_hint="вещи остались, люди ушли",
+            pool="chinese",
+        )
+        hint = InjectedEcho(entry=entry, score=1.0).hint_text
+        self.assertIn("物是人非", hint)
+        self.assertIn("вещи остались", hint)
+
+    def test_chinese_hint_without_ru_hint(self) -> None:
+        entry = EchoEntry(
+            id="zh_y", tags=["x"], weight=0.5, mood_block=[],
+            body="无中生有", ru_hint=None, pool="chinese",
+        )
+        hint = InjectedEcho(entry=entry, score=1.0).hint_text
+        self.assertIn("无中生有", hint)
+
+    def test_echo_hint_plain(self) -> None:
+        entry = EchoEntry(
+            id="e", tags=["x"], weight=0.5, mood_block=[],
+            body="длинный коридор", pool="echoes",
+        )
+        hint = InjectedEcho(entry=entry, score=1.0).hint_text
+        self.assertIn("длинный коридор", hint)
 
 
 # ---------- TuningStore ----------

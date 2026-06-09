@@ -14,15 +14,15 @@ progress:
 
 # Adam-Chip — Project State
 
-**Last Updated:** 2026-05-18
-**Status:** Executing Phase 29
+**Last Updated:** 2026-06-07
+**Status:** Ready to plan
 
 ## Active Phase
 
-**Phase 11: Voice Pipeline Refactor — соответствие эталонной логике** — plan ready, executing
-Branch: `V-S08.1-code_rev_ref_opt` (мёрж в `main` в процессе)
-Plan: Not started
-Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-refactor/REVIEW.md)
+**Phase 30: Echoes/Chinese Gate Activation — реальный инжект пулов About в диалог** — context ready, planning
+Branch: `MemoryFixes`
+Plan: Not started (run `/gsd-plan-phase 30`)
+Context: [phases/30-echoes-chinese-gate-activation/30-CONTEXT.md](phases/30-echoes-chinese-gate-activation/30-CONTEXT.md)
 
 → [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
 
