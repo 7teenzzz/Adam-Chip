@@ -943,18 +943,16 @@ class VoiceLoopController:
                 # Reset OWW model state on the False→True transition so accumulated
                 # LSTM state from the previous wake-word detection doesn't carry over
                 # and produce an immediate high score on the first audio frame of TTS.
-                # Also flush any chunks that arrived during the speaking=False→True gap.
+                # NOTE: do NOT flush the queue here — audio the user speaks at the
+                # very start of TTS (the barge-in attempt) lands in _barge_in_q
+                # during this gap. Flushing it would discard exactly the "адам"
+                # we are trying to detect and prevent OWW from ever accumulating
+                # the required debounce_hits. The queue is already drained every
+                # 50 ms while speaking=False, so no stale pre-TTS audio survives.
                 if not _was_speaking:
                     _buf.clear()
                     _bi_hits = 0
                     self._wake_engine.reset()
-                    bq_flush = self._barge_in_q
-                    if bq_flush is not None:
-                        while True:
-                            try:
-                                bq_flush.get_nowait()
-                            except Exception:
-                                break
                 _was_speaking = True
                 bq = self._barge_in_q
                 if bq is None:
