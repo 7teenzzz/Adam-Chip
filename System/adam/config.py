@@ -185,6 +185,31 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "vad_threshold": 0,
         "wake_silence_timeout_sec": 6,
     },
+    "skills": {
+        "weather": {
+            "enabled": True,
+            "provider": "open_meteo",
+            "base_url": "https://api.open-meteo.com/v1/forecast",
+            "latitude": 55.721265,
+            "longitude": 37.625647,
+            "location_name": "Москва",
+            "poll_interval_sec": 900,
+            "cache_ttl_sec": 1800,
+            "timeout_sec": 8,
+            "intent_keywords": [
+                "погод", "на улице", "за окном", "холодно", "тепло",
+                "жарко", "дожд", "снег", "ветер", "градус",
+            ],
+        },
+        "jokes": {
+            "enabled": True,
+            "pool_path": "Agent-Adam-Chip/About/Jokes.md",
+            "per_joke_cooldown_days": 3,
+            "intent_keywords": [
+                "пошути", "анекдот", "рассмеши", "шутк", "смешн", "развесели",
+            ],
+        },
+    },
     "tuning": {
         "memory": {
             "episodic": {

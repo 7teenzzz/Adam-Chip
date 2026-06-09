@@ -57,6 +57,7 @@ from adam.metrics import MetricsLog
 from adam.metrics_sessions import SessionsLog
 from adam.power import PowerGate
 from adam.prompt import PromptBuilder, LeadingNoiseFilter, sanitize_reply
+from adam.skills import IntentRouter, JokeGate, WeatherProvider
 from adam.config import PROJECT_ROOT
 from adam.sound import play_local_sound
 from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
@@ -115,6 +116,24 @@ chinese_gate = EchoGate(
     memory=episodic_memory,
     pool="chinese",
 )
+
+# --- Phase 30 skills: intent-gated jokes + weather (pre-LLM providers) ---
+_skills_cfg = settings.section("skills")
+_weather_cfg = _skills_cfg.get("weather", {}) if isinstance(_skills_cfg, dict) else {}
+_jokes_cfg = _skills_cfg.get("jokes", {}) if isinstance(_skills_cfg, dict) else {}
+intent_router = IntentRouter(
+    joke_keywords=list(_jokes_cfg.get("intent_keywords", [])),
+    weather_keywords=list(_weather_cfg.get("intent_keywords", [])),
+)
+weather_provider = WeatherProvider(_weather_cfg)
+joke_gate = JokeGate(
+    pool_path=PROJECT_ROOT / str(_jokes_cfg.get("pool_path") or "Agent-Adam-Chip/About/Jokes.md"),
+    memory=episodic_memory,
+)
+
+# Spoken framing for verbatim jokes — keeps the punchline exact while sounding
+# in-character. Empty entries bias toward deadpan (no frame) delivery.
+_JOKE_FRAMES = ["Лови.", "Держи.", "Хочешь? Слушай.", "Будет тебе шутка.", "", ""]
 
 runtime_state: dict[str, Any] = {
     "mode": settings.mode,
@@ -2338,9 +2357,16 @@ async def lifespan(_: FastAPI):
         services_confirmed = True
     asyncio.create_task(_orchestrated_startup(services_confirmed), name="startup_sequence")
     asyncio.create_task(_warmup_asr(), name="warmup_asr")
+    # Phase 30: background weather poll — caches readings so dialogue turns never
+    # block on HTTP. Only started when the weather skill is enabled.
+    weather_task: asyncio.Task | None = None
+    if bool(_weather_cfg.get("enabled", False)):
+        weather_task = asyncio.create_task(weather_provider.poll_loop(), name="weather_poll")
     try:
         yield
     finally:
+        if weather_task is not None:
+            weather_task.cancel()
         await voice_loop.stop()
         if voice_loop.mic_source == "esp32":
             # voice_loop must release any in-flight mic_reader.get_chunk() awaits
@@ -2967,6 +2993,104 @@ async def restart_service(name: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=result.detail)
     return {"ok": True, "service": name, "unit": unit, "detail": result.detail}
 
+async def _run_joke_turn(
+    *,
+    transcript: str,
+    source: str,
+    turn_id: str | None,
+    joke: Any,
+    acc: SessionAccumulator,
+    sensors: dict[str, Any],
+    visitor_name: str | None,
+    t_total: float,
+    asr_ms: float | None,
+) -> dict[str, Any]:
+    """Verbatim joke short-circuit — speak a pooled anecdote, bypassing the LLM.
+
+    The punchline must be exact, so we never route jokes through Gemma (which
+    would also add ~9 s prefill). We still run the full turn bookkeeping:
+    dialogue memory, session accumulator, events, metrics.
+    """
+    frame = random.choice(_JOKE_FRAMES)
+    reply = f"{frame} {joke.body}".strip() if frame else joke.body.strip()
+
+    memory.add_dialogue("viewer", transcript)
+    event_log.append(
+        "viewer_transcript",
+        {"text": transcript, "source": source, "sensors": sensors, "visitor_name": visitor_name, "skill": "joke"},
+        turn_id=turn_id,
+    )
+
+    t_tts = time.perf_counter()
+    tts_result = await _speak(reply, turn_id=turn_id)
+    tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
+
+    runtime_state["last_tts_text"] = reply.lower()
+    _hist = runtime_state.setdefault("recent_tts_history", [])
+    _hist.append({"text": reply.lower(), "finished_at": time.perf_counter()})
+    if len(_hist) > 5:
+        _hist.pop(0)
+    memory.add_dialogue("adam", reply)
+    acc.note_turn("adam", reply)
+
+    total_ms = round((time.perf_counter() - t_total) * 1000, 1)
+    timings = {"asr_ms": asr_ms, "llm_ms": 0.0, "ttfv_ms": 0.0, "tts_ms": tts_ms, "total_ms": total_ms}
+    action_dict = {
+        "kind": "no_action", "mood": "warm", "scene": None, "channel": None,
+        "value": None, "duration_ms": 0, "reason": "skill_joke",
+    }
+
+    metrics_log.append({
+        "turn_id": turn_id,
+        "source": source,
+        "transcript": transcript,
+        "reply": reply,
+        "voice_degraded": bool(tts_result.get("degraded")),
+        "asr_ms": asr_ms,
+        "llm_ms": 0.0,
+        "ttfv_ms": 0.0,
+        "tts_ms": tts_ms,
+        "total_ms": total_ms,
+        "tts_chunks": int(tts_result.get("chunks") or 0),
+        "llm_error": False,
+        "action": "no_action",
+        "action_kind": "no_action",
+        "action_reason": "skill_joke",
+        "session_id": acc.session_id,
+        "session_turn": acc.turn_count,
+        "skill": "joke",
+        "skill_id": joke.id,
+        "visitor_name": visitor_name,
+        "proactive": False,
+    })
+
+    event_log.append(
+        "adam_reply",
+        {
+            "text": reply,
+            "source": source,
+            "voice_degraded": bool(tts_result.get("degraded")),
+            "tts": tts_result,
+            "skill": "joke",
+            "skill_id": joke.id,
+            "timings": timings,
+        },
+        turn_id=turn_id,
+    )
+    return {
+        "ok": True,
+        "turn_id": turn_id,
+        "reply": reply,
+        "source": source,
+        "voice_degraded": bool(tts_result.get("degraded")),
+        "tts": tts_result,
+        "action": action_dict,
+        "mcu": None,
+        "timings": timings,
+        "skill": "joke",
+    }
+
+
 async def _run_dialogue_turn(transcript: str, source: str, asr_ms: float | None = None, turn_id: str | None = None) -> dict[str, Any]:
     if turn_id is None:
         turn_id = str(uuid4())[:8]
@@ -3107,6 +3231,36 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
                 sp_cn.entry.id, sp_cn.score, tuning.chinese.matcher_type
             )
 
+    # --- Phase 30: intent-gated skills (jokes / weather) ---
+    # Detection is offline keyword matching (see skills.IntentRouter) — no extra
+    # LLM pass. Jokes short-circuit the turn (verbatim, no LLM); weather injects
+    # a [ctx.weather] block so the LLM speaks the cached reading in character.
+    weather_ctx: str | None = None
+    intent = intent_router.classify(transcript)
+    if intent == "joke" and bool(_jokes_cfg.get("enabled", False)):
+        joke = joke_gate.pick(cooldown_days=int(_jokes_cfg.get("per_joke_cooldown_days", 3)))
+        if joke is not None:
+            return await _run_joke_turn(
+                transcript=transcript,
+                source=source,
+                turn_id=turn_id,
+                joke=joke,
+                acc=acc,
+                sensors=sensors,
+                visitor_name=visitor_name,
+                t_total=t_total,
+                asr_ms=asr_ms,
+            )
+    elif intent == "weather" and bool(_weather_cfg.get("enabled", False)):
+        # Failure ≠ silence (invariant): stale/missing cache → offline note, not
+        # fabricated data. Adam acknowledges he can't sense outside right now.
+        weather_ctx = weather_provider.cached() or "(датчик улицы сейчас недоступен)"
+        event_log.append(
+            "skill_weather",
+            {"ctx": weather_ctx, "cached": weather_provider.cached() is not None},
+            turn_id=turn_id,
+        )
+
     # semantic
     semantic_text = ""
     if tuning.memory.semantic.enabled:
@@ -3133,6 +3287,7 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
         recent_episodic=recent_lines,
         recent_scenes=recent_scenes,
         echo_hint=echo_hint,
+        weather_ctx=weather_ctx,
         history_turns=history_turns,
         include_scene=tuning.prompt.include_scene,
         include_sensors=tuning.prompt.include_sensors,

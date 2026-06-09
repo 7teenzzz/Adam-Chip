@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-last_updated: "2026-06-05T00:00:00.000Z"
+status: ready_to_plan
+last_updated: "2026-06-07T00:00:00.000Z"
 progress:
   total_phases: 32
   completed_phases: 3
@@ -28,6 +28,8 @@ Context: [phases/30-echoes-chinese-gate-activation/30-CONTEXT.md](phases/30-echo
 
 **Recently completed (хронологически):**
 
+- Phase 30 (Skills — Jokes + Weather) ✓ 2026-06-07 — ветка `Extra`, ожидает Jetson smoke-test + коммита
+
 - Phase 15 (Roadmap Global Update) — финализирован этим merge'ем; 12 будущих фаз добавлены, нумерация унифицирована, voice-фазы вставлены как 7-11
 - Phase 14 (Next-Phases Planning) ✓ 2026-05-17
 - Phase 13 (Theory-Code Verification) ✓ 2026-05-17
@@ -38,6 +40,21 @@ Context: [phases/30-echoes-chinese-gate-activation/30-CONTEXT.md](phases/30-echo
 - Phase 7 (ESP32 Mic Pipeline Refactor — MicReader keep-alive) ✓ 2026-05-17
 
 ## Completed Phases
+
+### Phase 30: Skills — Jokes + Weather ✓ (2026-06-07, ветка Extra)
+
+Что сделано:
+
+- `System/adam/skills.py` (новый) — IntentRouter (offline keyword classifier), WeatherProvider (Open-Meteo, trust_env=False, background poll), JokeGate (verbatim selector, pool="jokes" cooldown)
+- `System/Orchestrator.py` — weather poll_loop в lifespan, intent-врезка в `_run_dialogue_turn_locked`, новая `_run_joke_turn()` (LLM bypass)
+- `System/adam/prompt.py` — `weather_ctx` параметр, `[ctx.weather]` блок в `_build_context_body()`
+- `System/Config.json` + `Config.schema.json` + `adam/config.py` — секция `skills.weather` (Галерея А-Б 55.721265/37.625647) + `skills.jokes`
+- `Agent-Adam-Chip/About/Jokes.md` (новый) — пул 25 анекдотов, формат Echoes.md
+- `tests/test_skills.py` (новый) — 18 unit-тестов, все зелёные
+- `tests/test_weather_integration.py` (новый) — 12 интеграционных тестов (запускать на Jetson с `httpx`)
+- `.planning/phases/30-skills-jokes-weather/30-CONTEXT.md` — полный контекст фазы с инструкциями по тестированию
+
+Ожидает: smoke-тест на Jetson + коммит + merge в main
 
 ### Phase 15: Roadmap Global Update ✓ COMPLETE (2026-05-18)
 
@@ -161,10 +178,7 @@ Context: [phases/30-echoes-chinese-gate-activation/30-CONTEXT.md](phases/30-echo
 
 ## History
 
-- 2026-06-05: Merge `main` → `LuxFlora-modes`. Перенесены аудио-фиксы main (ESP-Audio-Out DSP chain, MAX98357A stereo, mic spectrum FFT, watchdog, local USB cam&mic) в flora-ветку. Конфликты: Orchestrator.py (условный старт/стоп MicReader по `mic_source` из main + flora_controller start/stop сохранены), STATE.md (журналы обеих веток сведены). Config.json смержился чисто.
-- 2026-06-05: Phase 29 Plan 04 завершён (ветка `LuxFlora-modes`). RMS speech sync (FLORA-04): `feed_speech_wav(wav_bytes)` + `_rms_stream` asyncio task в `flora.py` — per-chunk WAV envelope drives PCA9685 light channels 0-10 in lockstep с TTS playback. Timer: `perf_counter` t0 + `hdmi_latency_offset_ms`. Sparks on peaks (D-08). Vibro scaled to `vibro_intensity_pct` (D-12). Barge-in cancel (D-09) на listening/standby/wake_word. Wired в Orchestrator._consumer в 3 playback-dispatch сайтах, best-effort try/except (Action-failure-≠-silence, T-29-13). 5/5 тестов зелёных. Commits `458652d`, `46a07ef`.
-- 2026-06-05: Phase 29 Plan 03 завершён (ветка `LuxFlora-modes`). Jetson-слой событий технофлоры (FLORA-03/06): `System/adam/flora.py` `FloraController` подписывается на EventLog-очередь (pub-sub, не callbacks) и маппит реальные события пайплайна на пресеты — wake_word_detected→accent, первый выход из boot_warmup→wake_bloom (однократно, RESEARCH Open Q1 RESOLVED), listening→attentive (вибро OFF, D-11), standby→breathe, llm_thinking_started→think_pulse. tts_started/finished — стаб границы ответа (RMS-стример план 04). Новый `MCUClient.set_flora_state` POST `/api/flora/state` через `_NO_PROXY_OPENER` (flat-key payload, clamp `*_duty`/`*_channel`). Wiring в Orchestrator lifespan рядом с mic_reader. TDD RED→GREEN, tests/test_flora.py 4 passed / 1 skipped. Commits `eee9551`, `a6a93a4`, `719e7d7`, `b8fc02b`.
-- 2026-06-04: Phase 29 Plan 02 завершён (ветка `LuxFlora-modes`). Config-First секция `flora` (FLORA-05): маски каналов свет 0-10 / вибро 11-14 (D-02), gamma 2.2, crossfade, speech RMS-параметры (D-07/D-08), вибро-политика (D-11/D-12), 5 пресетов состояний — в Config.json + DEFAULT_CONFIG + Config.schema.json. Wave 0 scaffold `tests/test_flora.py` (test_flora_config green, 3 skip-стаба для планов 03/04). Решение: flora — plain section (`settings.section('flora')`), не pydantic tuning (Pitfall 6). Commits `77af3fb`, `4256019`.
+- 2026-06-07: Phase 30 (Skills — Jokes + Weather) — ветка `Extra`. JokeGate (verbatim, bypass LLM) + WeatherProvider (Open-Meteo, фоновый кэш, [ctx.weather] инжекция). 18 unit + 12 integration тестов. Pending: Jetson smoke-test + коммит.
 - 2026-06-01: Phase 29 (ESP Audio Output — TTS DSP chain) — аудио-часть готова (commits `2b27ac3`, `e99ced0`, `0b7361a`). DSP-цепочка (HPF/comp/presence/limiter/soxr) + paced-подача без щелчков; профиль hpf240/makeup4/comp2.0. Итоги: `29-SUMMARY.md`. Deferred: хрип = аналог (GAIN +15дБ / 5В), firmware backpressure, самоэхо. Урок сессии: обрывы громкого звука были от USB-питания, не от кода.
 - 2026-05-18: Merge ветки `V-S08.1-code_rev_ref_opt` → `main`. ROADMAP перенумерован: voice-фазы получили номера 7-11, diploma+planning фазы сдвинуты на +5 (Phase 7→12, …, Phase 23→28). Phase 11 (Voice Pipeline Refactor) — active.
 - 2026-05-17: Phase 14 (Next-Phases Planning) завершена. 12 фаз спроектированы.
