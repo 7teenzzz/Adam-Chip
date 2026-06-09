@@ -10,7 +10,7 @@ services:
       ADAM_CONFIG: /app/System/Config.json
       ADAM_MODE: ${ADAM_MODE:-maintenance}
       ADAM_DATA_DIR: /data/adam
-      ESP_BASE_URL: ${ESP_BASE_URL:-http://192.168.0.171}
+      ESP_BASE_URL: ${ESP_BASE_URL:-http://10.10.10.171}
       ADAM_LLM_PROVIDER: ${ADAM_LLM_PROVIDER:-openai}
       ADAM_LLM_BASE_URL: ${ADAM_LLM_BASE_URL:-http://127.0.0.1:8081/v1}
       ADAM_LLM_MODEL: ${ADAM_LLM_MODEL:-gemma-4-E4B-it-UD-Q4_K_XL}
@@ -58,6 +58,7 @@ services:
     runtime: nvidia
     environment:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      ADAM_CONFIG: /app/Config.json
       ADAM_ASR_PORT: ${ADAM_ASR_PORT:-8095}
       ADAM_ASR_WHISPERX_MODEL: ${ADAM_ASR_WHISPERX_MODEL:-small}
       ADAM_ASR_LANGUAGE: ${ADAM_ASR_LANGUAGE:-ru}
@@ -71,6 +72,7 @@ services:
       ADAM_ASR_VAD_OFFSET: ${ADAM_ASR_VAD_OFFSET:-0.2}
       ADAM_ASR_LOGPROB_THRESHOLD: ${ADAM_ASR_LOGPROB_THRESHOLD:--1.85}
     volumes:
+      - ./System/Config.json:/app/Config.json:ro
       - ./Subsystem/Models:/models:ro
       - ./data/hf_cache:/hf_cache
       - /etc/localtime:/etc/localtime:ro

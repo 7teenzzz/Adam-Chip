@@ -24,23 +24,46 @@ _DEVICE = os.environ.get("ADAM_ASR_DEVICE", "cuda")
 _COMPUTE_TYPE = os.environ.get("ADAM_ASR_COMPUTE_TYPE", "float16")
 _SAMPLE_RATE = int(os.environ.get("ADAM_ASR_SAMPLE_RATE", "16000"))
 
-# Silero VAD onset/offset thresholds passed to whisperx model.transcribe() via vad_options.
-# vad_onset: probability above which a frame is considered speech start. Lower = more sensitive
-#   to brief/quiet speech (0.1 catches short commands; default ~0.5 misses them).
-# vad_offset: probability below which a frame is considered silence after speech. Lower = more
-#   generous in continuing a speech segment past quiet frames.
-_VAD_ONSET = float(os.environ.get("ADAM_ASR_VAD_ONSET", "0.3"))
-_VAD_OFFSET = float(os.environ.get("ADAM_ASR_VAD_OFFSET", "0.2"))
 
-# Per-segment quality filter: segments with avg_logprob below this are discarded.
-# -0.8 drops many uncertain/quiet segments; -1.7 accepts borderline segments from
-# far-field or brief utterances. Set via env so ASR service doesn't need a restart
-# for tuning — reload the Docker container or systemd unit to pick up the new value.
-_LOGPROB_THRESHOLD = float(os.environ.get("ADAM_ASR_LOGPROB_THRESHOLD", "-0.8"))
+def _read_config_json() -> dict:
+    cfg_path = os.environ.get("ADAM_CONFIG")
+    if not cfg_path:
+        return {}
+    try:
+        import json
+        with open(cfg_path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _cfg_val(env_key: str, config_path: str, default: str) -> str:
+    """Priority: env var (explicit) > Config.json > hardcoded default."""
+    if env_key in os.environ:
+        return os.environ[env_key]
+    cfg = _read_config_json()
+    cur: Any = cfg
+    for part in config_path.split("."):
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(part)
+        if cur is None:
+            return default
+    return str(cur)
+
+
+# pyannote VAD thresholds passed to whisperX load_model() via vad_options.
+# Lower onset = more sensitive to brief/quiet/far-field speech.
+# 0.1 restores behavior from commit e390d16 for exhibition-distance commands.
+_VAD_ONSET = float(_cfg_val("ADAM_ASR_VAD_ONSET", "services.asr.vad_onset", "0.1"))
+_VAD_OFFSET = float(_cfg_val("ADAM_ASR_VAD_OFFSET", "services.asr.vad_offset", "0.2"))
+
+# avg_logprob threshold — segments below this score are discarded as noise/hallucination.
+# -1.7 keeps borderline segments from far-field or brief utterances (restored from e390d16).
+_LOGPROB_THRESHOLD = float(_cfg_val("ADAM_ASR_LOGPROB_THRESHOLD", "services.asr.logprob_threshold", "-1.7"))
 
 # Whisper hallucinates these phrases on near-silence or very short audio clips.
-# They appear in the training data (YouTube subtitles) and have high logprob even
-# on garbage input, so logprob filtering alone doesn't catch them.
+# They appear in training data (YouTube subtitles) and pass logprob filtering.
 _HALLUCINATION_PATTERNS = {
     "тревожная музыка",
     "интригующая музыка",
@@ -62,8 +85,8 @@ _HALLUCINATION_PATTERNS = {
 _MODELS_DIR = Path(os.environ.get("ADAM_MODELS_DIR", "Subsystem/Models"))
 
 _MODEL: Any = None
-_ACTUAL_MODEL_SIZE: str = _MODEL_SIZE  # updated after load to reflect OOM fallback
-_ACTUAL_DEVICE: str = _DEVICE          # updated after load to reflect CUDA→CPU fallback
+_ACTUAL_MODEL_SIZE: str = _MODEL_SIZE
+_ACTUAL_DEVICE: str = _DEVICE
 _MODEL_LOCK = threading.Lock()         # prevents concurrent load_model() calls → OOM on Jetson
 
 
@@ -124,38 +147,22 @@ def _verify_cuda_available() -> None:
         )
 
 
-def _load_model_with_fallback(whisperx: Any, model_size: str, device: str, compute_type: str) -> tuple[Any, str]:
-    """Load whisperx model, falling back to CPU if ctranslate2 lacks CUDA support."""
+def _load_model(whisperx: Any, model_size: str, device: str, compute_type: str) -> Any:
+    """Load whisperx model. Raises on failure — no silent CPU fallback.
+
+    CUDA errors propagate to the caller so the service crashes and Docker
+    restarts it, rather than silently running on CPU at exhibition speed.
+    """
     if device == "cuda":
         _verify_cuda_available()
-    try:
-        model = whisperx.load_model(
-            model_size,
-            device=device,
-            compute_type=compute_type,
-            language=_LANGUAGE,
-            download_root=str(_MODELS_DIR),
-            vad_options={"vad_onset": _VAD_ONSET, "vad_offset": _VAD_OFFSET},
-        )
-        return model, device
-    except Exception as exc:
-        exc_str = str(exc)
-        if device == "cuda" and ("CUDA" in exc_str or "cuda" in exc_str.lower() or "CTranslate2" in exc_str):
-            # ctranslate2 installed without CUDA support (common on Jetson with pip wheels)
-            import logging as _logging
-            _logging.getLogger("adam.asr").error(
-                "ctranslate2 CUDA unavailable (%s) — falling back to CPU float32", exc_str[:120]
-            )
-            model = whisperx.load_model(
-                model_size,
-                device="cpu",
-                compute_type="float32",
-                language=_LANGUAGE,
-                download_root=str(_MODELS_DIR),
-                vad_options={"vad_onset": _VAD_ONSET, "vad_offset": _VAD_OFFSET},
-            )
-            return model, "cpu"
-        raise
+    return whisperx.load_model(
+        model_size,
+        device=device,
+        compute_type=compute_type,
+        language=_LANGUAGE,
+        download_root=str(_MODELS_DIR),
+        vad_options={"vad_onset": _VAD_ONSET, "vad_offset": _VAD_OFFSET},
+    )
 
 
 def _get_model() -> Any:
@@ -174,12 +181,13 @@ def _get_model() -> Any:
         compute_type = _resolve_compute_type(device)
         model_size = _resolve_model_size()
         _ACTUAL_MODEL_SIZE = model_size
+        _ACTUAL_DEVICE = device
 
         # language is a top-level param of load_model(), NOT inside asr_options.
         # asr_options feeds into TranscriptionOptions (beam search params only).
         # Silero VAD is used automatically in whisperx >= 3.x via the internal vad pipeline;
         # pyannote is NOT needed and no HuggingFace token is required for transcription.
-        _MODEL, _ACTUAL_DEVICE = _load_model_with_fallback(whisperx, model_size, device, compute_type)
+        _MODEL = _load_model(whisperx, model_size, device, compute_type)
     return _MODEL
 
 
@@ -191,11 +199,9 @@ def _transcribe_audio(audio: np.ndarray) -> str:
     result = model.transcribe(audio, language=_LANGUAGE, batch_size=1)
     parts = []
     for seg in result.get("segments", []):
-        # avg_logprob: lower = worse quality. Configurable via _LOGPROB_THRESHOLD
-        # (env ADAM_ASR_LOGPROB_THRESHOLD). Default -0.8 tolerates quiet/distant speech;
-        # set to -1.7 to also accept brief uncertain segments from the INMP441 mic.
-        # NOTE: whisperx uses avg_logprob (NOT no_speech_prob which is faster-whisper only)
-        if seg.get("avg_logprob", -1.0) < _LOGPROB_THRESHOLD:
+        # avg_logprob: lower = worse quality. Default 0.0 when key is absent so a
+        # missing key never silently drops the segment.
+        if seg.get("avg_logprob", 0.0) < _LOGPROB_THRESHOLD:
             continue
         text = seg.get("text", "").strip()
         if text and text.lower().strip("[]().,!? ") not in _HALLUCINATION_PATTERNS:
@@ -271,9 +277,12 @@ async def health(response: Response) -> dict:
         "model": _ACTUAL_MODEL_SIZE,  # reflects OOM fallback (may differ from _MODEL_SIZE env)
         "model_requested": _MODEL_SIZE,
         "language": _LANGUAGE,
-        "device": _ACTUAL_DEVICE,          # reflects CUDA→CPU fallback
+        "device": _ACTUAL_DEVICE,
         "device_requested": _resolve_device(),
         "compute_type": _resolve_compute_type(_ACTUAL_DEVICE),
+        "vad_onset": _VAD_ONSET,
+        "vad_offset": _VAD_OFFSET,
+        "logprob_threshold": _LOGPROB_THRESHOLD,
         "dependency_errors": dependency_errors,
     }
 

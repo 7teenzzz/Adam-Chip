@@ -35,10 +35,10 @@
           "items": { "type": "string" },
           "description": "Relative paths to persona markdown files loaded into system prompt in order. Changing order affects prompt structure. Adding/removing files changes character depth.",
           "default": [
-            "Agent Adam Chip/About/System.md",
-            "Agent Adam Chip/About/Identity.md",
-            "Agent Adam Chip/About/Lore.md",
-            "Agent Adam Chip/About/Abilities.md"
+            "Agent-Adam-Chip/About/System.md",
+            "Agent-Adam-Chip/About/Identity.md",
+            "Agent-Adam-Chip/About/Lore.md",
+            "Agent-Adam-Chip/About/Abilities.md"
           ]
         },
         "prompt_trace_max": {
@@ -85,7 +85,7 @@
             "primary": {
               "type": "string",
               "enum": ["esp_mjpeg", "jetson_gstreamer", "remote_rtsp"],
-              "description": "Active video source. 'esp_mjpeg' uses ESP32 camera stream at esp_mjpeg_url (192.168.0.171:81/stream). 'jetson_gstreamer' uses local USB/CSI camera via GStreamer pipeline. 'remote_rtsp' uses an IP camera RTSP stream.",
+              "description": "Active video source. 'esp_mjpeg' uses ESP32 camera stream at esp_mjpeg_url (10.10.10.171:81/stream). 'jetson_gstreamer' uses local USB/CSI camera via GStreamer pipeline. 'remote_rtsp' uses an IP camera RTSP stream.",
               "default": "esp_mjpeg"
             },
             "gstreamer_pipeline": {
@@ -106,7 +106,7 @@
             "esp_mjpeg_url": {
               "type": "string",
               "description": "HTTP URL of the ESP32 MJPEG camera stream.",
-              "default": "http://192.168.0.171:81/stream"
+              "default": "http://10.10.10.171:81/stream"
             },
             "esp_fail_threshold": {
               "type": "integer",
@@ -609,23 +609,23 @@
             },
             "vad_onset": {
               "type": "number",
-              "minimum": 0.01,
-              "maximum": 0.99,
-              "description": "Silero VAD speech-onset probability threshold passed to whisperx model.transcribe() via vad_options. A frame is considered speech start when Silero's probability exceeds this. Lower = more sensitive to brief or quiet speech. Default whisperx value is ~0.5, which misses 1-2s far-field commands. 0.1 restores behavior from commit e390d16. Mirrored in env ADAM_ASR_VAD_ONSET (systemd/Docker service). Changing Config.json has no effect without restarting the WhisperX service.",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "pyannote VAD onset threshold passed to whisperX load_model() via vad_options. Controls when speech is detected as starting. whisperX default 0.500 is tuned for clean studio audio; lower values make VAD more sensitive. For ESP32 INMP441 or USB webcam (noisier near-field audio) 0.3 is recommended. 0.1 restores behavior from commit e390d16 for far-field commands. Raise if too many false-positive speech detections; lower if speech is not being detected at all. Paired with vad_offset.",
               "default": 0.1
             },
             "vad_offset": {
               "type": "number",
-              "minimum": 0.01,
-              "maximum": 0.99,
-              "description": "Silero VAD speech-offset probability threshold passed to whisperx model.transcribe() via vad_options. Speech segment ends when Silero probability drops below this. Lower = more permissive in continuing a segment through quiet frames (breath gaps, hesitations). Mirrored in env ADAM_ASR_VAD_OFFSET. Changing Config.json has no effect without restarting the WhisperX service.",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "pyannote VAD offset threshold passed to whisperX load_model() via vad_options. Controls when speech is detected as ending. whisperX default 0.363. Lower values keep speech windows open longer (more tolerant of brief pauses within a sentence). 0.2 recommended for ESP32 INMP441 / USB webcam. Must be <= vad_onset or VAD behaves unexpectedly.",
               "default": 0.2
             },
             "logprob_threshold": {
               "type": "number",
               "minimum": -5.0,
               "maximum": 0.0,
-              "description": "Per-segment avg_logprob quality filter in ASR_WhisperX.py. Segments with avg_logprob below this are discarded as noise or hallucination. -0.8 (old hardcode) discards most uncertain segments, which silently drops short or far-field utterances. -1.7 (restored from e390d16) keeps borderline segments and significantly improves recognition of brief commands. Mirrored in env ADAM_ASR_LOGPROB_THRESHOLD. Changing Config.json has no effect without restarting the WhisperX service.",
+              "description": "Per-segment avg_logprob quality filter in ASR_WhisperX.py. Segments with avg_logprob below this are discarded as noise or hallucination. -0.8 (old hardcode) discards most uncertain segments, which silently drops short or far-field utterances. -1.7 (restored from e390d16) keeps borderline segments and significantly improves recognition of brief commands. Absent avg_logprob key is treated as 0.0 (accepted). Mirrored in env ADAM_ASR_LOGPROB_THRESHOLD. Changing Config.json has no effect without restarting the WhisperX service.",
               "default": -1.7
             }
           }
@@ -715,12 +715,12 @@
         "base_url": {
           "type": "string",
           "description": "Base URL for the ESP32 HTTP API (port 80). Static IP set via W5500 Ethernet.",
-          "default": "http://192.168.0.171"
+          "default": "http://10.10.10.171"
         },
         "speaker_url": {
           "type": "string",
           "description": "URL for the ESP32 speaker playback endpoint (port 81). Separate server on the ESP32 handles audio streaming.",
-          "default": "http://192.168.0.171:81/speaker"
+          "default": "http://10.10.10.171:81/speaker"
         },
         "timeout_sec": {
           "type": "integer",
@@ -761,6 +761,169 @@
               "type": "integer",
               "description": "Maximum valid PWM value (full on, 12-bit resolution).",
               "default": 4095
+            }
+          }
+        }
+      }
+    },
+    "flora": {
+      "type": "object",
+      "description": "Technoflora reactive layer (Phase 29, FLORA-05). Jetson-side source of truth for the light/vibro animation engine on the ESP32 PCA9685. Plain top-level section read via settings.section('flora') — NOT pydantic tuning (tuning.py is persona-only). All numbers are Config-First (D-13). Channel masks light 0-10 / vibro 11-14 (D-02). Structural defaults (channel masks, gamma) are duplicated firmware-side in AdamsConfig.h because the ESP boots independently before the Jetson connects — keep the two copies consistent; this section is the runtime source of truth pushed to the ESP via POST /api/flora/state params.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Master switch for the technoflora reactive layer. When false, FloraController does not subscribe to the event bus and no /api/flora/state POSTs or RMS frames are sent.",
+          "default": true
+        },
+        "light_channels": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 15 },
+          "description": "PCA9685 channel indices driven as light (D-02). Channels 0-10 (11 lamps). Channel masks live in Config so firmware and Jetson agree.",
+          "default": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        },
+        "vibro_channels": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 15 },
+          "description": "PCA9685 channel indices driven as vibration motors (D-02). Channels 11-14 (4 motors). Channel 15 is left free. Vibro shares the same PCA9685 burst as light but is NOT subject to safety.motor_* clamps (those are for action.py LLM motor commands; flora vibro is continuous low-amplitude presence, D-04/D-12).",
+          "default": [11, 12, 13, 14]
+        },
+        "tick_ms": {
+          "type": "integer",
+          "description": "Informational mirror of the ESP firmware animation-task tick period in milliseconds (~50 Hz at 20 ms). The real tick lives in the firmware FreeRTOS task; this Config value documents the intended rate and is pushed for reference. Keep <= 50 ms tick (>= 20 Hz) for smooth breathing; do not exceed ~50 Hz to avoid I2C bus contention with the sensor task.",
+          "default": 20,
+          "minimum": 10,
+          "maximum": 100
+        },
+        "crossfade_ms": {
+          "type": "integer",
+          "description": "Duration in milliseconds over which the firmware interpolates from current duties to a new preset's duties on a state transition (D-09, 150-250 ms). Lamps are thermally inertial so short crossfades read as smooth. Barge-in jumps to listening immediately regardless (handled Jetson-side).",
+          "default": 200,
+          "minimum": 0,
+          "maximum": 2000
+        },
+        "external_timeout_ms": {
+          "type": "integer",
+          "description": "Watchdog for the firmware `external` preset (debug/flora-stops-on-state-change Part B). While flora is in `external` (Jetson streaming raw RMS/calibration frames via /api/pca9685/*), floraTask suppresses its own writes so the streamed frames stick. If no external HTTP frame arrives for this many ms (the Jetson stream died mid-utterance), floraTask auto-recovers to `breathe` so the lamps never freeze. Mirrors firmware const kFloraExternalTimeoutMs (structural default duplicated firmware-side in AdamsConfig.h). ~500 ms comfortably exceeds the RMS frame_interval_ms (~80 ms) so live streams are never falsely timed out.",
+          "default": 500,
+          "minimum": 100,
+          "maximum": 5000
+        },
+        "max_duty_pct": {
+          "type": "integer",
+          "description": "GLOBAL safe-ceiling for technoflora as a RAW PWM percent (0-100). Every flora channel write — Jetson flora.py preset duties and RMS speech stream, AND the firmware floraTask animation — is clamped to 4095 * max_duty_pct / 100 so the lamps and power supply never exceed this cap, regardless of preset peak_pct or RMS level. Defence-in-depth: clamped on both Jetson and firmware sides (firmware mirrors this ceiling via const kFloraMaxDutyPct in AdamsConfig.h). NOTE: this is RAW PWM (Phase 30 decision A removed perceptual gamma from this ceiling — the % is the PWM signal directly, so 100 = full 4095 counts, 70 = 2867 counts). Default 100 = no clamp (full range allowed); lower it per hardware installation to protect LED strips or power supply.",
+          "default": 100,
+          "minimum": 0,
+          "maximum": 100
+        },
+        "speech": {
+          "type": "object",
+          "description": "Parameters for the Jetson-driven RMS speech-light state (state 4, D-07). When Adam speaks, the Jetson streams brightness frames for light channels 0-10 in time with TTS playback (FLORA-04, filled in plan 04).",
+          "properties": {
+            "frame_interval_ms": {
+              "type": "integer",
+              "description": "Milliseconds between RMS brightness frames pushed to the ESP (~12.5 fps at 80 ms, D-07). The RMS envelope is windowed at this granularity. ~15 fps ceiling — higher rates risk ESP control-server (:80) socket pressure (LWIP_MAX_SOCKETS=16). Lamp thermal inertia hides dropped frames.",
+              "default": 80,
+              "minimum": 33,
+              "maximum": 500
+            },
+            "hdmi_latency_offset_ms": {
+              "type": "integer",
+              "description": "Milliseconds the light stream is shifted to compensate for HDMI/ALSA audio buffer drain after aplay returns (D-07, Pitfall 5). Without it light leads the heard sound. Pure starting guess ~150 ms — calibrate by eye/ear on hardware.",
+              "default": 150,
+              "minimum": 0,
+              "maximum": 1000
+            },
+            "base_duty_pct": {
+              "type": "integer",
+              "description": "Baseline light brightness percentage during speech (RMS envelope floor, D-08). ~25% — lamps never go fully dark mid-utterance.",
+              "default": 25,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "peak_duty_pct": {
+              "type": "integer",
+              "description": "Peak light brightness percentage at the loudest RMS samples during speech (D-08). ~90%. Normalized envelope maps base_duty_pct..peak_duty_pct.",
+              "default": 90,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "spark_probability": {
+              "type": "number",
+              "description": "Probability (0.0-1.0) that a random subset of light channels gets boosted toward peak for one frame on an RMS peak — the rare 'sparks' on peaks (D-08). 0 disables sparks.",
+              "default": 0.15,
+              "minimum": 0.0,
+              "maximum": 1.0
+            }
+          }
+        },
+        "vibro": {
+          "type": "object",
+          "description": "Vibration-motor policy (channels 11-14, FLORA-06). Thin rhythmic presence linked to the light (D-11). NOT clamped by safety.motor_* (D-04/D-12).",
+          "properties": {
+            "intensity_pct": {
+              "type": "integer",
+              "description": "Ceiling on vibro motor amplitude as a percentage of full duty (D-12, restrained default). Acts as the flora-side intensity clamp instead of safety.motor_* (which apply only to action.py motor commands). Firmware should also clamp to this ceiling regardless of requested duty (defence-in-depth, T-29-05).",
+              "default": 30,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "silent_states": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Preset names during which vibro MUST be silent (channels 11-14 zeroed). 'attentive' (listening) is mandatory (D-11) — motor vibration couples into the INMP441 chassis and corrupts ASR. Enforced on both tiers: Jetson sends vibro_enabled=false and the ESP zeroes vibro when preset is in this list (Pitfall 4).",
+              "default": ["attentive"]
+            }
+          }
+        },
+        "states": {
+          "type": "object",
+          "description": "Per-preset start defaults for the five autonomous firmware animation states (D-05). Start values per RESEARCH §Config-First — calibration-tunable on hardware. Pushed to the ESP as POST /api/flora/state params; the ESP holds matching structural defaults in AdamsConfig.h.",
+          "properties": {
+            "breathe": {
+              "type": "object",
+              "description": "Idle / standby preset (покой): slow collective breathing across all light channels, vibro off.",
+              "properties": {
+                "base_pct": { "type": "integer", "description": "Trough brightness percentage of the breathing cycle.", "default": 8, "minimum": 0, "maximum": 100 },
+                "peak_pct": { "type": "integer", "description": "Crest brightness percentage of the breathing cycle.", "default": 30, "minimum": 0, "maximum": 100 },
+                "period_ms": { "type": "integer", "description": "Full breathing-cycle period in milliseconds (~7 s — slow, calm).", "default": 7000, "minimum": 1000, "maximum": 30000 },
+                "vibro": { "type": "boolean", "description": "Whether vibro participates in this preset. False for breathe.", "default": false }
+              }
+            },
+            "accent": {
+              "type": "object",
+              "description": "Detection preset (детекция): a brighter accent flash on wake-word/face detection, with a vibro pulse.",
+              "properties": {
+                "peak_pct": { "type": "integer", "description": "Accent peak brightness percentage.", "default": 75, "minimum": 0, "maximum": 100 },
+                "attack_ms": { "type": "integer", "description": "Rise time of the accent flash in milliseconds.", "default": 250, "minimum": 0, "maximum": 5000 },
+                "vibro": { "type": "boolean", "description": "Whether vibro pulses with the accent. True.", "default": true },
+                "vibro_pulse_ms": { "type": "integer", "description": "Duration of the vibro pulse accompanying the accent in milliseconds.", "default": 120, "minimum": 0, "maximum": 2000 }
+              }
+            },
+            "attentive": {
+              "type": "object",
+              "description": "Listening preset (слушание): a steady plateau of light, vibro OFF (mandatory, D-11 — protects ASR from motor->mic coupling).",
+              "properties": {
+                "plateau_pct": { "type": "integer", "description": "Steady plateau brightness percentage held while listening.", "default": 40, "minimum": 0, "maximum": 100 },
+                "vibro": { "type": "boolean", "description": "MUST be false (D-11). Vibro silent in listening.", "default": false }
+              }
+            },
+            "think_pulse": {
+              "type": "object",
+              "description": "Thinking preset (раздумье): low base with intermittent flashes on a random subset of channels, double vibro pulse.",
+              "properties": {
+                "base_pct": { "type": "integer", "description": "Low base brightness percentage between flashes.", "default": 20, "minimum": 0, "maximum": 100 },
+                "flash_ms": { "type": "integer", "description": "Interval/duration scale of the thinking flashes in milliseconds.", "default": 1750, "minimum": 100, "maximum": 10000 },
+                "vibro": { "type": "string", "description": "Vibro rhythm mode for thinking. 'double_pulse' = two short pulses per flash cycle.", "default": "double_pulse" }
+              }
+            },
+            "wake_bloom": {
+              "type": "object",
+              "description": "Awakening preset (пробуждение): from-dark random sprouting bloom played once when the pipeline leaves boot_warmup, then settles into another preset. Triggered Jetson-side on the first voice_state_change with from=='boot_warmup' (plan 03).",
+              "properties": {
+                "from_dark": { "type": "boolean", "description": "Whether the bloom starts from fully dark channels.", "default": true },
+                "settle_to": { "type": "string", "description": "Preset name to crossfade into after the bloom completes.", "default": "breathe" },
+                "vibro": { "type": "boolean", "description": "Whether vibro participates in the bloom. True.", "default": true }
+              }
             }
           }
         }

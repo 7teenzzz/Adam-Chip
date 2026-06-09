@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-last_updated: "2026-05-18T08:14:02.295Z"
+status: executing
+last_updated: "2026-06-05T00:00:00.000Z"
 progress:
   total_phases: 32
   completed_phases: 3
-  total_plans: 30
-  completed_plans: 16
+  total_plans: 34
+  completed_plans: 18
   percent: 9
 ---
 
 # Adam-Chip — Project State
 
 **Last Updated:** 2026-05-18
-**Status:** Ready to plan
+**Status:** Executing Phase 29
 
 ## Active Phase
 
@@ -161,6 +161,10 @@ Source: [phases/11-voice-pipeline-refactor/REVIEW.md](phases/11-voice-pipeline-r
 
 ## History
 
+- 2026-06-05: Merge `main` → `LuxFlora-modes`. Перенесены аудио-фиксы main (ESP-Audio-Out DSP chain, MAX98357A stereo, mic spectrum FFT, watchdog, local USB cam&mic) в flora-ветку. Конфликты: Orchestrator.py (условный старт/стоп MicReader по `mic_source` из main + flora_controller start/stop сохранены), STATE.md (журналы обеих веток сведены). Config.json смержился чисто.
+- 2026-06-05: Phase 29 Plan 04 завершён (ветка `LuxFlora-modes`). RMS speech sync (FLORA-04): `feed_speech_wav(wav_bytes)` + `_rms_stream` asyncio task в `flora.py` — per-chunk WAV envelope drives PCA9685 light channels 0-10 in lockstep с TTS playback. Timer: `perf_counter` t0 + `hdmi_latency_offset_ms`. Sparks on peaks (D-08). Vibro scaled to `vibro_intensity_pct` (D-12). Barge-in cancel (D-09) на listening/standby/wake_word. Wired в Orchestrator._consumer в 3 playback-dispatch сайтах, best-effort try/except (Action-failure-≠-silence, T-29-13). 5/5 тестов зелёных. Commits `458652d`, `46a07ef`.
+- 2026-06-05: Phase 29 Plan 03 завершён (ветка `LuxFlora-modes`). Jetson-слой событий технофлоры (FLORA-03/06): `System/adam/flora.py` `FloraController` подписывается на EventLog-очередь (pub-sub, не callbacks) и маппит реальные события пайплайна на пресеты — wake_word_detected→accent, первый выход из boot_warmup→wake_bloom (однократно, RESEARCH Open Q1 RESOLVED), listening→attentive (вибро OFF, D-11), standby→breathe, llm_thinking_started→think_pulse. tts_started/finished — стаб границы ответа (RMS-стример план 04). Новый `MCUClient.set_flora_state` POST `/api/flora/state` через `_NO_PROXY_OPENER` (flat-key payload, clamp `*_duty`/`*_channel`). Wiring в Orchestrator lifespan рядом с mic_reader. TDD RED→GREEN, tests/test_flora.py 4 passed / 1 skipped. Commits `eee9551`, `a6a93a4`, `719e7d7`, `b8fc02b`.
+- 2026-06-04: Phase 29 Plan 02 завершён (ветка `LuxFlora-modes`). Config-First секция `flora` (FLORA-05): маски каналов свет 0-10 / вибро 11-14 (D-02), gamma 2.2, crossfade, speech RMS-параметры (D-07/D-08), вибро-политика (D-11/D-12), 5 пресетов состояний — в Config.json + DEFAULT_CONFIG + Config.schema.json. Wave 0 scaffold `tests/test_flora.py` (test_flora_config green, 3 skip-стаба для планов 03/04). Решение: flora — plain section (`settings.section('flora')`), не pydantic tuning (Pitfall 6). Commits `77af3fb`, `4256019`.
 - 2026-06-01: Phase 29 (ESP Audio Output — TTS DSP chain) — аудио-часть готова (commits `2b27ac3`, `e99ced0`, `0b7361a`). DSP-цепочка (HPF/comp/presence/limiter/soxr) + paced-подача без щелчков; профиль hpf240/makeup4/comp2.0. Итоги: `29-SUMMARY.md`. Deferred: хрип = аналог (GAIN +15дБ / 5В), firmware backpressure, самоэхо. Урок сессии: обрывы громкого звука были от USB-питания, не от кода.
 - 2026-05-18: Merge ветки `V-S08.1-code_rev_ref_opt` → `main`. ROADMAP перенумерован: voice-фазы получили номера 7-11, diploma+planning фазы сдвинуты на +5 (Phase 7→12, …, Phase 23→28). Phase 11 (Voice Pipeline Refactor) — active.
 - 2026-05-17: Phase 14 (Next-Phases Planning) завершена. 12 фаз спроектированы.

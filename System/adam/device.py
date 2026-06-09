@@ -32,8 +32,8 @@ class DeviceResult:
 
 class MCUClient:
     def __init__(self, config: dict[str, Any]) -> None:
-        self.base_url = str(config.get("base_url", "http://192.168.0.171")).rstrip("/")
-        self.speaker_url = str(config.get("speaker_url", "http://192.168.0.171:82/speaker")).strip()
+        self.base_url = str(config.get("base_url", "http://10.10.10.171")).rstrip("/")
+        self.speaker_url = str(config.get("speaker_url", "http://10.10.10.171:82/speaker")).strip()
         self.timeout = float(config.get("timeout_sec", 3))
         self.idle_scene = str(config.get("idle_scene", "boot_idle"))
         self.allowed_scenes = set(config.get("allowed_scenes", ["boot_idle"]))
@@ -76,6 +76,30 @@ class MCUClient:
         if not normalized:
             return DeviceResult(False, 400, {}, "updates_required")
         return await asyncio.to_thread(self._request, "POST", "/api/pca9685/channels", {"updates": normalized})
+
+    async def set_flora_state(self, state: str, params: dict[str, Any] | None = None) -> DeviceResult:
+        """POST a technoflora preset transition to the ESP (/api/flora/state, port 80).
+
+        Builds a FLAT-key payload {"state": state, **params} — the firmware JSON
+        parser is flat-key (29-RESEARCH §Firmware HTTP Endpoint), so all param
+        keys must be unique. Duty-like params (keys ending in `_duty`) are clamped
+        to value_min..value_max and channel-like params (keys ending in `_channel`)
+        to channel_min..channel_max before send (defence-in-depth, mirrors
+        set_channels; firmware re-clamps). Routes through self._request so it reuses
+        _NO_PROXY_OPENER — never roll a fresh HTTP client (v2ray socket-leak gotcha).
+        """
+        state = str(state).strip()
+        payload: dict[str, Any] = {"state": state}
+        for key, value in (params or {}).items():
+            if isinstance(value, bool):
+                payload[key] = value
+            elif isinstance(value, int) and key.endswith("_duty"):
+                payload[key] = max(self.value_min, min(self.value_max, int(value)))
+            elif isinstance(value, int) and key.endswith("_channel"):
+                payload[key] = max(self.channel_min, min(self.channel_max, int(value)))
+            else:
+                payload[key] = value
+        return await asyncio.to_thread(self._request, "POST", "/api/flora/state", payload)
 
     async def play_system_sound(self, name: str) -> DeviceResult:
         name = str(name).strip()

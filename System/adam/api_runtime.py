@@ -310,13 +310,6 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         }
 
     # ── Phase 31 (D-05): input-EQ preset CRUD ────────────────────────────
-    # Presets live in tuning.audio_input.presets (Config.json `tuning` section,
-    # NOT media.audio — see Wave 1 deviation note: tuning.py is the canonical
-    # home for hot-reloadable runtime params, mirroring tuning.voice.dsp).
-    # All writes go through TuningStore.apply_patch() — deep-merge, pydantic
-    # validation, persist to Config.json, fire hot-reload listeners. The live
-    # InputDSP picks up changes via its ensure_config() poll in _vad_loop —
-    # no orchestrator restart required.
     def _tuning_store():
         return get_tuning_store()
 
@@ -356,7 +349,6 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         idx = next((i for i, p in enumerate(existing) if p.name == name), None)
         if idx is None:
             raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
-        # Allow renaming via payload["name"]; default to the path name otherwise.
         merged_payload = {"name": name, **payload}
         try:
             updated = EqPreset.model_validate(merged_payload)
@@ -369,9 +361,6 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         tuning_now = store.current().audio_input
         active = tuning_now.active_preset
         patch: dict[str, Any] = {"audio_input": {"presets": new_presets}}
-        # If the renamed/edited preset is currently active, keep active_preset
-        # consistent and re-apply its (possibly changed) curve live (D-05 note:
-        # "выбрать консистентно с hot-reload").
         if active == name:
             patch["audio_input"]["active_preset"] = updated.name
             patch["audio_input"]["dsp"] = {"hpf": updated.hpf.model_dump(), "bands": [b.model_dump() for b in updated.bands]}
@@ -409,9 +398,6 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         preset = next((p for p in existing if p.name == name), None)
         if preset is None:
             raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
-        # Activation copies hpf/bands into the LIVE dsp curve AND records the
-        # active_preset name — keeps them consistent so InputDSP.ensure_config()
-        # hot-reload actually changes what's heard (D-05 "consistent with hot-reload").
         patch = {
             "audio_input": {
                 "active_preset": preset.name,
@@ -427,6 +413,7 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         deps.event_log.append("audio_preset_activated", {"name": preset.name})
         return {"ok": True, "active_preset": new_tuning.audio_input.active_preset, "dsp": new_tuning.audio_input.dsp.model_dump()}
+
 
     @router.get("/api/models/llm")
     async def models_llm() -> dict[str, Any]:
@@ -543,7 +530,7 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
         echoes_pool: int = 0
         from .echoes_gate import EchoGate
         # count echoes pool size via gate file path if available
-        echoes_path = em.root.parent.parent / "Agent Adam Chip" / "Echoes.txt"
+        echoes_path = em.root.parent.parent / "Agent-Adam-Chip" / "Echoes.txt"
         if not echoes_path.exists():
             echoes_path = em.root.parent / "echoes.txt"
         if echoes_path.exists():

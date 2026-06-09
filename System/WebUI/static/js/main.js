@@ -84,6 +84,7 @@ const NAV_STRUCTURE = [
       { key: "models",     label: "Модели" },
       { key: "subsystem",  label: "Подсистема" },
       { key: "services",   label: "Сервисы" },
+      { key: "flora",      label: "Технофлора" },
       { separator: true },
       { key: "persona",    label: "Личность агента" },
     ],

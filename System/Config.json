@@ -5,10 +5,10 @@
     "mode": "maintenance",
     "data_dir": "/home/i17jet/Agents/Adam-Chip/data/adam",
     "persona_paths": [
-      "Agent Adam Chip/About/System.md",
-      "Agent Adam Chip/About/Identity.md",
-      "Agent Adam Chip/About/Lore.md",
-      "Agent Adam Chip/About/Abilities.md"
+      "Agent-Adam-Chip/About/System.md",
+      "Agent-Adam-Chip/About/Identity.md",
+      "Agent-Adam-Chip/About/Lore.md",
+      "Agent-Adam-Chip/About/Abilities.md"
     ],
     "prompt_trace_max": 50
   },
@@ -174,6 +174,83 @@
       "max": 15,
       "value_min": 0,
       "value_max": 4095
+    }
+  },
+  "flora": {
+    "enabled": true,
+    "light_channels": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "vibro_channels": [
+      11,
+      12,
+      13,
+      14
+    ],
+    "tick_ms": 20,
+    "crossfade_ms": 200,
+    "external_timeout_ms": 500,
+    "max_duty_pct": 100,
+    "speech": {
+      "frame_interval_ms": 80,
+      "hdmi_latency_offset_ms": 150,
+      "base_duty_pct": 25,
+      "peak_duty_pct": 71,
+      "spark_probability": 0.15
+    },
+    "vibro": {
+      "intensity_pct": 30,
+      "silent_states": [
+        "attentive"
+      ]
+    },
+    "states": {
+      "breathe": {
+        "base_pct": 7,
+        "peak_pct": 71,
+        "period_ms": 4000,
+        "vibro": false
+      },
+      "accent": {
+        "peak_pct": 71,
+        "attack_ms": 250,
+        "vibro": true,
+        "vibro_pulse_ms": 120,
+        "base_pct": 10,
+        "period_ms": 1400
+      },
+      "attentive": {
+        "vibro": false,
+        "base_pct": 30,
+        "peak_pct": 71,
+        "wave_period_ms": 450
+      },
+      "think_pulse": {
+        "base_pct": 20,
+        "peak_pct": 71,
+        "flash_ms": 500,
+        "wave_period_ms": 500,
+        "flicker_ms": 120,
+        "vibro": "double_pulse"
+      },
+      "wake_bloom": {
+        "from_dark": true,
+        "settle_to": "breathe",
+        "vibro": true,
+        "base_pct": 0,
+        "peak_pct": 71,
+        "period_ms": 3000
+      }
     }
   },
   "sounds": {

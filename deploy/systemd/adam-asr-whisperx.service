@@ -11,7 +11,7 @@
 # where Docker is unavailable. To use it: manually copy to /etc/systemd/system/
 # and make sure no Docker ASR container is running on port 8095.
 Description=Adam Chip WhisperX ASR Service (native fallback; prefer Docker)
-After=network.target
+After=network.target docker.service
 Wants=network.target
 
 [Service]
@@ -20,6 +20,11 @@ User=i17jet
 Group=i17jet
 SupplementaryGroups=render video
 WorkingDirectory=/home/i17jet/Agents/Adam-Chip
+
+# Refuse to start if Docker ASR container is already running — prevents CPU service
+# from grabbing port 8095 and blocking the CUDA Docker container.
+ExecStartPre=/bin/sh -c '! docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^adam-asr-whisperx$$"'
+
 Environment=PYTHONPATH=System
 Environment=PATH=/home/i17jet/Agents/Adam-Chip/.venv/bin
 Environment=ADAM_ASR_PORT=8095

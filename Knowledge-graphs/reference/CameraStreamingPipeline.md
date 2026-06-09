@@ -8,7 +8,7 @@ The ESP32 firmware implements a real-time MJPEG streaming pipeline from the OV56
 
 ### Hardware Layer
 - **Camera:** OV5640 (5MP, DVP interface)
-- **Output:** MJPEG stream at `http://192.168.0.171:81/stream` (port 81, separate HTTP server)
+- **Output:** MJPEG stream at `http://10.10.10.171:81/stream` (port 81, separate HTTP server)
 - **Resolution:** QVGA (320×240) at 30 fps configurable
 
 ### Software Layer (ESP32 Firmware)
@@ -72,7 +72,7 @@ From `System/Config.json`:
 "media": {
   "video": {
     "primary": "esp_mjpeg",
-    "esp_mjpeg_url": "http://192.168.0.171:81/stream",
+    "esp_mjpeg_url": "http://10.10.10.171:81/stream",
     "esp_fail_threshold": 3,
     "esp_retry_interval_sec": 30.0,
     "camera_capture_interval_sec": 0.5

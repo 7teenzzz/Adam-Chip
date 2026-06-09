@@ -83,6 +83,7 @@ struct RuntimeState {
   volatile uint32_t lastSoundBytes = 0;
   volatile uint32_t soundPlayRequests = 0;
   volatile uint16_t pca9685Channels[16] = {0};
+  volatile uint32_t lastExternalPcaWriteMs = 0;  // millis() of last HTTP /api/pca9685/* write (FloraModule External watchdog)
   char bootStage[24] = "boot";
   char lastInitError[64] = "";
   char networkTransport[16] = "wifi";

@@ -248,16 +248,16 @@ def main() -> None:
         epilog="""
 Examples:
   # Show last 5 turns (all stages)
-  python scripts/adam_pull_logs.py --url http://192.168.0.171:8080 --last 5
+  python scripts/adam_pull_logs.py --url http://10.10.10.171:8080 --last 5
 
   # Show only ASR stage for last 10 turns
-  python scripts/adam_pull_logs.py --url http://192.168.0.171:8080 --last 10 --stage asr
+  python scripts/adam_pull_logs.py --url http://10.10.10.171:8080 --last 10 --stage asr
 
   # Follow live stream, show only TTS events
-  python scripts/adam_pull_logs.py --url http://192.168.0.171:8080 --follow --stage tts
+  python scripts/adam_pull_logs.py --url http://10.10.10.171:8080 --follow --stage tts
 
   # Export last 20 turns as JSON
-  python scripts/adam_pull_logs.py --url http://192.168.0.171:8080 --last 20 --out json
+  python scripts/adam_pull_logs.py --url http://10.10.10.171:8080 --last 20 --out json
 
 Set JETSON_URL env var to avoid repeating --url each time.
 """,

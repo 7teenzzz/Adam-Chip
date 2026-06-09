@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-ESP_HOST="${ESP_HOST:-192.168.0.171}"
+ESP_HOST="${ESP_HOST:-10.10.10.171}"
 ITER="${ITER:-12}"
 LOG_DIR="${LOG_DIR:-/tmp/adam_esp32_stress_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "${LOG_DIR}"

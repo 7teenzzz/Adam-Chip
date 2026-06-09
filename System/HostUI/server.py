@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 
 HOST = os.environ.get("ADAM_HOST_UI_BIND", "0.0.0.0")
 PORT = int(os.environ.get("ADAM_HOST_UI_PORT", "8080"))
-ESP_BASE_URL = os.environ.get("ESP_BASE_URL", "http://192.168.0.171").rstrip("/")
+ESP_BASE_URL = os.environ.get("ESP_BASE_URL", "http://10.10.10.171").rstrip("/")
 
 
 def page_shell(title: str, body: str, script: str = "") -> bytes:

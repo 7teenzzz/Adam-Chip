@@ -18,7 +18,7 @@ Adam Chip — художественно-исследовательская аг
 
 ```
 Jetson (inference node)             ESP32-S3 (peripheral node)
-  FastAPI orchestrator      ←→        192.168.0.171
+  FastAPI orchestrator      ←→        10.10.10.171
   llama.cpp LLM                       PCA9685 PWM (motor layer)
   VILA VLM (scene)                    INMP441 mic uplink
   WhisperX ASR (ru-RU)                PCM5102A speaker  ← POST :81/speaker

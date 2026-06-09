@@ -1,5 +1,5 @@
 param(
-    [string]$Ip = "192.168.0.171",
+    [string]$Ip = "10.10.10.171",
     [int]$DurationSec = 180,
     [int]$WarmupSec = 30,
     [int]$PollMs = 1000,

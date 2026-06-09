@@ -42,7 +42,7 @@ See @README.md for project overview and @System/Config.json + @System/Config.sch
 - **WhisperX + Jetson CUDA.** `ctranslate2` для aarch64 нужно собирать из исходников с флагом CUDA — pip-пакет CPU-only. Скрипт диагностики: `scripts/adam_asr_cuda_check.sh`. Аналогично Silero: сначала Jetson-compatible PyTorch, затем `pip install --no-deps "whisperx"`. VAD в пайплайне — WebRTC VAD (`webrtc_vad.py`, CPU-only, без PyTorch), не Silero.
 - **LLM model ID mismatch.** llama-server отдаёт имя модели с `.gguf` суффиксом, в Config.json без суффикса — это нормально, сервер игнорирует поле `model` в запросах.
 - **Аудио устройства.** TTS output = `plughw:1,3` (HDMI, card 1 HDA NVIDIA). Mic input = `pulse` (PulseAudio → WebCamera card 3). hw:1,0 (Jetson APE I2S) физически не работает — не отдаёт PCM данные. hw:0,0 для input — неправильно.
-- **ESP32 IP.** Статический IP = `192.168.0.171`.
+- **ESP32 IP.** Статический Ethernet IP = `10.10.10.171` (изолированная подсеть 10.10.10.0/24, point-to-point с Jetson eno1=10.10.10.1). Wi-Fi IP остаётся `192.168.0.171` только для OTA-прошивки в локальной сети — не для рантайма.
 
 ## Agent Behavior Rules — для всех агентов
 
@@ -70,7 +70,7 @@ See @README.md for project overview and @System/Config.json + @System/Config.sch
 - `docs/` — protocols, runbooks, branch templates
 - `data/` — runtime state (memory.sqlite3, events.jsonl, sounds)
 - `Engineering/` — consolidation & analysis tools
-- `Agent Adam Chip/` — persona (Identity, Lore, Abilities, Tuning)
+- `Agent-Adam-Chip/` — persona (Identity, Lore, Abilities, Tuning)
 - `tests/` — automated test suites
 - `.planning/` — GSD artifacts (ROADMAP.md, STATE.md, phases/*)
 
@@ -178,15 +178,17 @@ git config core.hooksPath .githooks
 chmod +x .githooks/*
 ```
 
-После этого `post-checkout` автоматически создаст `BRANCH.md` при переходе на новую ветку, а `post-commit` будет перестраивать graphy-граф при изменениях в `System/`.
+После этого `post-checkout` автоматически создаст `BRANCH.md` при переходе на новую ветку, а `post-commit` будет перестраивать graphify-граф при изменениях в `System/`.
 
-Первый запуск графа (после установки `graphify install`):
+Первый запуск графа (после установки `pip install graphifyy && graphify install`):
 
 ```bash
 # Linux/macOS — разрешить исполнение новых хуков:
 chmod +x .githooks/post-commit
-# Затем в Claude Code:
-# /graphify System/ --mode deep
+# Собрать граф из терминала:
+graphify update System/
+# Или через Claude Code skill:
+# /gsd-graphify build
 ```
 
 ---
