@@ -60,6 +60,7 @@ from adam.config import PROJECT_ROOT
 from adam.sound import play_local_sound
 from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
 from adam.tuning import TuningStore, get_store as _get_tuning_store
+from adam.asr_filter import is_hallucination as _is_hallucination
 from adam.wake_word import create_engine as _create_wake_engine
 from adam.webrtc_vad import WebRtcVadWrapper
 
@@ -1626,6 +1627,16 @@ class VoiceLoopController:
             "raw": transcript[:120] if transcript else "",
         }, turn_id=turn_id)
         if not transcript:
+            return False
+
+        # Second-tier hallucination guard: blocks known Whisper hallucinations even when
+        # the ASR Docker container is stale and its local pattern set hasn't been rebuilt.
+        # Defense-in-depth per D-04 (phase 34). Fires before wake-word strip.
+        if _is_hallucination(transcript):
+            event_log.append("asr_hallucination_filtered", {
+                "raw": transcript[:120],
+                "utterance_id": self._utterance_id,
+            }, turn_id=turn_id)
             return False
 
         self.last_transcript = transcript

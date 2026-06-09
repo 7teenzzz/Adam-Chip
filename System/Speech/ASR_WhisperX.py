@@ -41,6 +41,10 @@ _LOGPROB_THRESHOLD = float(os.environ.get("ADAM_ASR_LOGPROB_THRESHOLD", "-0.8"))
 # Whisper hallucinates these phrases on near-silence or very short audio clips.
 # They appear in the training data (YouTube subtitles) and have high logprob even
 # on garbage input, so logprob filtering alone doesn't catch them.
+# Synchronized with System/adam/asr_filter.HALLUCINATION_PATTERNS.
+# When adding patterns: update BOTH files. asr_filter.py is the canonical source.
+# NOTE: do NOT import adam.asr_filter here — it is not available inside the Docker container.
+# Patterns are stored in the form used by the lookup below (after text.lower().strip("[]().,!? ")):
 _HALLUCINATION_PATTERNS = {
     # YouTube subtitle hallucinations (near-silence triggers)
     "тревожная музыка", "интригующая музыка", "спокойная музыка",
@@ -49,9 +53,16 @@ _HALLUCINATION_PATTERNS = {
     "продолжение следует", "не забудьте подписаться", "спасибо за внимание",
     "до встречи", "увидимся в следующий раз", "оставайтесь с нами",
     "продолжение в следующей части", "ссылки в описании",
-    # Bracket/noise markers
-    "[тихая музыка]", "[music]", "[applause]", "[blank_audio]", "[inaudible]",
-    "[шум]", "[тишина]", "[нет звука]",
+    # Bracket/noise markers (lookup strips brackets, so store without them)
+    "тихая музыка", "music", "applause", "blank_audio", "inaudible",
+    "шум", "тишина", "нет звука", "аплодисменты", "смех",
+    # Whisper-small Russian artefacts (near-silence hallucinations)
+    "компиция", "цыц", "ля ля ля", "да да", "нет нет",
+    "хорошо хорошо", "ок ок",
+    # YouTube/attention CTAs
+    "лайк и подписка", "колокольчик уведомлений", "смотрите также",
+    "следующее видео", "конец видео", "до следующего раза", "пока пока",
+    "поставьте лайк", "комментируйте", "поделитесь видео",
     # Punctuation-only segments (silence artefacts)
     ".", ",", "...",
 }
