@@ -26,6 +26,24 @@ Context: [phases/30-echoes-chinese-gate-activation/30-CONTEXT.md](phases/30-echo
 
 → [ACTIVE.md](.planning/ACTIVE.md) — активные ветки
 
+## Архитектурные решения (ветка ultimate-integration-v2, 2026-06-10)
+
+### Cosmos Reason2-2B — подсознание-симбионт (LOCKED)
+
+Cosmos Reason2-2B остаётся основным VLM (порт 8051, llama-server, фоновый async). Решение принято по результатам бенчмарка:
+
+- Cosmos фон: **759 ms** / кадр (480×360)
+- Gemma E4B vision фон: 1135 ms (+50%)
+- Gemma vision inline (диалог+картинка): 5099 ms (+2.5 с к turn)
+
+**Нарратив:** Cosmos — визуальная часть симбионта. Он обрабатывает пространство раньше, чем Adam осмысляет увиденное. Сейчас: пассивный visual channel (4 с/кадр → `[ctx.vision]` в промпт). Будущее: параллельный агент с собственными событиями.
+
+**Roadmap для Cosmos-агента (backlog, не в активной фазе):**
+
+1. Phase A: Cosmos → EventBus (заметил что-то → событие, Adam реагирует)
+2. Phase B: Cosmos управляет частотой съёмки сам (сцена меняется → чаще; пусто → реже)
+3. Phase C: Cosmos имеет своё эмоциональное состояние, независимое от Adam
+
 **Recently completed (хронологически):**
 
 - Phase 30 (Skills — Jokes + Weather) ✓ 2026-06-07 — ветка `Extra`, ожидает Jetson smoke-test + коммита
