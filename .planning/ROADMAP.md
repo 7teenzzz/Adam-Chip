@@ -1122,6 +1122,326 @@ Plans:
 
 ---
 
+## Direction: Подсознание-симбионт
+
+Cosmos Reason2-2B — визуальное подсознание симбионта. Locked решение 2026-06-10 (benchmark: Cosmos 764ms/frame vs Gemma E4B vision inline 5099ms). Этот блок фаз переносит нарратив в архитектуру: подсознание анализирует речь зрителя акустически, управляет флорой семантически, предмодулирует AIIM без участия LLM, ведёт наблюдательный журнал и помнит посетителей через реестр.
+
+Три фазы идут последовательно. Phase 38 дополнительно разблокирует Phase 28 (Event-driven Proactivity).
+
+---
+
+## Phase 36: SubconsciousProcessor — речевое подсознание
+
+**Branch:** `subconscious-symbiont` (existing)
+
+**Goal:** Создать `SubconsciousAnalyzer` — компонент, который анализирует акустику речи зрителя (RMS, пики, паузы) до того как LLM получает запрос. Подсознание управляет флорой (семантический выбор пресета) и предмодулирует AIIM-состояние (`emotion_hint` при нейтральном тексте).
+
+**Requires:**
+- Phase 35 (Live Integration) завершена — стабильный pipeline
+- Phase 29 (Technoflora) завершена — FloraController с `push_preset()` API
+
+**Research findings (2026-06-10):**
+- Точка вставки: `_run_dialogue_turn_locked` строка ~3444 — после echoes/mood, до AIIM блока (строки 3445–3476)
+- Acoustic features вычислять в `_transcribe_and_dispatch` (строка 1779, параметр `pcm`) и передавать через новый параметр `_run_dialogue_turn(acoustic_features=...)`
+- EmotionMachine детерминирована с keyword-приоритетами; premod применяется ТОЛЬКО при `emotion_src == ""` — нельзя перебить keyword-override
+- FloraController: нет приоритетов сейчас ("последний выигрывает"); нужен уровень P2 (subconscious) между P3 (pipeline) и P1 (idle)
+- Оптимальное окно для флоры: между `asr_final` и `llm_thinking_started`
+- D-11 инвариант: vibro всегда OFF при `voice_state="attentive"` — FloraController уже реализует это через `vibro.silent_states`
+- `audio_level` events: 25 Hz, `bands[24]` FFT — доступны как rolling window
+
+**Research findings (2026-06-11, Agent B — VLM dual-task architecture):**
+- Двойная архитектура VLM: Task A (сцена → `[ctx.vision]`, по `scene_interval_sec`) + Task B (AIIM JSON модулятор, по `asr_final`)
+- Task B семантически зависит от Task A — выполнять последовательно, не параллельно; 2 × 764ms = 1528ms суммарно при событийном запуске
+- Task A output: `"3 people; two adults (30s, casual wear) speaking at center..."` — factual, English, ≤80 tokens
+- Task B output JSON: `{"emotion_hint": "curious|warm|unease|sharp|calm", "flora_mode": "breathe|accent|...", "intensity": 0.0-1.0, "reasoning": "..."}`
+- Failure resilience: Task A timeout → кэш предыдущей сцены; Task B JSON malformed → нейтральный сигнал (calm, breathe, 0.3)
+- Точки интеграции: SceneWorker._run() (~строка 1940) для Task A; `_transcribe_and_dispatch` для Task B trigger; `_run_dialogue_turn_locked` (~3445) для применения сигнала
+- Полный дизайн: `.planning/research/subconscious_prompts.md`
+
+**Research findings (2026-06-11, Agent C — AIIM тест-стек):**
+- `emotion_src == ""` → единственная точка для premod; строка 305 identity.py `return current, ""`
+- `to_ctx_block()` строки 186-188: emotion="curious" без injectable → возвращает `""` (экономия токенов); остальные эмоции инжектируются
+- Существующих тестов для premod нет; нужен новый файл `tests/test_aiim_premod.py`
+- 4 unit-теста + 2 integration + 1 bash-скрипт (ручная проверка Cosmos → SubconsciousSignal)
+- Полный дизайн: `.planning/research/aiim_test_design.md`
+
+**Research findings (2026-06-11, Agent D — flora анимации):**
+- AIIM эмоции (`curious/warm/unease/sharp/calm`) не маппируются на flora сейчас — только pipeline-события; это gap
+- 10 новых пресетов (5 эмоций × 2 варианта A/B): `curious_a/b`, `warm_a/b`, `unease_a/b`, `sharp_a/b`, `calm_a/b`
+- Модулируемые параметры из SubconsciousSignal: `intensity` (0-1), `tempo` (0.5-2.0), `jitter` (unease), `focus` (sharp attack_ms), `tenderness` (warm vibro%), `stillness` (calm range)
+- Firmware FloraParams нужно расширить: добавить `intensity`, `tempo`, `jitter`, `attackMs`, `flicker`, `sparkProbability`
+- Variant выбор: intensity ≤ 0.65 → variant A; intensity > 0.65 → variant B
+- Полный дизайн: `.planning/research/flora_animations.md`
+
+**Delivers:**
+- Новый модуль `System/adam/subconscious.py`:
+  - `SubconsciousAnalyzer.analyze(transcript, acoustic_features, scene_text, turn) → SubconsciousSignal`
+  - `SubconsciousSignal(emotion_hint, weight, flora_preset, observation_text, acc_tone)`
+  - Маппинг акустика → сигнал: `rms_peak / rms_mean > 3.0` → взволнованность; `silence_ratio > 0.4` → медленная речь; тематические слова → flora `think_pulse`
+- Acoustic features pipeline:
+  - `_transcribe_and_dispatch(pcm)` → вычислить `AcousticFeatures(rms_mean, rms_peak, silence_ratio)` из PCM uint16
+  - Передать через `_run_dialogue_turn(acoustic_features=...)` → `_run_dialogue_turn_locked`
+- AIIM premod:
+  - Поле `premod: dict | None = None` в `AIIMRuntimeState` (`identity.py`)
+  - После `EmotionMachine.transition()`: если `emotion_src == ""` и `premod["weight"] > 0.35` → применить `premod["emotion_hint"]`, выставить `emotion_src = "subconscious"`
+  - `acc.set_tone()` из акустики (тихий медленный голос → "sad" независимо от слов зрителя)
+- Flora semantic control:
+  - Priority system в `FloraController`: P3 (pipeline transitions), P2 (subconscious), P1 (idle)
+  - Прямой вызов `flora_controller.push_preset_p2(preset)` внутри turn (синхронно, не через EventBus)
+  - P2 блокируется если текущий priority ≥ P3 или `voice_state="attentive"`
+- `observations.jsonl` writer (базовые типы):
+  - Типы: `emotion_spike` (rms_peak > 7000 + emotion words), `session_digest` (при `episode_committed`)
+  - EventBus подписка на `episode_committed` для session_digest
+- VLM dual-task architecture (Task A + Task B):
+  - Task A: структурированное описание сцены → `[ctx.vision]`; промпт: people count + demo tier (CHILD/YOUNG/ADULT/ELDER) + gender + clothes + activity (speaking/silent) + position + engagement
+  - Task B: AIIM JSON модулятор; промпт принимает scene_text + transcript + acoustic_features → возвращает `{emotion_hint, flora_mode, intensity, reasoning}`; запускается только на `asr_final`; failure → нейтральный сигнал (calm, breathe, 0.3)
+  - VLM клиент: новые методы `describe_scene_structure()` (Task A) и `analyze_aiim_signal()` (Task B)
+- Flora emotion presets: 10 новых пресетов в `Config.json flora.emotion_presets`:
+  - `curious_a/b`, `warm_a/b`, `unease_a/b`, `sharp_a/b`, `calm_a/b`
+  - Variant выбор: `intensity ≤ 0.65` → A; `intensity > 0.65` → B
+  - Параметры от подсознания: `intensity`, `tempo`, `jitter` (unease), `focus`=attack_ms (sharp), `tenderness`=vibro% (warm), `stillness`=range compression (calm)
+  - FloraController: `push_preset_p2_emotion(emotion, intensity)` + `_compute_emotion_params()`
+  - Вызов после AIIM блока: если эмоция изменилась → `flora.push_preset_p2_emotion(new_emotion, intensity)`
+  - Firmware FloraParams расширить: добавить `intensity`, `tempo`, `jitter`, `attackMs`, `flicker`
+- Тест-стек AIIM premod (новый файл `tests/test_aiim_premod.py`):
+  - Unit: premod применяется при `emotion_src == ""`; premod заблокирован при keyword; weight < 0.35 игнорируется; ctx_block содержит premod-эмоцию
+  - Integration: PCM → SubconsciousSignal → emotion → ctx_block; flora_preset propagation
+  - Bash: `scripts/test_subconscious_inference_stack.sh` — ручная проверка pipeline
+
+**Requirements:** SUBCON-01 (SubconsciousAnalyzer), SUBCON-02 (acoustic features pipeline), SUBCON-03 (AIIM premod), SUBCON-04 (flora semantic control), SUBCON-05 (priority system), SUBCON-06 (observations.jsonl base), SUBCON-07 (VLM Task B AIIM JSON modulator), SUBCON-08 (flora emotion presets 10×), SUBCON-09 (premod test suite)
+
+**Mode:** standard | **Priority:** P1 | **Effort:** L | **Exhibition:** H
+
+**Plans:** 6 plans
+- [ ] 36-01-PLAN.md — AcousticFeatures: вычисление rms_mean/rms_peak/silence_ratio из PCM, передача через сигнатуру в _run_dialogue_turn_locked
+- [ ] 36-02-PLAN.md — subconscious.py: SubconsciousAnalyzer + SubconsciousSignal + acoustic→signal маппинг
+- [ ] 36-03-PLAN.md — AIIM premod: premod поле в AIIMRuntimeState (identity.py) + conditional merge после EmotionMachine; acc.set_tone() из акустики + тест-стек (test_aiim_premod.py + bash script)
+- [ ] 36-04-PLAN.md — Flora P2 priority system в FloraController + observations.jsonl writer (emotion_spike + session_digest via EventBus)
+- [ ] 36-05-PLAN.md — VLM dual-task architecture: Task A (scene structure prompt) + Task B (AIIM JSON modulator prompt) + VLM client методы + Orchestrator integration points (SceneWorker + _transcribe_and_dispatch + _run_dialogue_turn_locked)
+- [ ] 36-06-PLAN.md — Flora emotion presets: 10 пресетов в Config.json (flora.emotion_presets) + FloraController.push_preset_p2_emotion() + firmware FloraParams расширение (intensity/tempo/jitter/attackMs)
+
+---
+
+## Phase 37: VisitorRegistry + Notes System
+
+**Branch:** `subconscious-symbiont` (continuation)
+
+**Goal:** Создать полноценную систему памяти о посетителях: реестр с агрегированными профилями, O(1) поиск по имени, расширенный формат инжекции профиля в промпт. Параллельно — полный observations.jsonl со всеми типами событий подсознания.
+
+**Requires:** Phase 36 завершена (базовый observations.jsonl writer)
+
+**Research findings (2026-06-11, Agent A — WebUI visitors page):**
+- Роутинг: hash-based SPA, добавить `visitors: { file: "visitors", label: "Зрители" }` в `ROUTES` (router.js) + `{ key: "visitors", label: "Зрители" }` в `NAV_STRUCTURE` (main.js)
+- Паттерн компонента: `export function mount(target)` → возвращает teardown; `el()` DOM-builder; `.card-grid` CSS (auto-fill minmax 320px)
+- CSS-переменные готовые: `--accent: #43d17a`, `.badge`, `.dot.ok/.warn/.bad`, `.card` + `.card-header` + `.card-body`
+- Карточка посетителя: имя + визит-бейдж + time-ago, темы как `.badge`, first/last visit даты, tone profile top-2, highlights excerpt
+- API нужен: `GET /api/visitors` (список), `GET /api/visitors/{slug}` (профиль), `GET /api/visitors/stats`
+- Стратегия: параллельно с Phase 37-01 (mock API первый, реальный endpoint после VisitorRegistry)
+- Полный дизайн: `.planning/research/ui_visitor_cards.md`
+
+**Research findings (2026-06-10):**
+- `query_by_name` — O(N files) перебор JSONL за `lookup_days`; нет индекса; вызывается дважды за turn при наличии имени (строки 3297 и 3311 Orchestrator)
+- Двухсловный фильтр `_extract_visitor_name` (строки 300–301 Orchestrator) блокирует однословные имена — большинство реальных представлений ("меня зовут Андрей") отклоняется; `introduced_name = null` в большинстве реальных эпизодов
+- `recurring_signal` в `Episode.visitor` выставляется при каждом turn, но не используется в `_format_recent_episodic` — мёртвые данные
+- `by_theme` strategy в `RecentInjectionTuning` объявлена (tuning.py строка 66), но не реализована в Orchestrator — мёртвое значение enum
+- `notes/` и `summaries/` директории пусты; `MemoryStore.add_note()` и `summary_text()` нигде не вызываются из Orchestrator — мёртвый код
+- `_format_recent_episodic` возвращает только `"дата — тема1, тема2"` без имени, highlights, "что Адам сказал"
+- EventBus: `episode_committed` уже публикуется (~строка 383) с payload: id, salience, name, themes, duration_s, reason — готовый hook для VisitorRegistry
+
+**Delivers:**
+- VisitorRegistry (`System/adam/visitor_registry.py`):
+  - `data/adam/visitors/{name_slug}.json` — профиль: visit_count, all_themes, tone_profile (dict emotion→count), first/last_visit_ts, highlights (last 5), episode_ids
+  - `data/adam/visitors/_index.json` — `{name_slug: last_visit_ts}` для O(1) lookup
+  - EventBus подписка на `episode_committed` → `VisitorRegistry.update(episode)` — обновить/создать профиль
+  - Методы: `get_profile(name) → dict | None`, `update(episode)`, `list_names() → list`
+- Relaxed name filter в `_extract_visitor_name`:
+  - Одно слово → `first_name` (принимается, не отклоняется)
+  - Два слова → `full_name`
+  - Lookup key по `display_name.lower()`
+- Enriched prompt injection:
+  - `_format_recent_episodic` использует VisitorRegistry: "Посещений: 3. Темы: память, страх. Последний визит: 3 дня назад." вместо голых дат
+  - `recurring_signal=True` → другой регистр приветствия (новый зритель vs знакомый)
+  - `by_theme` strategy реализована: `query_by_theme(themes) → [Episode]` через кластеры из `acc.themes`
+- observations.jsonl полный набор типов:
+  - `visitor_arrival` — Cosmos engagement меняется с none → watching/approaching
+  - `visitor_left` — engagement меняется на none или session_end
+  - `topic_shift` — смена тематического кластера между turn'ами (из `acc.themes`)
+  - `long_silence` — gap `last_turn_at` > threshold (из session_state)
+  - `repeated_theme` — та же тема встречается ≥3 раз за сессию
+- Cleanup:
+  - `MemoryStore.add_note()` + `summary_text()` — подключить к SubconsciousProcessor или удалить как dead code (решение в plan)
+
+**Requirements:** VIS-01 (VisitorRegistry structure), VIS-02 (O(1) index), VIS-03 (relaxed name filter), VIS-04 (enriched prompt injection), VIS-05 (by_theme implementation), VIS-06 (recurring_signal in prompt), VIS-07 (observations full types), UI-VIS-01 (visitors WebUI panel), UI-VIS-02 (API endpoints /api/visitors)
+
+**Mode:** standard | **Priority:** P1 | **Effort:** M | **Exhibition:** H
+
+**Plans:** 4 plans
+- [ ] 37-01-PLAN.md — VisitorRegistry: visitor_registry.py + visitors/ dir + _index.json + EventBus subscription + get/update profile
+- [ ] 37-02-PLAN.md — Relaxed name filter + _format_recent_episodic enrichment + by_theme implementation (строки 3310–3312 Orchestrator)
+- [ ] 37-03-PLAN.md — observations.jsonl полный набор типов (topic_shift, visitor_arrival/left, long_silence, repeated_theme) + мёртвый код audit
+- [ ] 37-04-PLAN.md — UI visitors page: GET /api/visitors + /api/visitors/{slug} + /api/visitors/stats в api_runtime.py; WebUI panel visitors.js (card-grid, карточки с темами/тоном/визитами); ROUTES + NAV_STRUCTURE; mock API для параллельной разработки
+
+---
+
+## Phase 38: Subconscious Autonomy — Cosmos как агент
+
+**Branch:** `subconscious-symbiont` (continuation) или новая ветка `cosmos-agent`
+
+**Goal:** Перевести Cosmos Reason2-2B из пассивного VLM-провайдера в активный агент: адаптивная частота съёмки, события на EventBus при изменении сцены, модуляция `pe`/`be` аспектов IdentityVector через подсознание.
+
+**Requires:** Phase 36, Phase 37 завершены
+
+**Research findings (2026-06-10):**
+- Cosmos: 764ms/frame (480×360), 2.9GB VRAM, порт 8051, `llama-server`; KV-cache miss: +25 токенов от описания сцены → +484ms LLM (не стоимость токенов, а инвалидация кэша)
+- Текущий `scene_worker`: периодический, `scene_interval_sec=4`, не событийный; не публикует дельта-события
+- `be` и `pe` аспекты в `IdentityVector` никогда не модулируются в `AspectModulator` — готовый хук; не включены в `AspectCeilingConfig`; дрейф через DriftTable тоже не затрагивает их
+- `phase_28` (Event-driven Proactivity): паттерн scene_delta детектора будет создан там же — Phase 38 может переиспользовать его
+
+**Delivers:**
+- Scene delta detection (`System/adam/scene_delta.py`):
+  - Парсинг двухчастного формата "Scene: X. Engagement: Y." → структурированные поля `count`, `positions`, `engagement`
+  - Сравнение текущего с предыдущим из `scene_buffer` → категория: `appeared`, `disappeared`, `count_change`, `engagement_change`, `no_delta`
+  - Публикация `scene_delta` событий в EventBus с payload: `from`, `to`, `category`
+- Adaptive capture rate:
+  - `engagement=interacting/approaching` → `scene_interval_sec` уменьшается (min 2s)
+  - `engagement=none` + `no_delta` серия → `scene_interval_sec` увеличивается (max 10s)
+  - Config-First параметры: `media.scene_adaptive_rate_enabled`, `scene_interval_min_sec`, `scene_interval_max_sec`
+- Cosmos → SubconsciousProcessor:
+  - `scene_delta` → дополнительный вход для `SubconsciousAnalyzer.analyze()` (Phase 36 расширить сигнатуру)
+  - `appeared` → `accent` flora + `at↑`; `interacting` → `think_pulse` flora; `none` длительно → `breathe` + `be↑`
+- `pe`/`be` aspect modulation:
+  - `SubconsciousSignal.aspect_hints: dict[str, float]` — дополнительные Δ для аспектов
+  - `AspectModulator.modulate()` расширить: смешивать `premod.aspect_hints` с результатом (additive, clamp к ceiling)
+  - `pe` (perception): активный engagement → pe↑; пустая сцена → pe нейтральный
+  - `be` (being/self): длительное отсутствие зрителей → be↑ (Адам в режиме саморефлексии)
+
+**Requirements:** COSM-01 (scene_delta.py), COSM-02 (adaptive rate Config-First), COSM-03 (EventBus scene_delta), COSM-04 (pe/be modulation в AspectModulator), COSM-05 (Cosmos → SubconsciousSignal mapping)
+
+**Mode:** standard | **Priority:** P2 | **Effort:** L | **Exhibition:** M
+
+**Plans:** 3 plans
+- [ ] 38-01-PLAN.md — scene_delta.py: парсер двухчастного формата + детектор переходов + EventBus событие
+- [ ] 38-02-PLAN.md — Adaptive capture rate: engagement → interval logic + Config-First параметры в media section
+- [ ] 38-03-PLAN.md — pe/be aspect modulation: aspect_hints в SubconsciousSignal + AspectModulator расширение (смешивание premod.aspect_hints)
+
+---
+
+## Phase 39: AIIM + Subconscious Dashboard — мониторинг внутреннего состояния
+
+**Branch:** `subconscious-symbiont` (continuation)
+
+**Goal:** Добавить в WebUI три живых блока мониторинга: (1) системный промпт + инжекции подсознания, (2) текущее эмоциональное состояние Адама (AIIM), (3) лента ответов подсознания (Task B outputs). Всё через SSE/polling без перезагрузки страницы.
+
+**Requires:** Phase 36 завершена (SubconsciousProcessor публикует события)
+
+**Research findings (2026-06-11, Agent B — WebUI структура):**
+- Chat-страница: grid 3fr:2fr; слева — лента диалога + текстовый ввод; справа — камера, VLM-описание, FFT-эквалайзер, speech status
+- SSE через `/api/agent/stream`: `{id, ts, type, payload, turn_id}`; frontend: `subscribeEvents()` → `state.patch("last_events", ...)` → компоненты подписываются через `state.subscribe("last_events", callback)`
+- AIIM эмоция **не попадает в события** сейчас — только `aiim_humor_reaction`; нет AIIM-секции в `/api/agent/status`
+- EmotionWidget: +5 строк Orchestrator (event_log.append "aiim_state_snapshot" после строки ~3474), компонент в правой колонке между sceneCaption и микрофоном
+- SubconsciousResponsesFeed: зависит от Phase 36 SubconsciousProcessor; пока placeholder
+- PromptInjectionsBadges: данные уже доступны через status polling + SSE, без дополнительных backend-изменений
+- Полный дизайн: `.planning/research/ui_live_widgets.md`
+
+**Research findings (2026-06-11, Agent C — системный промпт):**
+- `PromptBuilder.build_messages()` → messages[0] = статичная персона (System+Identity+Lore+Abilities), messages[1] = динамический ctx_body
+- 6 ctx блоков (строгий порядок): `[ctx.identity]`, `[ctx.memory]`, `[ctx.recent_visitors]`, `[ctx.vision]`, `[ctx.sensors]`, `[ctx.weather]` (только при weather-intent)
+- `[hint]` идёт в user message, не в ctx_body (echo/chinese gate)
+- SubconsciousSignal **не идёт в промпт напрямую** — premodулирует AIIM state; виден косвенно через `[ctx.identity]`
+- **`GET /api/agent/prompts` уже существует** (ring buffer 50 turns); **`panels/prompts.js` уже существует**
+- Нужно: +3 поля в trace_record (identity_block, weather_ctx, echo_hint_text) + новый `GET /api/prompt/current` (~50 строк) + promptCurrent.js (~150 строк)
+- Полный дизайн: `.planning/research/prompt_viewer.md`
+
+**Delivers:**
+
+- Блок "Системный промпт + инжекции" (item 1):
+  - `GET /api/prompt/current` → JSON с секциями: `[{name, content, chars}]` + total_chars + turn_id
+  - Prompt viewer component: секции как collapsible items с цветовой кодировкой по типу ([ctx.identity]=синий, [ctx.vision]=зелёный, echoes=жёлтый, subconscious=фиолетовый)
+  - Показывает текущий SubconsciousSignal (emotion_hint, flora_mode, intensity) как отдельную секцию
+- Блок "Текущая эмоция" (item 2):
+  - SSE событие `aiim_emotion_change` с payload: `{emotion, emotion_src, vector_snapshot}`
+  - EmotionWidget на главной chat-странице: имя эмоции + источник + цветовой индикатор + 12 aspect bars
+  - Обновляется в реальном времени через SSE
+- Блок "Ответы подсознания" (item 3):
+  - SSE событие `subconscious_signal` с payload: Task B JSON + acoustic_features + turn_id
+  - SubconsciousResponsesFeed: лента последних 5-10 сигналов на главной странице
+  - Каждая запись: emotion_hint + flora_mode + intensity + reasoning + timestamp
+
+**Requirements:** DASH-01 (prompt viewer API), DASH-02 (prompt viewer component), DASH-03 (aiim_emotion_change SSE), DASH-04 (EmotionWidget), DASH-05 (subconscious_signal SSE), DASH-06 (SubconsciousResponsesFeed)
+
+**Mode:** standard | **Priority:** P1 | **Effort:** M | **Exhibition:** H
+
+**Plans:** 3 plans
+- [ ] 39-01-PLAN.md — GET /api/prompt/current: сборка промпта в labeled sections + prompt_viewer WebUI component (collapsible, color-coded)
+- [ ] 39-02-PLAN.md — SSE aiim_emotion_change: EventBus hook после EmotionMachine.transition() + EmotionWidget на chat-странице (emotion + src + aspect bars)
+- [ ] 39-03-PLAN.md — SSE subconscious_signal + SubconsciousResponsesFeed: лента Task B outputs на главной странице
+
+---
+
+## Phase 40: AIIM Personality Editor — редактор личности Адама
+
+**Branch:** `subconscious-symbiont` (continuation) или `aiim-editor`
+
+**Goal:** Интерактивный редактор личности Адама: 12 аспектов (ползунки + числовые поля) + индивидуальные дельты дрейфа по эмоциям. Изменения интегрируются в формулу AIIM в `Identity.md` и/или `Config.json`. Кнопка "Описать Адама" вызывает подсознание (Cosmos) которое генерирует описание итоговой личности с учётом текущей формулы + delta-дрейфа.
+
+**Requires:** Phase 36 завершена (Cosmos Task B работает), Phase 39 завершена (SSE events работают)
+
+**Research findings (2026-06-11, Agent A — AIIM formula + editor backend):**
+- Формат AIIM formula: `aspect(plan level mode)Δweight` — plan=B/S/P/I/T; level=1-4; mode=Ac/Pa + Or/Ch; weight=0.0–1.0 (>0.8 = ядро)
+- **LOCKED аспекты**: `se` (0.92) и `co` (0.88) — жёстко заморожены в коде, не редактируются через UI
+- Drift: накапливается в `data/adam/identity/drift.json` как `aspect_drift: {lo: 0.012, ...}`; применяется при старте сессии; 5 типов сессий (void/witnessed/memory_surfacing/confrontation/deep_contact)
+- Потолки drift по аспектам: lo≤0.85, em≤0.75, me≤0.60 и т.д. (документированы в `identity_drift.py`)
+- **`GET/PUT /api/persona` уже существует** (raw text); `identity_drift.py` уже существует
+- Нужно добавить 5 новых endpoints в `api_runtime.py` — все классы уже есть в `identity.py` + `identity_drift.py`
+- Полный дизайн: `.planning/research/aiim_editor_backend.md`
+
+**Delivers:**
+
+- Backend AIIM Editor API (item 4):
+  - `GET /api/aiim/formula` → JSON: `{aspects: [{name, polar, scale, align, orient, delta}], raw_formula}`
+  - `PUT /api/aiim/formula` → принимает изменённые параметры → перезаписывает блок формулы в `Agent-Adam-Chip/About/Identity.md`; hot-reload persona_paths
+  - `GET /api/aiim/drift` → текущие drift deltas per emotion (DriftAccumulator state)
+  - `PUT /api/aiim/drift` → обновить drift deltas → применить к `AIIMRuntimeState.vector`
+  - `POST /api/aiim/describe` → собирает текущую формулу + drift state → отправляет Cosmos с personality-description промтом → стримит ответ в SSE
+- Frontend AIIM Editor (item 4):
+  - WebUI панель "Личность": 12 аспектов в grid; каждый — ползунок (диапазон по scale) + numeric input + имя + кодировка polar/align/orient
+  - Drift deltas editor: таблица emotion × delta, редактируемые ячейки
+  - Preview generated formula string (обновляется при изменении любого ползунка)
+  - Кнопка "Описать Адама": вызывает POST /api/aiim/describe → показывает стримящийся ответ в блоке подсознания
+  - Кнопка "Сохранить" → PUT /api/aiim/formula; "Сбросить" → откат к сохранённым значениям
+
+**Requirements:** AIIMED-01 (formula parser/writer), AIIMED-02 (GET/PUT /api/aiim/formula), AIIMED-03 (drift API), AIIMED-04 (describe endpoint + Cosmos call), AIIMED-05 (editor frontend sliders), AIIMED-06 (drift deltas table), AIIMED-07 (Describe button + streaming response)
+
+**Mode:** standard | **Priority:** P2 | **Effort:** L | **Exhibition:** M
+
+**Plans:** 3 plans
+- [ ] 40-01-PLAN.md — AIIM formula backend: parse_aiim_formula() → JSON + write back; GET/PUT /api/aiim/formula; hot-reload после записи; GET/PUT /api/aiim/drift
+- [ ] 40-02-PLAN.md — AIIM editor frontend: WebUI панель "Личность" — 12 слайдеров + drift table + live formula preview + Сохранить/Сбросить кнопки
+- [ ] 40-03-PLAN.md — "Описать Адама": POST /api/aiim/describe → собрать формулу + drift → Cosmos personality prompt → SSE stream → отображение в SubconsciousResponsesFeed
+
+---
+
+## Direction: Flora Coexistence — логика сосуществования анимаций (обновление Phase 36)
+
+Пункт 5 запроса пользователя (2026-06-11): "продумать логику сосуществования и корректного выполнения задаваемых подсознанием режимов анимации и уже существующих."
+
+Это уточнение к Phase 36-04 (Flora P2 priority system) и 36-06 (flora emotion presets). Находки агента по этой теме будут интегрированы как детализация плана 36-04 и документ coexistence spec.
+
+**Research findings (2026-06-11, Agent D — flora coexistence):**
+- FloraController — pure event consumer, **нет priority tracking, нет current_preset, нет P2/P3**. "Last writer wins" сейчас НЕ проблема в single-path архитектуре — но станет проблемой как только добавить P2 без приоритетов
+- Один turn = 6 flora transitions: `accent(220ms)` → `attentive` → `think_pulse` → `external+RMS_stream` → `breathe` → P2_restore
+- `_consume()` — последовательная обработка: `wake_word_detected` спит 220ms и БЛОКИРУЕТ очередь → `voice_state_change(to=listening)` выполняется ровно в t+220ms. Это правильное поведение, не race condition
+- `tts_finished → breathe` уже имеет R2 guard (`_on_answer_end` не пушит breathe если `_answer_active=False` — barge-in уже сбросил)
+- **Priority design** (IntEnum): `P1_BARGE_IN=3` (аварийный, уже реализован), `P3_PIPELINE=2` (все текущие пресеты), `P2_SUBCONSCIOUS=1` (новый, AIIM emotion)
+- **P3 → P2 restoration**: немедленно, без holdout. crossfade_ms=200ms обеспечивает плавность. `breathe` = transitional state — P3 ставит, P2 сразу заменяет
+- **P2 pending**: сигнал НЕ теряется при P3 override → сохраняется в `_p2_preset/_p2_params` → восстанавливается в `_restore_p2()` после P3
+- `push_preset_p2_emotion()` вызывается из Orchestrator как `create_task(...)` (non-blocking) — не блокирует dialogue pipeline
+- **Firmware dependency**: `jitter`, `attackMs`, vibro mode strings (`"soft"/"medium"/"intense"/"sync"`) требуют firmware изменений. `curious_a/b`, `warm_a`, `calm_a/b` — работают без firmware changes
+- Реализация: ~120 строк в 2 файлах + Config.json
+- Полный дизайн: `.planning/research/flora_coexistence.md`
+
+---
+
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.

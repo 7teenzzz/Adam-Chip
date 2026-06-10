@@ -489,7 +489,7 @@
     "voice": {
       "speaker": "eugene",
       "speed_multiplier": 1.0,
-      "volume": 0.45,
+      "volume": 0.2,
       "dsp": {
         "enabled": true,
         "hpf_hz": 180.0,
