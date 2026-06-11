@@ -3472,6 +3472,15 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
             identity_block = aiim_state.to_ctx_block(tuning.identity)
             aiim_state.record_turn()
             aiim_state.turn += 1
+            # P2 flora: push AIIM emotion preset (deferred while P3 pipeline is active).
+            # Intensity fixed at 0.5 until SubconsciousSignal is wired in Phase 36.
+            if flora_controller.is_enabled():
+                asyncio.create_task(
+                    flora_controller.push_preset_p2_emotion(
+                        new_emotion, intensity=0.5
+                    ),
+                    name="flora_p2_emotion",
+                )
         except Exception as _exc:
             event_log.append("aiim_turn_error", {"error": str(_exc)})
 

@@ -39,6 +39,12 @@ enum class FloraPreset : uint8_t {
   WakeBloom,    // пробуждение — random sprout from dark -> collective inhale -> breathe
   External,     // ответ/calibration — animation suppressed; floraTask yields to
                 // external /api/pca9685/* writes (RMS stream). Watchdog -> attentive (Phase 30 R3).
+  // Phase 36 P2 emotion presets — slow collective sine (same as Breathe), different
+  // base/peak/period. AIIM subconscious layer; deferred while P3 pipeline is active.
+  CuriousA,    // любопытство A  — moderate intensity, intensity <= 0.65
+  CuriousB,    // любопытство B  — high intensity,    intensity >  0.65
+  CalmA,       // спокойствие A  — deep quiet, near-static
+  CalmB,       // спокойствие B  — tranquil, wide soft range
 };
 
 struct PresetDefaults {
@@ -67,6 +73,16 @@ constexpr PresetDefaults kPresetDefaults[] = {
   {"think_pulse",   819,  2600,          1750,    true },  // base=20%
   {"wake_bloom",    0,    kFlora71PctDuty, 3000,  true },  // peak capped at 71%
   {"external",      0,    0,               1000,  false},  // suppressed; floraTick yields to HTTP writes
+  // Phase 36 P2 AIIM emotion presets. Duties are raw 12-bit linear (no gamma).
+  // Values match Config.json flora.states.*_pct (base/peak) × 4095.
+  //   curious_a: base=15%=614, peak=55%=2252, period=2800ms, vibro=off
+  //   curious_b: base=20%=819, peak=65%=2662, period=1800ms, vibro=off
+  //   calm_a:    base=35%=1433, peak=45%=1843, period=6000ms, vibro=off
+  //   calm_b:    base=40%=1638, peak=55%=2252, period=4500ms, vibro=off
+  {"curious_a",     614,  2252,            2800,  false},
+  {"curious_b",     819,  2662,            1800,  false},
+  {"calm_a",       1433,  1843,            6000,  false},
+  {"calm_b",       1638,  2252,            4500,  false},
 };
 constexpr size_t kPresetCount = sizeof(kPresetDefaults) / sizeof(kPresetDefaults[0]);
 
@@ -149,9 +165,15 @@ uint16_t computeLightLevel(FloraPreset preset, uint16_t base, uint16_t peak,
                            float phase, uint32_t elapsedMs, uint32_t periodMs) {
   const float span = static_cast<float>(peak) - static_cast<float>(base);
   switch (preset) {
+    case FloraPreset::CuriousA:
+    case FloraPreset::CuriousB:
+    case FloraPreset::CalmA:
+    case FloraPreset::CalmB:
     case FloraPreset::Breathe:
     case FloraPreset::Idle: {
       // Slow collective sine inhale/exhale.
+      // Phase 36: CuriousA/B and CalmA/B share the same animation — differ only
+      // in base/peak/period sent by the Jetson (Config.json flora.states.*).
       const float s = 0.5f * (1.0f - cosf(phase * 2.0f * static_cast<float>(M_PI)));
       return static_cast<uint16_t>(base + span * s);
     }

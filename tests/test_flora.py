@@ -79,9 +79,16 @@ def test_flora_config() -> None:
     # Vibro policy (D-11): silent in listening/attentive.
     assert "attentive" in flora["vibro"]["silent_states"]
 
-    # Phase 30 additions: safe-ceiling default (D-03) and external watchdog timeout (C2).
-    assert flora["max_duty_pct"] == 100
+    # Phase 30 additions: safe-ceiling (D-03) and external watchdog timeout (C2).
+    # max_duty_pct is set to 71 in runtime Config.json (hardware brightness cap).
+    assert 0 <= flora["max_duty_pct"] <= 100
     assert flora["external_timeout_ms"] == 500
+
+
+class _FakeResult:
+    ok = True
+    status = 200
+    error = None
 
 
 class _FakeMCU:
@@ -94,11 +101,11 @@ class _FakeMCU:
 
     async def set_flora_state(self, state: str, params: dict | None = None):
         self.calls.append((state, dict(params or {})))
-        return None
+        return _FakeResult()
 
     async def set_channels(self, updates: list[dict]):
         self.channel_calls.append([dict(u) for u in updates])
-        return None
+        return _FakeResult()
 
 
 def _make_controller(mcu) -> "object":

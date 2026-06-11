@@ -943,6 +943,48 @@
                 "settle_to": { "type": "string", "description": "Preset name to crossfade into after the bloom completes.", "default": "breathe" },
                 "vibro": { "type": "boolean", "description": "Whether vibro participates in the bloom. True.", "default": true }
               }
+            },
+            "curious_a": {
+              "type": "object",
+              "description": "P2 AIIM emotion preset: curiosity, variant A (moderate intensity). Phase 1 — no firmware extension needed (vibro=false). Pushed by FloraController.push_preset_p2_emotion('curious', intensity<=0.65).",
+              "properties": {
+                "base_pct": { "type": "integer", "default": 15 },
+                "peak_pct": { "type": "integer", "default": 55, "description": "Hard cap 71% (CLAUDE.md memory)." },
+                "period_ms": { "type": "integer", "default": 2800 },
+                "spark_probability": { "type": "number", "default": 0.25 },
+                "vibro": { "type": "boolean", "default": false }
+              }
+            },
+            "curious_b": {
+              "type": "object",
+              "description": "P2 AIIM emotion preset: curiosity, variant B (high intensity, intensity>0.65). Faster period, more sparks.",
+              "properties": {
+                "base_pct": { "type": "integer", "default": 20 },
+                "peak_pct": { "type": "integer", "default": 65, "description": "Hard cap 71%." },
+                "period_ms": { "type": "integer", "default": 1800 },
+                "spark_probability": { "type": "number", "default": 0.40 },
+                "vibro": { "type": "boolean", "default": false }
+              }
+            },
+            "calm_a": {
+              "type": "object",
+              "description": "P2 AIIM emotion preset: calm/tranquil, variant A. Near-static, minimal range (35..45%), very slow period.",
+              "properties": {
+                "base_pct": { "type": "integer", "default": 35 },
+                "peak_pct": { "type": "integer", "default": 45, "description": "Hard cap 71%." },
+                "period_ms": { "type": "integer", "default": 6000 },
+                "vibro": { "type": "boolean", "default": false }
+              }
+            },
+            "calm_b": {
+              "type": "object",
+              "description": "P2 AIIM emotion preset: calm/tranquil, variant B (deeper quiet). Wide soft range, very slow breathing.",
+              "properties": {
+                "base_pct": { "type": "integer", "default": 40 },
+                "peak_pct": { "type": "integer", "default": 55, "description": "Hard cap 71%." },
+                "period_ms": { "type": "integer", "default": 4500 },
+                "vibro": { "type": "boolean", "default": false }
+              }
             }
           }
         }

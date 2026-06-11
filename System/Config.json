@@ -255,6 +255,32 @@
         "base_pct": 0,
         "peak_pct": 71,
         "period_ms": 3000
+      },
+      "curious_a": {
+        "base_pct": 15,
+        "peak_pct": 55,
+        "period_ms": 2800,
+        "spark_probability": 0.25,
+        "vibro": false
+      },
+      "curious_b": {
+        "base_pct": 20,
+        "peak_pct": 65,
+        "period_ms": 1800,
+        "spark_probability": 0.40,
+        "vibro": false
+      },
+      "calm_a": {
+        "base_pct": 35,
+        "peak_pct": 45,
+        "period_ms": 6000,
+        "vibro": false
+      },
+      "calm_b": {
+        "base_pct": 40,
+        "peak_pct": 55,
+        "period_ms": 4500,
+        "vibro": false
       }
     }
   },

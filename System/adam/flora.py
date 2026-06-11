@@ -23,14 +23,32 @@ from __future__ import annotations
 
 import asyncio
 import audioop
+import collections
 import io
 import logging
 import random
 import wave
+from enum import IntEnum
 from time import perf_counter
 from typing import Any
 
 logger = logging.getLogger("adam.flora")
+
+
+class FloraPriority(IntEnum):
+    """Priority levels for flora preset ownership.
+
+    Higher value wins. When a lower-priority layer tries to push while a
+    higher-priority layer is active, the push is deferred or ignored.
+
+    P1_BARGE_IN:    wake_word during TTS — snaps lights immediately.
+    P3_PIPELINE:    normal voice pipeline (accent/attentive/think_pulse/external).
+    P2_SUBCONSCIOUS: AIIM emotion presets pushed from Orchestrator.
+                     Active between P3 turns; deferred while P3 runs.
+    """
+    P1_BARGE_IN = 3
+    P3_PIPELINE = 2
+    P2_SUBCONSCIOUS = 1
 
 
 class FloraController:
@@ -91,6 +109,21 @@ class FloraController:
         self._fed_wav_this_answer: bool = False
         self._rms_task: asyncio.Task[None] | None = None
 
+        # Flora coexistence priority system (Phase 36, Direction 1).
+        # _current_priority tracks which layer owns the lights right now.
+        # _current_preset tracks the preset name last sent to ESP32.
+        # _p2_preset/_p2_params hold the deferred P2 state while P3 is active.
+        self._current_priority: FloraPriority | None = None
+        self._current_preset: str | None = None
+        self._p2_preset: str | None = None
+        self._p2_params: dict[str, Any] | None = None
+
+        # Visitor audio RMS multiplier (post-filter source of truth).
+        # Updated from audio_level events at 25 Hz. Applied as gentle brightness
+        # scale on P2 presets: effective_peak = peak * rms_multiplier (0.80..1.0).
+        self._rms_window: collections.deque[float] = collections.deque(maxlen=30)
+        self._rms_multiplier: float = 1.0
+
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -125,6 +158,9 @@ class FloraController:
             self._event_log.unsubscribe(self._queue)
         self._queue = None
 
+    def is_enabled(self) -> bool:
+        return self._enabled
+
     # ── Consume loop ───────────────────────────────────────────────────
 
     async def _consume(self) -> None:
@@ -145,12 +181,24 @@ class FloraController:
 
     async def _handle(self, event: dict[str, Any]) -> None:
         etype = event.get("type")
+
+        # Track visitor audio level (post-filter source of truth, Phase 36 D-1).
+        # audio_level.payload.level is already normalised 0.0-1.0 by MicReader.
+        if etype == "audio_level":
+            level = float((event.get("payload") or {}).get("level", 0.0))
+            self._rms_window.append(level)
+            if self._rms_window:
+                avg = sum(self._rms_window) / len(self._rms_window)
+                self._rms_multiplier = 0.80 + 0.20 * min(1.0, avg)
+            return
+
         if etype == "wake_word_detected":
             # Barge-in (D-09): snap light to accent and kill any live RMS stream.
             if self._answer_active or self._rms_task is not None:
                 await self._cancel_rms_task()
                 self._answer_active = False
                 self._fed_wav_this_answer = False
+            self._current_priority = FloraPriority.P1_BARGE_IN
             await self._set_state("accent")  # детекция
             # Hold accent visible before attentive overrides it.
             # voice_state_change(to=listening) fires ~20ms later; without this hold
@@ -164,6 +212,7 @@ class FloraController:
             if payload.get("from") == "boot_warmup" and not self._booted:
                 # First exit from boot = system coming alive (RESEARCH Open Q1).
                 self._booted = True
+                self._current_priority = FloraPriority.P3_PIPELINE
                 await self._set_state("wake_bloom")  # пробуждение (once)
                 return
             self._booted = True
@@ -174,6 +223,7 @@ class FloraController:
                     await self._cancel_rms_task()
                     self._answer_active = False
                     self._fed_wav_this_answer = False
+                self._current_priority = FloraPriority.P3_PIPELINE
                 await self._set_state("attentive")  # слушание — вибро OFF (D-11)
             elif to == "standby":
                 # Barge-in guard: also cancel on standby transition (e.g. no-reply).
@@ -181,10 +231,16 @@ class FloraController:
                     await self._cancel_rms_task()
                     self._answer_active = False
                     self._fed_wav_this_answer = False
+                self._current_priority = FloraPriority.P3_PIPELINE
                 await self._set_state("breathe")  # покой
+                # After settling to breathe, restore P2 subconscious preset if set.
+                self._current_priority = None
+                await self._restore_p2()
         elif etype == "llm_thinking_started":
+            self._current_priority = FloraPriority.P3_PIPELINE
             await self._set_state("think_pulse")  # раздумье
         elif etype == "tts_started":
+            self._current_priority = FloraPriority.P3_PIPELINE
             await self._on_answer_start(event)
         elif etype == "tts_finished":
             await self._on_answer_end()
@@ -223,6 +279,9 @@ class FloraController:
         self._answer_active = False
         self._fed_wav_this_answer = False
         await self._set_state("breathe")
+        # P3 done — restore P2 subconscious emotion preset if one was deferred.
+        self._current_priority = None
+        await self._restore_p2()
 
     # ── State push ─────────────────────────────────────────────────────
 
@@ -260,6 +319,7 @@ class FloraController:
         forced off for any preset in silent_states (belt-and-suspenders mirror of
         the firmware, D-11). Percent duties are sent raw — gamma is firmware-side.
         """
+        self._current_preset = state  # track for priority coexistence logic
         params = self._build_params(state)
         params.update(overrides)
         # Belt-and-suspenders using cached set (D-11 invariant must survive hot-reload errors).
@@ -583,3 +643,96 @@ class FloraController:
             except Exception:
                 pass
         self._rms_task = None
+
+    # ── P2 subconscious emotion presets (Phase 36 Direction 1) ────────────
+
+    async def push_preset_p2(
+        self, preset: str, params: dict[str, Any] | None = None
+    ) -> None:
+        """Push a P2 (subconscious/AIIM emotion) flora preset.
+
+        If P3 pipeline is currently running a non-breathe state, the request is
+        saved and automatically restored when P3 settles.  The RMS brightness
+        multiplier is applied to peak_duty so the ambient lighting gently tracks
+        the visitor's audio level.
+        """
+        if not self._enabled:
+            return
+        self._p2_preset = preset
+        self._p2_params = params
+
+        # Defer if P3 pipeline holds the lights in an active (non-breathe) state.
+        if (
+            self._current_priority == FloraPriority.P3_PIPELINE
+            and self._current_preset not in (None, "breathe")
+        ):
+            logger.debug(
+                "flora P2 preset %r deferred (P3 active at %r)", preset, self._current_preset
+            )
+            return
+
+        self._current_priority = FloraPriority.P2_SUBCONSCIOUS
+        overrides = dict(params or {})
+        # Apply visitor RMS multiplier to peak brightness (gentle ambient scaling).
+        if self._rms_multiplier < 1.0:
+            built = self._build_params(preset)
+            if "peak_duty" in built:
+                overrides.setdefault(
+                    "peak_duty", int(round(built["peak_duty"] * self._rms_multiplier))
+                )
+        await self._set_state(preset, **overrides)
+        logger.debug(
+            "flora P2 set: %r (rms_mult=%.2f, priority=%s)",
+            preset, self._rms_multiplier, self._current_priority.name,
+        )
+
+    async def push_preset_p2_emotion(
+        self, emotion: str, intensity: float = 0.5
+    ) -> None:
+        """Select a/b emotion variant by intensity and push as P2 preset.
+
+        Variant b fires when intensity > 0.65.  Falls back to _a if the
+        variant is not defined in flora.states (e.g. Phase 2 presets not yet
+        added to firmware/config).
+        """
+        if not self._enabled:
+            return
+        flora = self._live_flora_cfg()
+        states: dict[str, Any] = flora.get("states") or {}
+        variant = "b" if intensity > 0.65 else "a"
+        preset = f"{emotion}_{variant}"
+        if preset not in states:
+            preset = f"{emotion}_a"
+        if preset not in states:
+            logger.debug("flora P2 emotion: preset %r not in states config, skipping", preset)
+            return
+        await self.push_preset_p2(preset)
+
+    async def _restore_p2(self) -> None:
+        """Re-apply saved P2 preset after P3 pipeline settles to breathe/idle.
+
+        Called after tts_finished → breathe and after voice_state_change → standby.
+        No-op if no P2 preset was set or P3 is still active.
+        """
+        if self._p2_preset is None:
+            return
+        # Guard: only restore when P3 has actually settled.
+        if (
+            self._current_priority == FloraPriority.P3_PIPELINE
+            and self._current_preset not in (None, "breathe")
+        ):
+            return
+        preset = self._p2_preset
+        params = self._p2_params or {}
+        self._current_priority = FloraPriority.P2_SUBCONSCIOUS
+        overrides = dict(params)
+        if self._rms_multiplier < 1.0:
+            built = self._build_params(preset)
+            if "peak_duty" in built:
+                overrides.setdefault(
+                    "peak_duty", int(round(built["peak_duty"] * self._rms_multiplier))
+                )
+        await self._set_state(preset, **overrides)
+        logger.debug(
+            "flora P2 restored: %r (rms_mult=%.2f)", preset, self._rms_multiplier
+        )
