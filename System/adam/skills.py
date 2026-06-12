@@ -102,9 +102,15 @@ class WeatherProvider:
 
     A long-lived poll_loop() refreshes the cache every poll_interval_sec; the
     dialogue turn only ever reads the cache (cached()), so no HTTP latency is
-    added to the ~9 s LLM prefill. The HTTP client uses trust_env=False (direct
-    egress, ignoring v2ray proxy env vars) — opposite of the ESP32/localhost
-    clients which must bypass the proxy via NO_PROXY.
+    added to the ~9 s LLM prefill.
+
+    Network egress to api.open-meteo.com (an external HTTPS host, unlike the
+    ESP32/localhost clients) is environment-dependent: on some networks direct
+    egress works (trust_env=False, no proxy); on others ALL outbound traffic is
+    routed through the local v2ray proxy (CLAUDE.md gotcha, 127.0.0.1:10808) and
+    direct egress times out. fetch_once() tries direct egress first, then falls
+    back to skills.weather.fallback_proxy_url — so the skill works on both kinds
+    of network without reconfiguration.
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -115,6 +121,7 @@ class WeatherProvider:
         self.poll_interval = int(config.get("poll_interval_sec", 900))
         self.cache_ttl = int(config.get("cache_ttl_sec", 1800))
         self.timeout = int(config.get("timeout_sec", 8))
+        self.fallback_proxy_url = str(config.get("fallback_proxy_url", "") or "")
         self._lock = threading.Lock()
         self._reading: Optional[WeatherReading] = None
 
@@ -129,13 +136,28 @@ class WeatherProvider:
             "wind_speed_unit": "ms",
             "timezone": "auto",
         }
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
-                resp = await client.get(self.base_url, params=params)
-                resp.raise_for_status()
-                data = resp.json()
-        except Exception as exc:  # network/parse — never raise into the turn
-            log.warning("weather fetch failed: %s", exc)
+        # Direct egress first; if the network only routes out via v2ray, the
+        # fallback proxy variant picks it up. Either path ignores trust_env so
+        # neither leaks ESP32/localhost traffic into v2ray (CLAUDE.md gotcha).
+        client_variants: list[dict[str, Any]] = [{"trust_env": False}]
+        if self.fallback_proxy_url:
+            client_variants.append({"trust_env": False, "proxy": self.fallback_proxy_url})
+
+        data: Any = None
+        last_exc: Exception | None = None
+        for kwargs in client_variants:
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout, **kwargs) as client:
+                    resp = await client.get(self.base_url, params=params)
+                    resp.raise_for_status()
+                    data = resp.json()
+                break
+            except Exception as exc:  # network/parse — try next variant
+                last_exc = exc
+                continue
+
+        if data is None:  # all variants failed — never raise into the turn
+            log.warning("weather fetch failed: %s", last_exc)
             return None
         reading = self._format(data)
         if reading is not None:

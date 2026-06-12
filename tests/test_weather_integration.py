@@ -44,8 +44,33 @@ from adam.prompt import PromptBuilder  # noqa: E402
 
 # ─── 1. Сеть: прямой доступ к Open-Meteo ─────────────────────────────────────
 
+def _open_meteo_get(httpx_mod, params: dict) -> "httpx.Response":
+    """GET base_url, trying direct egress then fallback_proxy_url.
+
+    Mirrors WeatherProvider.fetch_once(): some hosts have open internet
+    (trust_env=False, no proxy), others route all outbound traffic through
+    the local v2ray proxy (CLAUDE.md gotcha, 127.0.0.1:10808) and direct
+    egress times out. Tries direct first, falls back to the proxy.
+    """
+    timeout = _WEATHER_CFG["timeout_sec"]
+    last_exc: Exception | None = None
+    for kwargs in (
+        {"trust_env": False},
+        {"trust_env": False, "proxy": _WEATHER_CFG.get("fallback_proxy_url") or None},
+    ):
+        if kwargs.get("proxy") is None and "proxy" in kwargs:
+            continue
+        try:
+            with httpx_mod.Client(timeout=timeout, **kwargs) as c:
+                return c.get(_WEATHER_CFG["base_url"], params=params)
+        except Exception as exc:
+            last_exc = exc
+            continue
+    raise last_exc  # type: ignore[misc]
+
+
 def test_open_meteo_reachable():
-    """api.open-meteo.com доступен с Jetson без прокси (trust_env=False)."""
+    """api.open-meteo.com доступен напрямую или через fallback_proxy_url."""
     httpx = pytest.importorskip("httpx", reason="httpx не установлен")
     params = {
         "latitude": _WEATHER_CFG["latitude"],
@@ -53,8 +78,7 @@ def test_open_meteo_reachable():
         "current": "temperature_2m",
         "timezone": "auto",
     }
-    with httpx.Client(trust_env=False, timeout=_WEATHER_CFG["timeout_sec"]) as c:
-        r = c.get(_WEATHER_CFG["base_url"], params=params)
+    r = _open_meteo_get(httpx, params)
     print(f"\n  HTTP {r.status_code}  {r.url}")
     assert r.status_code == 200, f"Ожидали 200, получили {r.status_code}:\n{r.text[:300]}"
 
@@ -69,8 +93,7 @@ def test_open_meteo_response_shape():
         "wind_speed_unit": "ms",
         "timezone": "auto",
     }
-    with httpx.Client(trust_env=False, timeout=_WEATHER_CFG["timeout_sec"]) as c:
-        data = c.get(_WEATHER_CFG["base_url"], params=params).json()
+    data = _open_meteo_get(httpx, params).json()
     current = data.get("current", {})
     print(f"\n  current: {current}")
     assert "temperature_2m" in current, f"Нет temperature_2m в ответе: {current}"
