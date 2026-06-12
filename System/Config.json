@@ -55,6 +55,8 @@
       "max_command_segment_ms": 15000,
       "reply_max_segment_ms": 10000,
       "normalize_factor": 8000,
+      "pulse_source_retries": 3,
+      "pulse_source_retry_delay_sec": 1.0,
       "input_gain": {
         "card_name": "WebCamera",
         "alsa_control": "Mic",
@@ -93,8 +95,8 @@
       "base_url": "http://127.0.0.1:8051",
       "model": "Cosmos-Reason2-2B-Q8_0",
       "timeout_sec": 20,
-      "max_new_tokens": 80,
-      "prompt": "You are a fixed camera sensor in an interactive art installation. Look at the image and write ONE short English sentence describing what you actually see, using this structure:\nScene: <people count and position>. Engagement: <one of: none, watching, approaching, leaving, interacting>.\n\nReference examples (style only — do not copy):\n- Scene: 2 people near installation, one leaning in. Engagement: watching.\n- Scene: 1 person walking away from the camera. Engagement: leaving.\n- Scene: empty room. Engagement: none.\n\nOutput only the final sentence about this specific image. Never output placeholders like <people count and position> or angle-bracket tokens. English only."
+      "max_new_tokens": 120,
+      "prompt": "You are an eyes of cyborg. Look at the image and write ONE short English sentence describing what you actually see, using this structure:\nScene: <people count and position>. Engagement: <one of: none, watching, approaching, leaving, interacting>.\n\nReference examples (style only — do not copy):\n- Scene: 2 people near installation, one leaning in. Engagement: watching.\n- Scene: 1 person walking away from the camera. Engagement: leaving.\n- Scene: empty room. Engagement: none.\n\nOutput only the final sentence about this specific image. Never output placeholders like <people count and position> or angle-bracket tokens. English only."
     },
     "asr": {
       "provider": "whisperx",
@@ -105,7 +107,6 @@
       "reply_window_sec": 3.75,
       "reply_silence_timeout_sec": 4,
       "post_tts_discard_window_ms": 300,
-      "pre_wake_buffer_ms": 1500,
       "endpointing_debounce_frames": 5,
       "endpointing_voiced_debounce_frames": 3,
       "sample_rate": 16000,
@@ -113,6 +114,7 @@
       "wake_words": "адам",
       "wake_word_required": true,
       "reply_window_expired_action": "standby",
+      "pre_wake_buffer_ms": 1500,
       "silence_after_speech_ms": 1000,
       "silence_rms_threshold": 2100,
       "silence_keywords": [
@@ -165,7 +167,6 @@
     "base_url": "http://10.10.10.171",
     "speaker_url": "http://10.10.10.171:82/speaker",
     "timeout_sec": 1,
-    "flora_timeout_sec": 3,
     "idle_scene": "boot_idle",
     "allowed_scenes": [
       "boot_idle",
@@ -177,7 +178,8 @@
       "max": 15,
       "value_min": 0,
       "value_max": 4095
-    }
+    },
+    "flora_timeout_sec": 3
   },
   "sounds": {
     "enabled": true,
@@ -213,7 +215,6 @@
       "poll_interval_sec": 900,
       "cache_ttl_sec": 1800,
       "timeout_sec": 8,
-      "fallback_proxy_url": "http://127.0.0.1:10808",
       "intent_keywords": [
         "погод",
         "на улице",
@@ -225,7 +226,8 @@
         "снег",
         "ветер",
         "градус"
-      ]
+      ],
+      "fallback_proxy_url": "http://127.0.0.1:10808"
     },
     "jokes": {
       "enabled": true,
@@ -239,6 +241,172 @@
         "смешн",
         "развесели"
       ]
+    }
+  },
+  "tuning": {
+    "memory": {
+      "episodic": {
+        "enabled": true,
+        "salience_threshold": 0.4,
+        "decay_days": 14,
+        "duration_normalize_seconds": 300,
+        "weights": {
+          "introduced_name": 0.3,
+          "duration": 0.2,
+          "themes": 0.15,
+          "tone": 0.15,
+          "echoes_used": 0.1,
+          "new_question": 0.1
+        },
+        "highlights_max_per_episode": 6,
+        "recurring_min_visits": 2,
+        "recurring_lookup_days": 90
+      },
+      "semantic": {
+        "enabled": true,
+        "max_chars": 2000
+      },
+      "recent_injection": {
+        "enabled": true,
+        "limit": 2,
+        "strategy": "by_name",
+        "max_age_days": 30
+      },
+      "consolidator": {
+        "enabled": true,
+        "model": null,
+        "window_start": "03:00",
+        "window_end": "05:00",
+        "max_episodes_per_run": 200,
+        "temperature": 0.3,
+        "max_runtime_minutes": 30,
+        "retry_on_invalid_patch": false,
+        "gate_log_max_days": 30,
+        "instant_threshold": 0.75
+      },
+      "theme_clusters": {}
+    },
+    "echoes": {
+      "enabled": true,
+      "global_cooldown_turns": 12,
+      "per_echo_cooldown_days": 7,
+      "match_threshold": 0.55,
+      "weight_multiplier": 1.0,
+      "matcher_type": "tag",
+      "score_boost": 0.2,
+      "tag_short_cutoff": 3,
+      "default_entry_weight": 0.5,
+      "selection_floor": 0.15,
+      "recency_window_days": 30,
+      "recency_min": 0.5,
+      "diversity_enabled": true,
+      "history_window_turns": 4,
+      "spontaneous_enabled": true,
+      "spontaneous_probability": 0.05,
+      "spontaneous_min_turns": 3
+    },
+    "chinese": {
+      "enabled": true,
+      "global_cooldown_turns": 30,
+      "per_echo_cooldown_days": 7,
+      "match_threshold": 0.5,
+      "weight_multiplier": 1.0,
+      "matcher_type": "tag",
+      "score_boost": 0.2,
+      "tag_short_cutoff": 3,
+      "default_entry_weight": 0.5,
+      "audio_mode": "prerendered_with_text_fallback",
+      "selection_floor": 0.15,
+      "recency_window_days": 30,
+      "recency_min": 0.5,
+      "diversity_enabled": true,
+      "history_window_turns": 4,
+      "spontaneous_enabled": true,
+      "spontaneous_probability": 0.03,
+      "spontaneous_min_turns": 3
+    },
+    "session": {
+      "end_strategy": "combined",
+      "vad_silence_seconds": 60,
+      "face_lost_seconds": 15,
+      "grace_message": "вы там?"
+    },
+    "scene_director": {
+      "enabled": true,
+      "sustain_seconds": 8,
+      "cooldown_between_changes_seconds": 5,
+      "hysteresis_seconds": 15,
+      "override_priority_scenes": [
+        "unease"
+      ]
+    },
+    "llm": {
+      "temperature": 0.7,
+      "max_tokens": 100,
+      "response_word_target": 14
+    },
+    "voice": {
+      "speaker": "eugene",
+      "speed_multiplier": 1.1,
+      "volume": 0.5,
+      "dsp": {
+        "enabled": true,
+        "hpf_hz": 180.0,
+        "makeup_db": 6.0,
+        "limiter_ceiling_dbfs": -1.0,
+        "comp_enabled": true,
+        "comp_threshold_dbfs": -24.0,
+        "comp_ratio": 2.0,
+        "comp_attack_ms": 10.0,
+        "comp_release_ms": 120.0,
+        "comp_knee_db": 6.0,
+        "presence_enabled": true,
+        "presence_hz": 3000.0,
+        "presence_db": 2.5,
+        "presence_q": 0.9
+      }
+    },
+    "prompt": {
+      "history_turns": 4,
+      "include_scene": true,
+      "include_sensors": true
+    },
+    "diagnostics": {
+      "log_level": "info",
+      "metrics_enabled": true,
+      "trace_prompts": false,
+      "trace_post_tts_lag": false
+    }
+  },
+  "flora": {
+    "states": {
+      "breathe": {
+        "base_pct": 0,
+        "peak_pct": 77,
+        "period_ms": 5500,
+        "vibro": false
+      },
+      "think_pulse": {
+        "base_pct": 0,
+        "peak_pct": 50,
+        "flash_ms": 1550,
+        "vibro": false
+      },
+      "wake_bloom": {
+        "peak_pct": 50,
+        "period_ms": 4500,
+        "vibro": false
+      },
+      "accent": {
+        "peak_pct": 71,
+        "period_ms": 500,
+        "vibro": false
+      },
+      "attentive": {
+        "peak_pct": 50,
+        "wave_period_ms": 1050,
+        "vibro": false
+      }
     }
   }
 }

@@ -304,6 +304,20 @@
               "description": "Target RMS level for audio normalisation before ASR submission.",
               "default": 8000
             },
+            "pulse_source_retries": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
+              "description": "Number of attempts to resolve the WebCamera PulseAudio/PipeWire source at LocalMicReader start. Covers the cold-start boot race where PipeWire/USB has not yet enumerated the source when the orchestrator starts. Each failed attempt sleeps pulse_source_retry_delay_sec before the next try. On failure after all attempts, LocalMicReader falls back to the default PipeWire source (may not be WebCamera).",
+              "default": 3
+            },
+            "pulse_source_retry_delay_sec": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 10.0,
+              "description": "Fixed delay in seconds between LocalMicReader source-resolution attempts. See pulse_source_retries. Keep at 1.0s or less so orchestrator startup is not significantly delayed when the source resolves on attempt 1 (happy path adds no delay).",
+              "default": 1.0
+            },
             "spectrum_bands": {
               "type": "integer",
               "minimum": 4,

@@ -1303,11 +1303,14 @@ class VoiceLoopController:
                 # audio_level_eq: feeds the EQ canvas with pre-DSP (gray background)
                 # and post-DSP (coloured) bands side-by-side for both mic paths.
                 # Fires at the same cadence as audio_level regardless of mic_source.
+                # Use local_mic_reader when active (has same _compute_bands interface);
+                # fall back to module-level mic_reader (ESP32 path) otherwise.
+                _bands_src = self.local_mic_reader if self.local_mic_reader is not None else mic_reader
                 self._eq_level_tick = getattr(self, "_eq_level_tick", 0) + 1
-                if self._eq_level_tick >= mic_reader._audio_level_emit_every_n:
+                if self._eq_level_tick >= _bands_src._audio_level_emit_every_n:
                     self._eq_level_tick = 0
-                    _pre_b = mic_reader._compute_bands(_raw_chunk_for_monitor)
-                    _post_b = mic_reader._compute_bands(chunk)
+                    _pre_b = _bands_src._compute_bands(_raw_chunk_for_monitor)
+                    _post_b = _bands_src._compute_bands(chunk)
                     _eq_payload: dict[str, Any] = {
                         "oww_score": round(self._oww_last_score, 3),
                         "oww_threshold": round(self._oww_last_threshold, 3),
@@ -1338,11 +1341,14 @@ class VoiceLoopController:
                         # audio uttered before OWW debounce confirmation is not lost.
                         # Uses processed `chunk` (post-EQ) matching what ASR will see.
                         self._pre_wake_buf.append(chunk)
-                        # OWW runs on the same post-EQ audio as VAD/ASR (was raw
-                        # _raw_chunk_for_monitor) — the active input EQ preset is
-                        # tuned to lift voice above room noise for ASR, and OWW
-                        # benefits from the same correction.
-                        self._ww_buf.append(chunk)
+                        # OWW receives raw pre-DSP audio (_raw_chunk_for_monitor)
+                        # so the model sees the full-spectrum signal it was trained on.
+                        # Note: the 220 Hz HPF was already active on days when OWW scored
+                        # 0.77 (2026-06-08/09), so HPF is NOT the cause of score collapse.
+                        # Root cause was PipeWire node.max-latency=1s bursting audio once/sec
+                        # (fixed by WirePlumber override, Phase 41). Raw input is kept as a
+                        # correctness choice matching training distribution. VAD/ASR use `chunk`.
+                        self._ww_buf.append(_raw_chunk_for_monitor)
                         if len(self._ww_buf) >= self._ww_frames_needed:
                             pcm_80ms = b"".join(self._ww_buf)
                             self._ww_buf.clear()
@@ -2062,7 +2068,7 @@ scene_worker = SceneWorker(settings.section("media"), vlm, camera_reader, scene_
 # Technoflora reactive layer (Phase 29, FLORA-03/06): consumes pipeline events
 # and POSTs flora preset transitions to the ESP via the shared MCUClient
 # (_NO_PROXY_OPENER). Shares the same `mcu` + `event_log` singletons.
-flora_controller = FloraController(get_flora_store().current(), mcu, event_log)
+flora_controller = FloraController(get_flora_store().current_dict(), mcu, event_log)
 
 
 class SessionWatcher:
@@ -2919,6 +2925,29 @@ async def reset_tuning() -> dict[str, Any]:
     return {"ok": True, "tuning": new_cfg.model_dump()}
 
 
+@app.post("/api/tuning/preset/{name}")
+async def apply_tuning_preset(name: str) -> dict[str, Any]:
+    current = tuning_store.current()
+    presets = current.personality_presets
+    if name not in presets:
+        raise HTTPException(status_code=404, detail="preset not found")
+    # Expand dot-path overrides into nested patch dict
+    patch: dict[str, Any] = {}
+    for dot_path, value in presets[name].overrides.items():
+        keys = dot_path.split(".")
+        cur = patch
+        for k in keys[:-1]:
+            cur = cur.setdefault(k, {})
+        cur[keys[-1]] = value
+    patch["active_preset"] = name
+    try:
+        new_cfg = tuning_store.apply_patch(patch)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"preset apply failed: {exc}") from exc
+    event_log.append("tuning_preset_applied", {"preset": name})
+    return {"ok": True, "active_preset": name}
+
+
 @app.get("/api/tuning/schema")
 async def tuning_schema() -> dict[str, Any]:
     from adam.tuning import Tuning
@@ -3029,7 +3058,7 @@ async def stop() -> dict[str, Any]:
     # Part C (flora): the legacy idle scene writes boot_idle (all channels 0) to
     # the SAME PCA9685 channels 0-14 the technoflora owns, fighting the flora
     # animation. Only drive the idle scene when flora is disabled.
-    flora_enabled = bool(get_flora_store().current().get("enabled", True))
+    flora_enabled = bool(get_flora_store().current_dict().get("enabled", True))
     action = None if flora_enabled else await mcu.idle()
     event_log.append(
         "agent_stop",
@@ -3066,7 +3095,7 @@ async def update_scene(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # which the technoflora owns when flora.enabled=true. Suppress the write so flora
     # animation is not interrupted. Raw /api/pca9685/* endpoints are NOT gated here —
     # the calibration/maintenance scripts need direct access with flora disabled.
-    if bool(get_flora_store().current().get("enabled", True)):
+    if bool(get_flora_store().current_dict().get("enabled", True)):
         return {"ok": True, "status": 204, "data": {"action": "suppressed_flora_owns_channels"}, "error": None}
     text = str(payload.get("text", "")).strip()
     meta = payload.get("meta", {})
@@ -3132,7 +3161,7 @@ async def flora_config_preview() -> dict[str, Any]:
     Reflects current Config.json values — useful for verifying a config edit
     before pushing to hardware with POST /api/flora/state.
     """
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     state_names = list((flora_cfg.get("states") or {}).keys())
     preview = {s: flora_controller._build_params(s) for s in state_names}
     return {"ok": True, "presets": preview}
@@ -3154,7 +3183,7 @@ def _flora_all_preset_names(flora_cfg: dict[str, Any]) -> set[str]:
 @app.get("/api/flora/presets")
 async def flora_list_presets() -> dict[str, Any]:
     """List all flora presets: system (flora.states) and user-defined (flora.user_presets)."""
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     system = {k: v for k, v in (flora_cfg.get("states") or {}).items()}
     user = dict(flora_cfg.get("user_presets") or {})
     return {"ok": True, "system": system, "user": user}
@@ -3175,7 +3204,7 @@ async def flora_create_preset(payload: dict[str, Any] = Body(...)) -> dict[str, 
         raise HTTPException(status_code=400, detail="params must be an object")
     if name in _FLORA_SYSTEM_NAMES:
         raise HTTPException(status_code=409, detail=f"'{name}' is a reserved system preset name")
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     user_presets: dict[str, Any] = dict(flora_cfg.get("user_presets") or {})
     if name in user_presets:
         raise HTTPException(status_code=409, detail=f"preset '{name}' already exists")
@@ -3192,7 +3221,7 @@ async def flora_update_preset(name: str, payload: dict[str, Any] = Body(...)) ->
 
     Body: {params: {...}}  or  {name?: str, params: {...}}  (rename supported)
     """
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     user_presets: dict[str, Any] = dict(flora_cfg.get("user_presets") or {})
     if name not in user_presets:
         raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
@@ -3216,7 +3245,7 @@ async def flora_update_preset(name: str, payload: dict[str, Any] = Body(...)) ->
 @app.delete("/api/flora/presets/{name}")
 async def flora_delete_preset(name: str) -> dict[str, Any]:
     """Delete a user-defined flora preset."""
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     user_presets: dict[str, Any] = dict(flora_cfg.get("user_presets") or {})
     if name not in user_presets:
         raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
@@ -3242,7 +3271,7 @@ async def flora_preview_preset(name: str) -> dict[str, Any]:
 @app.get("/api/flora/sequences")
 async def flora_list_sequences() -> dict[str, Any]:
     """List all defined animation sequences from flora.sequences."""
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     sequences = list(flora_cfg.get("sequences") or [])
     return {"ok": True, "sequences": sequences}
 
@@ -3259,7 +3288,7 @@ async def flora_create_sequence(payload: dict[str, Any] = Body(...)) -> dict[str
         raise HTTPException(status_code=400, detail="name is required")
     if not isinstance(steps, list) or not steps:
         raise HTTPException(status_code=400, detail="steps must be a non-empty array")
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     sequences: list[dict[str, Any]] = list(flora_cfg.get("sequences") or [])
     if any(s.get("name") == name for s in sequences):
         raise HTTPException(status_code=409, detail=f"sequence '{name}' already exists")
@@ -3273,7 +3302,7 @@ async def flora_create_sequence(payload: dict[str, Any] = Body(...)) -> dict[str
 @app.put("/api/flora/sequences/{name}")
 async def flora_update_sequence(name: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Update an existing animation sequence (replace steps, optional rename)."""
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     sequences: list[dict[str, Any]] = list(flora_cfg.get("sequences") or [])
     idx = next((i for i, s in enumerate(sequences) if s.get("name") == name), None)
     if idx is None:
@@ -3294,7 +3323,7 @@ async def flora_update_sequence(name: str, payload: dict[str, Any] = Body(...)) 
 @app.delete("/api/flora/sequences/{name}")
 async def flora_delete_sequence(name: str) -> dict[str, Any]:
     """Delete an animation sequence."""
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     sequences: list[dict[str, Any]] = list(flora_cfg.get("sequences") or [])
     new_sequences = [s for s in sequences if s.get("name") != name]
     if len(new_sequences) == len(sequences):
@@ -3331,7 +3360,7 @@ _VALID_EMOTIONS: frozenset[str] = frozenset({"curious", "warm", "unease", "sharp
 @app.get("/api/flora/emotion_map")
 async def flora_get_emotion_map() -> dict[str, Any]:
     """Return the current AIIM emotion → flora preset binding."""
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     emotion_map = dict(flora_cfg.get("emotion_map") or {})
     all_presets = sorted(_flora_all_preset_names(flora_cfg))
     return {"ok": True, "emotion_map": emotion_map, "available_presets": all_presets}
@@ -3350,7 +3379,7 @@ async def flora_patch_emotion_map(payload: dict[str, Any] = Body(...)) -> dict[s
     invalid_keys = set(patch_map.keys()) - _VALID_EMOTIONS
     if invalid_keys:
         raise HTTPException(status_code=400, detail=f"invalid emotion keys: {sorted(invalid_keys)}")
-    flora_cfg = get_flora_store().current()
+    flora_cfg = get_flora_store().current_dict()
     flora_all_presets = _flora_all_preset_names(flora_cfg)
     # Validate preset values: must be known preset name or empty string.
     for emotion, preset_name in patch_map.items():
@@ -4359,7 +4388,7 @@ async def _execute_action(action: Any) -> dict[str, Any]:
     # of those channels — suppress legacy scene/channel writes so they do not fight
     # the flora animation (debug/flora-stops-on-state-change Part C). The legacy
     # scene API stays available for maintenance when flora.enabled=false.
-    if bool(get_flora_store().current().get("enabled", True)):
+    if bool(get_flora_store().current_dict().get("enabled", True)):
         return {"ok": True, "status": 204, "data": {"action": "suppressed_flora_owns_channels"}, "error": None}
     if action.kind == "scene" and action.scene:
         return (await mcu.set_scene(action.scene)).as_dict()
