@@ -282,6 +282,15 @@
         "period_ms": 4500,
         "vibro": false
       }
+    },
+    "user_presets": {},
+    "sequences": [],
+    "emotion_map": {
+      "curious": "",
+      "warm": "",
+      "unease": "",
+      "sharp": "",
+      "calm": ""
     }
   },
   "sounds": {

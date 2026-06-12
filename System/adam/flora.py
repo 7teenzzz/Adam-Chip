@@ -34,6 +34,11 @@ from typing import Any
 
 logger = logging.getLogger("adam.flora")
 
+# Preset names owned by the pipeline — cannot be used as user_presets keys.
+SYSTEM_PRESET_NAMES: frozenset[str] = frozenset({
+    "breathe", "accent", "attentive", "think_pulse", "wake_bloom", "external", "idle",
+})
+
 
 class FloraPriority(IntEnum):
     """Priority levels for flora preset ownership.
@@ -110,9 +115,6 @@ class FloraController:
         self._rms_task: asyncio.Task[None] | None = None
 
         # Flora coexistence priority system (Phase 36, Direction 1).
-        # _current_priority tracks which layer owns the lights right now.
-        # _current_preset tracks the preset name last sent to ESP32.
-        # _p2_preset/_p2_params hold the deferred P2 state while P3 is active.
         self._current_priority: FloraPriority | None = None
         self._current_preset: str | None = None
         self._p2_preset: str | None = None
@@ -123,6 +125,10 @@ class FloraController:
         # scale on P2 presets: effective_peak = peak * rms_multiplier (0.80..1.0).
         self._rms_window: collections.deque[float] = collections.deque(maxlen=30)
         self._rms_multiplier: float = 1.0
+
+        # SmartFlora (Phase 37): running animation sequence task. Cancelled by
+        # P1/P3 pipeline events (wake_word, listening, standby) and stop_sequence().
+        self._sequence_task: asyncio.Task[None] | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -141,6 +147,7 @@ class FloraController:
 
     async def stop(self) -> None:
         """Cancel the consumer task, await it, and unsubscribe from the event log."""
+        await self._cancel_sequence_task()
         # Kill any live RMS streamer first so it cannot keep POSTing frames.
         await self._cancel_rms_task()
         self._answer_active = False
@@ -194,6 +201,8 @@ class FloraController:
 
         if etype == "wake_word_detected":
             # Barge-in (D-09): snap light to accent and kill any live RMS stream.
+            # Also cancel any running user sequence (P1 preempts everything).
+            await self._cancel_sequence_task()
             if self._answer_active or self._rms_task is not None:
                 await self._cancel_rms_task()
                 self._answer_active = False
@@ -218,7 +227,8 @@ class FloraController:
             self._booted = True
             to = payload.get("to")
             if to == "listening":
-                # Barge-in (D-09): cancel RMS stream so light snaps to attentive.
+                # Barge-in (D-09): cancel RMS stream and any user sequence.
+                await self._cancel_sequence_task()
                 if self._answer_active or self._rms_task is not None:
                     await self._cancel_rms_task()
                     self._answer_active = False
@@ -226,7 +236,8 @@ class FloraController:
                 self._current_priority = FloraPriority.P3_PIPELINE
                 await self._set_state("attentive")  # слушание — вибро OFF (D-11)
             elif to == "standby":
-                # Barge-in guard: also cancel on standby transition (e.g. no-reply).
+                # Barge-in guard: cancel sequence, RMS, then settle to breathe.
+                await self._cancel_sequence_task()
                 if self._answer_active or self._rms_task is not None:
                     await self._cancel_rms_task()
                     self._answer_active = False
@@ -306,7 +317,8 @@ class FloraController:
         """
         flora = self._live_flora_cfg()
         known = set((flora.get("states") or {}).keys())
-        known.update({"idle", "breathe", "accent", "attentive", "think_pulse", "wake_bloom", "external"})
+        known.update(SYSTEM_PRESET_NAMES)
+        known.update((flora.get("user_presets") or {}).keys())  # SmartFlora user presets
         if state not in known:
             return False
         await self._set_state(state)
@@ -361,7 +373,9 @@ class FloraController:
         max_duty_pct: float = float(flora.get("max_duty_pct", 100))
         max_duty: int = int(round(self._value_max * max_duty_pct / 100.0))
 
-        preset: dict[str, Any] = states_cfg.get(state, {}) or {}
+        # SmartFlora (Phase 37): fall back to user_presets when state is not a system preset.
+        user_presets_cfg: dict[str, Any] = flora.get("user_presets", {}) or {}
+        preset: dict[str, Any] = states_cfg.get(state) or user_presets_cfg.get(state) or {}
         params: dict[str, Any] = {
             "crossfade_ms": crossfade_ms,
             "vibro_intensity_pct": vibro_intensity_pct,
@@ -686,37 +700,119 @@ class FloraController:
             preset, self._rms_multiplier, self._current_priority.name,
         )
 
+    # ── SmartFlora: sequence runner (Phase 37) ────────────────────────
+
+    async def run_sequence(self, name: str) -> bool:
+        """Start a named animation sequence from flora.sequences.
+
+        Cancels any currently running sequence first.  Returns False if the
+        sequence name is not found in the config.  Steps execute in order;
+        each step pushes a preset, then sleeps hold_ms.  The task is
+        cancellable — any P1/P3 pipeline event will abort it.
+        """
+        if not self._enabled:
+            return False
+        flora = self._live_flora_cfg()
+        sequences: list[dict[str, Any]] = flora.get("sequences") or []
+        seq = next((s for s in sequences if s.get("name") == name), None)
+        if seq is None:
+            logger.debug("flora run_sequence: %r not found", name)
+            return False
+        steps: list[dict[str, Any]] = seq.get("steps") or []
+        if not steps:
+            logger.debug("flora run_sequence: %r has no steps", name)
+            return False
+
+        await self._cancel_sequence_task()
+        self._sequence_task = asyncio.create_task(
+            self._run_sequence_steps(name, steps), name="flora_sequence"
+        )
+        logger.info("flora sequence started: %r (%d steps)", name, len(steps))
+        return True
+
+    async def stop_sequence(self) -> None:
+        """Cancel any running animation sequence and return to breathe."""
+        await self._cancel_sequence_task()
+        if self._enabled:
+            await self._set_state("breathe")
+
+    async def _cancel_sequence_task(self) -> None:
+        """Cancel _sequence_task if live, swallowing CancelledError."""
+        task = self._sequence_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        self._sequence_task = None
+
+    async def _run_sequence_steps(
+        self, name: str, steps: list[dict[str, Any]]
+    ) -> None:
+        """Execute sequence steps sequentially.  Runs as asyncio Task."""
+        flora = self._live_flora_cfg()
+        global_crossfade = int(flora.get("crossfade_ms", self._crossfade_ms))
+        try:
+            for i, step in enumerate(steps):
+                preset = str(step.get("preset", "")).strip()
+                hold_ms = int(step.get("hold_ms", 1000))
+                crossfade_ms = int(step.get("crossfade_ms", global_crossfade))
+                if not preset:
+                    logger.debug("flora sequence %r step %d: missing preset, skipping", name, i)
+                    continue
+                await self._set_state(preset, crossfade_ms=crossfade_ms)
+                if hold_ms > 0:
+                    await asyncio.sleep(hold_ms / 1000.0)
+            logger.info("flora sequence finished: %r", name)
+        except asyncio.CancelledError:
+            logger.debug("flora sequence cancelled: %r at step %d", name, i)
+            raise
+
+    # ── SmartFlora: emotion → preset mapping (Phase 37) ───────────────
+
     async def push_preset_p2_emotion(
         self, emotion: str, intensity: float = 0.5
     ) -> None:
-        """Select a/b emotion variant by intensity and push as P2 preset.
+        """Push a flora preset for an AIIM emotion state.
 
-        Variant b fires when intensity > 0.65.  Falls back to _a if the
-        variant is not defined in flora.states (e.g. Phase 2 presets not yet
-        added to firmware/config).
+        Checks flora.emotion_map first (explicit user mapping). Falls back to
+        the naming convention (emotion_a / emotion_b by intensity) when the map
+        entry is absent or empty.  If no matching preset exists in either
+        flora.states or flora.user_presets, the call is silently dropped.
         """
         if not self._enabled:
             return
         flora = self._live_flora_cfg()
         states: dict[str, Any] = flora.get("states") or {}
-        variant = "b" if intensity > 0.65 else "a"
-        preset = f"{emotion}_{variant}"
-        if preset not in states:
-            preset = f"{emotion}_a"
-        if preset not in states:
-            logger.debug("flora P2 emotion: preset %r not in states config, skipping", preset)
+        user_presets: dict[str, Any] = flora.get("user_presets") or {}
+        emotion_map: dict[str, str] = flora.get("emotion_map") or {}
+
+        # Explicit map entry takes priority over naming convention.
+        mapped = emotion_map.get(emotion, "")
+        if mapped:
+            preset = mapped
+        else:
+            # Naming convention: emotion_b for high intensity, emotion_a otherwise.
+            variant = "b" if intensity > 0.65 else "a"
+            preset = f"{emotion}_{variant}"
+            if preset not in states and preset not in user_presets:
+                preset = f"{emotion}_a"
+
+        if preset not in states and preset not in user_presets:
+            logger.debug("flora P2 emotion %r → preset %r not found, skipping", emotion, preset)
             return
+
+        # Route through push_preset_p2 to respect Phase 36 priority system.
         await self.push_preset_p2(preset)
+        logger.debug("flora P2 emotion %r → %r (intensity=%.2f)", emotion, preset, intensity)
 
     async def _restore_p2(self) -> None:
-        """Re-apply saved P2 preset after P3 pipeline settles to breathe/idle.
-
-        Called after tts_finished → breathe and after voice_state_change → standby.
-        No-op if no P2 preset was set or P3 is still active.
-        """
+        """Re-apply saved P2 preset after P3 pipeline settles to breathe/idle."""
         if self._p2_preset is None:
             return
-        # Guard: only restore when P3 has actually settled.
         if (
             self._current_priority == FloraPriority.P3_PIPELINE
             and self._current_preset not in (None, "breathe")
@@ -733,6 +829,4 @@ class FloraController:
                     "peak_duty", int(round(built["peak_duty"] * self._rms_multiplier))
                 )
         await self._set_state(preset, **overrides)
-        logger.debug(
-            "flora P2 restored: %r (rms_mult=%.2f)", preset, self._rms_multiplier
-        )
+        logger.debug("flora P2 restored: %r (rms_mult=%.2f)", preset, self._rms_multiplier)

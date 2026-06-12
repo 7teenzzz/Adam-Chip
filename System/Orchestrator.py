@@ -3091,6 +3091,235 @@ async def flora_config_preview() -> dict[str, Any]:
     return {"ok": True, "presets": preview}
 
 
+# ── SmartFlora: User Preset CRUD (Phase 37) ──────────────────────────────────
+
+from adam.flora import SYSTEM_PRESET_NAMES as _FLORA_SYSTEM_NAMES
+
+
+def _flora_all_preset_names(flora_cfg: dict[str, Any]) -> set[str]:
+    """Return all known preset names: system states + user presets."""
+    names: set[str] = set(_FLORA_SYSTEM_NAMES)
+    names.update((flora_cfg.get("states") or {}).keys())
+    names.update((flora_cfg.get("user_presets") or {}).keys())
+    return names
+
+
+@app.get("/api/flora/presets")
+async def flora_list_presets() -> dict[str, Any]:
+    """List all flora presets: system (flora.states) and user-defined (flora.user_presets)."""
+    flora_cfg = settings.section("flora")
+    system = {k: v for k, v in (flora_cfg.get("states") or {}).items()}
+    user = dict(flora_cfg.get("user_presets") or {})
+    return {"ok": True, "system": system, "user": user}
+
+
+@app.post("/api/flora/presets")
+async def flora_create_preset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Create a new user-defined flora preset.
+
+    Body: {name: str, params: {base_pct, peak_pct, period_ms, vibro, spark_probability, ...}}
+    Returns 409 if name already exists or is a reserved system name.
+    """
+    name = str(payload.get("name", "")).strip()
+    params = payload.get("params")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    if not isinstance(params, dict):
+        raise HTTPException(status_code=400, detail="params must be an object")
+    if name in _FLORA_SYSTEM_NAMES:
+        raise HTTPException(status_code=409, detail=f"'{name}' is a reserved system preset name")
+    flora_cfg = settings.section("flora")
+    user_presets: dict[str, Any] = dict(flora_cfg.get("user_presets") or {})
+    if name in user_presets:
+        raise HTTPException(status_code=409, detail=f"preset '{name}' already exists")
+    user_presets[name] = params
+    settings.apply_patch("flora", {"user_presets": user_presets})
+    settings.save()
+    event_log.append("flora_preset_created", {"name": name})
+    return {"ok": True, "name": name, "params": params}
+
+
+@app.put("/api/flora/presets/{name}")
+async def flora_update_preset(name: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Update an existing user-defined flora preset.
+
+    Body: {params: {...}}  or  {name?: str, params: {...}}  (rename supported)
+    """
+    flora_cfg = settings.section("flora")
+    user_presets: dict[str, Any] = dict(flora_cfg.get("user_presets") or {})
+    if name not in user_presets:
+        raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
+    new_name = str(payload.get("name", name)).strip() or name
+    params = payload.get("params", user_presets[name])
+    if not isinstance(params, dict):
+        raise HTTPException(status_code=400, detail="params must be an object")
+    if new_name != name:
+        if new_name in _FLORA_SYSTEM_NAMES:
+            raise HTTPException(status_code=409, detail=f"'{new_name}' is a reserved system preset name")
+        if new_name in user_presets:
+            raise HTTPException(status_code=409, detail=f"preset '{new_name}' already exists")
+        del user_presets[name]
+    user_presets[new_name] = params
+    settings.apply_patch("flora", {"user_presets": user_presets})
+    settings.save()
+    event_log.append("flora_preset_updated", {"old_name": name, "new_name": new_name})
+    return {"ok": True, "name": new_name, "params": params}
+
+
+@app.delete("/api/flora/presets/{name}")
+async def flora_delete_preset(name: str) -> dict[str, Any]:
+    """Delete a user-defined flora preset."""
+    flora_cfg = settings.section("flora")
+    user_presets: dict[str, Any] = dict(flora_cfg.get("user_presets") or {})
+    if name not in user_presets:
+        raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
+    del user_presets[name]
+    settings.apply_patch("flora", {"user_presets": user_presets})
+    settings.save()
+    event_log.append("flora_preset_deleted", {"name": name})
+    return {"ok": True, "deleted": name}
+
+
+@app.post("/api/flora/presets/{name}/preview")
+async def flora_preview_preset(name: str) -> dict[str, Any]:
+    """Push a user preset to hardware for live preview."""
+    ok = await flora_controller.push_preset(name)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"unknown preset '{name}'")
+    event_log.append("flora_manual_push", {"state": name, "via": "preset_preview"})
+    return {"ok": True, "name": name}
+
+
+# ── SmartFlora: Sequences CRUD + run (Phase 37) ──────────────────────────────
+
+@app.get("/api/flora/sequences")
+async def flora_list_sequences() -> dict[str, Any]:
+    """List all defined animation sequences from flora.sequences."""
+    flora_cfg = settings.section("flora")
+    sequences = list(flora_cfg.get("sequences") or [])
+    return {"ok": True, "sequences": sequences}
+
+
+@app.post("/api/flora/sequences")
+async def flora_create_sequence(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Create a new animation sequence.
+
+    Body: {name: str, steps: [{preset: str, hold_ms: int, crossfade_ms?: int}]}
+    """
+    name = str(payload.get("name", "")).strip()
+    steps = payload.get("steps")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    if not isinstance(steps, list) or not steps:
+        raise HTTPException(status_code=400, detail="steps must be a non-empty array")
+    flora_cfg = settings.section("flora")
+    sequences: list[dict[str, Any]] = list(flora_cfg.get("sequences") or [])
+    if any(s.get("name") == name for s in sequences):
+        raise HTTPException(status_code=409, detail=f"sequence '{name}' already exists")
+    sequences.append({"name": name, "steps": steps})
+    settings.apply_patch("flora", {"sequences": sequences})
+    settings.save()
+    event_log.append("flora_sequence_created", {"name": name, "steps": len(steps)})
+    return {"ok": True, "name": name, "steps": steps}
+
+
+@app.put("/api/flora/sequences/{name}")
+async def flora_update_sequence(name: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Update an existing animation sequence (replace steps, optional rename)."""
+    flora_cfg = settings.section("flora")
+    sequences: list[dict[str, Any]] = list(flora_cfg.get("sequences") or [])
+    idx = next((i for i, s in enumerate(sequences) if s.get("name") == name), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail=f"sequence '{name}' not found")
+    new_name = str(payload.get("name", name)).strip() or name
+    steps = payload.get("steps", sequences[idx].get("steps", []))
+    if not isinstance(steps, list) or not steps:
+        raise HTTPException(status_code=400, detail="steps must be a non-empty array")
+    if new_name != name and any(s.get("name") == new_name for s in sequences):
+        raise HTTPException(status_code=409, detail=f"sequence '{new_name}' already exists")
+    sequences[idx] = {"name": new_name, "steps": steps}
+    settings.apply_patch("flora", {"sequences": sequences})
+    settings.save()
+    event_log.append("flora_sequence_updated", {"old_name": name, "new_name": new_name})
+    return {"ok": True, "name": new_name, "steps": steps}
+
+
+@app.delete("/api/flora/sequences/{name}")
+async def flora_delete_sequence(name: str) -> dict[str, Any]:
+    """Delete an animation sequence."""
+    flora_cfg = settings.section("flora")
+    sequences: list[dict[str, Any]] = list(flora_cfg.get("sequences") or [])
+    new_sequences = [s for s in sequences if s.get("name") != name]
+    if len(new_sequences) == len(sequences):
+        raise HTTPException(status_code=404, detail=f"sequence '{name}' not found")
+    settings.apply_patch("flora", {"sequences": new_sequences})
+    settings.save()
+    event_log.append("flora_sequence_deleted", {"name": name})
+    return {"ok": True, "deleted": name}
+
+
+@app.post("/api/flora/sequences/{name}/run")
+async def flora_run_sequence(name: str) -> dict[str, Any]:
+    """Start a named animation sequence on the flora controller."""
+    ok = await flora_controller.run_sequence(name)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"sequence '{name}' not found or has no steps")
+    event_log.append("flora_sequence_run", {"name": name})
+    return {"ok": True, "running": name}
+
+
+@app.post("/api/flora/sequences/stop")
+async def flora_stop_sequence() -> dict[str, Any]:
+    """Cancel any running animation sequence and return to breathe."""
+    await flora_controller.stop_sequence()
+    event_log.append("flora_sequence_stopped", {})
+    return {"ok": True}
+
+
+# ── SmartFlora: Emotion Map (Phase 37) ───────────────────────────────────────
+
+_VALID_EMOTIONS: frozenset[str] = frozenset({"curious", "warm", "unease", "sharp", "calm"})
+
+
+@app.get("/api/flora/emotion_map")
+async def flora_get_emotion_map() -> dict[str, Any]:
+    """Return the current AIIM emotion → flora preset binding."""
+    flora_cfg = settings.section("flora")
+    emotion_map = dict(flora_cfg.get("emotion_map") or {})
+    all_presets = sorted(_flora_all_preset_names(flora_cfg))
+    return {"ok": True, "emotion_map": emotion_map, "available_presets": all_presets}
+
+
+@app.patch("/api/flora/emotion_map")
+async def flora_patch_emotion_map(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Update emotion → preset bindings.
+
+    Body: {emotion_map: {curious?: str, warm?: str, unease?: str, sharp?: str, calm?: str}}
+    Values are preset names or '' to use the naming convention fallback.
+    """
+    patch_map = payload.get("emotion_map")
+    if not isinstance(patch_map, dict):
+        raise HTTPException(status_code=400, detail="emotion_map must be an object")
+    invalid_keys = set(patch_map.keys()) - _VALID_EMOTIONS
+    if invalid_keys:
+        raise HTTPException(status_code=400, detail=f"invalid emotion keys: {sorted(invalid_keys)}")
+    flora_cfg = settings.section("flora")
+    flora_all_presets = _flora_all_preset_names(flora_cfg)
+    # Validate preset values: must be known preset name or empty string.
+    for emotion, preset_name in patch_map.items():
+        if preset_name and preset_name not in flora_all_presets:
+            raise HTTPException(
+                status_code=400,
+                detail=f"preset '{preset_name}' not found (bound to emotion '{emotion}')"
+            )
+    current_map: dict[str, str] = dict(flora_cfg.get("emotion_map") or {})
+    current_map.update(patch_map)
+    settings.apply_patch("flora", {"emotion_map": current_map})
+    settings.save()
+    event_log.append("flora_emotion_map_updated", {"patch": patch_map})
+    return {"ok": True, "emotion_map": current_map}
+
+
 @app.post("/api/agent/turn")
 async def dialogue_turn(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     transcript = str(payload.get("transcript", "")).strip()

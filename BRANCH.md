@@ -1,27 +1,31 @@
-# Branch: subconscious-symbiont
+# Branch: SmartFlora
 
-**Diverged from:** ultimate-integration-v2
-**Goal:** Переосмысление Cosmos Reason2-2B как визуального подсознания симбионта Адама — нарратив + архитектурное решение.
-**Status:** in-progress
-**Merge target:** ultimate-integration-v2 (затем main)
-
-**Что изменено:**
-
-- `Agent-Adam-Chip/About/Lore.md` — добавлен раздел "Зрение": симбионт видит раньше, чем Adam осмысляет; первое лицо, согласовано с существующим лором про симбионт-в-технофлоре
-- `Agent-Adam-Chip/About/System.md` — `[ctx.vision]` переформулирован с "служебная телеметрия" на "поток от симбионта, который обрабатывает пространство раньше тебя"
-- `.planning/STATE.md` — зафиксировано архитектурное решение (Cosmos locked, 759ms vs 1135ms Gemma) + roadmap Cosmos-агента (Phase A→B→C)
-- `System/WebUI/static/js/panels/camera.js` — fix: stale `clearJetTimer` ref (удалён после MJPEG-миграции)
-
+**Diverged from:** subconscious-symbiont @ 028bea5
+**Goal:** Трёхуровневая система управления технофлорой — библиотека пользовательских пресетов, последовательности анимаций, привязка к эмоциям AIIM и страница управления в WebUI.
+**Status:** experimenting
+**Merge target:** subconscious-symbiont (затем main)
 **Merge conditions:**
+1. Все три уровня реализованы и работают на железе (пресеты, секвенции, emotion_map)
+2. Существующее поведение флоры не сломано (тест: wake_word→accent→attentive→breathe цикл)
+3. Системные пресеты (flora.states) не изменяются через новый API
+4. WebUI: страница SmartFlora открывается без JS-ошибок
 
-1. Smoke-test: перезапуск оркестратора, убедиться что `[ctx.vision]` попадает в промпт с новой формулировкой
-2. Нарратив согласован с AIIM (симбионт уже упомянут в Lore — здесь его визуальный аспект)
-3. Изменения только в persona/planning файлах — нет рисков для inference pipeline
+**Modified areas:**
+- `BRANCH.md` (этот файл)
+- `.planning/phases/37-SmartFlora/` (GSD phase artifacts)
+- `System/Config.json` — добавлены `flora.user_presets`, `flora.sequences`, `flora.emotion_map`
+- `System/Config.schema.json` — документация новых ключей
+- `System/adam/flora.py` — поддержка user_presets, emotion_map, sequence runner (поверх Phase 36)
+- `System/Orchestrator.py` — новые API endpoints (preset CRUD, sequences, emotion_map)
+- `System/WebUI/static/js/panels/flora.js` — UI: библиотека пресетов, редактор секвенций, emotion map
 
-**Global changes:** НЕТ — только persona MD-файлы и planning artifacts.
+**Global changes:** да — новые ключи в Config.json (flora.user_presets, flora.sequences, flora.emotion_map); новые API endpoints; push_preset_p2_emotion теперь проверяет emotion_map перед naming convention (backward-compatible).
 
-**Roadmap Cosmos-агента (backlog, не в этой ветке):**
-
-- Phase A: Cosmos → EventBus (заметил изменение сцены → событие, Adam реагирует)
-- Phase B: Cosmos управляет частотой съёмки адаптивно
-- Phase C: Cosmos с собственным эмоциональным состоянием, независимым от Adam
+**Notes for agents:**
+- НЕ трогать flora.states в Config.json — это системные пресеты
+- user_presets хранятся в flora.user_presets (dict), НЕ в flora.states
+- Зарезервированные имена: breathe, accent, attentive, think_pulse, wake_bloom, external, idle
+- Секвенции — asyncio-task, отменяется P1/P3 событиями и /api/flora/sequences/stop
+- emotion_map optional: если пусто — fallback на naming convention (emotion_a/b)
+- push_preset_p2_emotion роутит через push_preset_p2() для соблюдения Phase 36 priority system
+- ИНВАРИАНТ: вибро всегда выключено в attentive — не нарушать ни в пресетах, ни в секвенциях

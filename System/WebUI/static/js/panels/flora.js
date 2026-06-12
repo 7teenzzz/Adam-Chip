@@ -303,6 +303,359 @@ function buildStateCard(stateKey, stateData, draft) {
   return { card, getValues };
 }
 
+// ── SmartFlora helpers ────────────────────────────────────────────────────────
+
+const EMOTION_LABELS = {
+  curious: "curious — любопытство",
+  warm:    "warm — тепло",
+  unease:  "unease — тревога",
+  sharp:   "sharp — острота",
+  calm:    "calm — спокойствие",
+};
+
+// Build a <select> of all preset names (system + user) with blank "convention" option.
+function makePresetSelect(allPresets, selected) {
+  const opts = [
+    el("option", { value: "" }, "— по умолчанию (naming convention)"),
+    ...allPresets.map((p) =>
+      el("option", { value: p, selected: selected === p ? "selected" : null }, p)
+    ),
+  ];
+  return el("select", { class: "select" }, opts);
+}
+
+// Build the Emotion → Preset map card.
+function buildEmotionMapCard(emotionMap, allPresets) {
+  const selects = {};
+  const rows = Object.entries(EMOTION_LABELS).map(([emotion, label]) => {
+    const sel = makePresetSelect(allPresets, (emotionMap || {})[emotion] || "");
+    selects[emotion] = sel;
+    return el("label", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap" }, [
+      el("span", { style: "min-width:200px; font-size:12px; color:var(--text)" }, label),
+      sel,
+    ]);
+  });
+
+  const saveBtn = el("button", { class: "btn", style: "margin-top:10px; font-size:12px", text: "Сохранить привязку" });
+
+  const card = el("section", { class: "card", style: "grid-column:1/-1" }, [
+    el("div", { class: "card-header" }, [
+      el("span", { class: "card-title" }, "Привязка эмоций Адама → пресет флоры"),
+      el("span", { class: "caps mono dim" }, "flora.emotion_map"),
+    ]),
+    el("div", { class: "card-body" }, [
+      el("div", { style: "display:flex; flex-direction:column; gap:8px" }, rows),
+      saveBtn,
+    ]),
+  ]);
+
+  saveBtn.addEventListener("click", async () => {
+    saveBtn.disabled = true;
+    try {
+      const patch = {};
+      for (const [emotion, sel] of Object.entries(selects)) patch[emotion] = sel.value;
+      await api.patch("/api/flora/emotion_map", { emotion_map: patch });
+      toast("Привязка эмоций сохранена", "ok");
+    } catch (e) {
+      toast(`Ошибка: ${e.message}`, "bad", 5000);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  return card;
+}
+
+// Build inline form for creating / editing a user preset.
+// onSave(name, params) is called with validated values.
+function buildPresetForm(initName, initParams, onSave, onCancel) {
+  initParams = initParams || {};
+  const nameInput = el("input", {
+    class: "input",
+    type: "text",
+    placeholder: "имя пресета (только latin, _)",
+    value: initName || "",
+    style: "width:180px",
+  });
+
+  const basePctCtl = makeSlider({ label: "Яркость: низ, %",  min: 0, max: 100, step: 1, initValue: initParams.base_pct ?? 10 });
+  const peakPctCtl = makeSlider({ label: "Яркость: пик, %",  min: 0, max: 100, step: 1, initValue: initParams.peak_pct ?? 50 });
+  const periodCtl  = makeSlider({ label: "Период, мс",       min: 100, max: 10000, step: 50, initValue: initParams.period_ms ?? 3000 });
+  const sparkCtl   = makeSlider({ label: "Вероятность искр", min: 0, max: 1, step: 0.01, decimals: 2, initValue: initParams.spark_probability ?? 0 });
+  const vibroCtl   = makeToggle({ label: "Вибро", initValue: initParams.vibro === true || initParams.vibro === "double_pulse" });
+
+  const saveBtn   = el("button", { class: "btn",        style: "font-size:12px", text: "Сохранить" });
+  const cancelBtn = el("button", { class: "btn btn-ghost", style: "font-size:12px", text: "Отмена" });
+
+  saveBtn.addEventListener("click", () => {
+    const name = nameInput.value.trim();
+    if (!name) { toast("Введите имя пресета", "bad"); return; }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) { toast("Имя: только latin, цифры, _ -", "bad"); return; }
+    onSave(name, {
+      base_pct:          basePctCtl.getValue(),
+      peak_pct:          peakPctCtl.getValue(),
+      period_ms:         periodCtl.getValue(),
+      spark_probability: sparkCtl.getValue(),
+      vibro:             vibroCtl.getValue(),
+    });
+  });
+  cancelBtn.addEventListener("click", onCancel);
+
+  return el("div", { style: "border:1px solid var(--border); border-radius:8px; padding:12px; background:var(--bg-2,var(--bg)); display:flex; flex-direction:column; gap:8px" }, [
+    el("label", { style: "display:flex; flex-direction:column; gap:4px" }, [
+      el("span", { style: "font-size:12px; color:var(--text)" }, "Имя"),
+      nameInput,
+    ]),
+    basePctCtl.root, peakPctCtl.root, periodCtl.root, sparkCtl.root, vibroCtl.root,
+    el("div", { style: "display:flex; gap:8px; margin-top:4px" }, [saveBtn, cancelBtn]),
+  ]);
+}
+
+// Build the User Presets management section (full-width, below system presets).
+function buildUserPresetsSection(userPresets, onReload) {
+  let showForm = false;
+  let editingName = null;
+
+  const listContainer = el("div", { style: "display:flex; flex-direction:column; gap:8px" });
+  const formContainer = el("div", {});
+
+  function refreshList() {
+    listContainer.innerHTML = "";
+    const entries = Object.entries(userPresets);
+    if (entries.length === 0) {
+      listContainer.appendChild(el("div", { class: "muted", style: "font-size:12px" }, "Нет пользовательских пресетов"));
+    }
+    entries.forEach(([name, params]) => {
+      const previewBtn = el("button", { class: "btn btn-ghost", style: "font-size:11px", text: "Показать" });
+      const editBtn    = el("button", { class: "btn btn-ghost", style: "font-size:11px", text: "Изменить" });
+      const deleteBtn  = el("button", { class: "btn btn-ghost bad", style: "font-size:11px", text: "Удалить" });
+
+      previewBtn.addEventListener("click", async () => {
+        try { await api.post(`/api/flora/presets/${encodeURIComponent(name)}/preview`); toast(`Показан: ${name}`, "ok"); }
+        catch(e) { toast(e.message, "bad"); }
+      });
+      editBtn.addEventListener("click", () => {
+        editingName = name;
+        formContainer.innerHTML = "";
+        formContainer.appendChild(buildPresetForm(name, params,
+          async (newName, newParams) => {
+            try {
+              await api.put(`/api/flora/presets/${encodeURIComponent(name)}`, { name: newName, params: newParams });
+              toast(`Пресет «${newName}» обновлён`, "ok");
+              onReload();
+            } catch(e) { toast(e.message, "bad"); }
+          },
+          () => { formContainer.innerHTML = ""; editingName = null; }
+        ));
+      });
+      deleteBtn.addEventListener("click", async () => {
+        if (!confirm(`Удалить пресет «${name}»?`)) return;
+        try { await api.delete(`/api/flora/presets/${encodeURIComponent(name)}`); toast(`Удалён: ${name}`, "ok"); onReload(); }
+        catch(e) { toast(e.message, "bad"); }
+      });
+
+      const summary = `base=${params.base_pct ?? "?"}% peak=${params.peak_pct ?? "?"}% period=${params.period_ms ?? "?"}ms`;
+      listContainer.appendChild(
+        el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 8px; border:1px solid var(--border); border-radius:6px" }, [
+          el("span", { style: "font-size:13px; font-weight:600; min-width:120px" }, name),
+          el("span", { class: "muted", style: "font-size:11px; flex:1" }, summary),
+          previewBtn, editBtn, deleteBtn,
+        ])
+      );
+    });
+  }
+
+  refreshList();
+
+  const addBtn = el("button", { class: "btn btn-ghost", style: "font-size:12px; align-self:flex-start; margin-top:4px", text: "+ Создать пресет" });
+  addBtn.addEventListener("click", () => {
+    formContainer.innerHTML = "";
+    editingName = null;
+    formContainer.appendChild(buildPresetForm("", {},
+      async (name, params) => {
+        try {
+          await api.post("/api/flora/presets", { name, params });
+          toast(`Пресет «${name}» создан`, "ok");
+          onReload();
+        } catch(e) { toast(e.message, "bad"); }
+      },
+      () => { formContainer.innerHTML = ""; }
+    ));
+  });
+
+  return el("section", { class: "card", style: "grid-column:1/-1" }, [
+    el("div", { class: "card-header" }, [
+      el("span", { class: "card-title" }, "Пользовательские пресеты"),
+      el("span", { class: "caps mono dim" }, "flora.user_presets"),
+    ]),
+    el("div", { class: "card-body" }, [listContainer, addBtn, formContainer]),
+  ]);
+}
+
+// Build one sequence step row.
+function buildStepRow(allPresets, stepData, onDelete) {
+  const presetSel = el("select", { class: "select", style: "min-width:140px" },
+    allPresets.map((p) => el("option", { value: p, selected: (stepData?.preset === p) ? "selected" : null }, p))
+  );
+  const holdInput = el("input", {
+    class: "input", type: "number", min: "50", max: "60000", step: "100",
+    value: stepData?.hold_ms ?? 1000, style: "width:80px",
+  });
+  const cfInput = el("input", {
+    class: "input", type: "number", min: "0", max: "2000", step: "10",
+    placeholder: "авто", value: stepData?.crossfade_ms ?? "",
+    style: "width:70px",
+  });
+  const delBtn = el("button", { class: "btn btn-ghost bad", style: "font-size:11px", text: "✕" });
+  delBtn.addEventListener("click", onDelete);
+
+  const row = el("div", { style: "display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:4px 0; border-bottom:1px solid var(--border)" }, [
+    el("span", { class: "muted", style: "font-size:11px; min-width:40px" }, "пресет"),
+    presetSel,
+    el("span", { class: "muted", style: "font-size:11px" }, "держать, мс"),
+    holdInput,
+    el("span", { class: "muted", style: "font-size:11px" }, "fade, мс"),
+    cfInput,
+    delBtn,
+  ]);
+
+  return {
+    row,
+    getValue: () => {
+      const cf = parseInt(cfInput.value, 10);
+      const step = { preset: presetSel.value, hold_ms: parseInt(holdInput.value, 10) || 1000 };
+      if (!isNaN(cf) && cfInput.value !== "") step.crossfade_ms = cf;
+      return step;
+    },
+  };
+}
+
+// Build the Sequences management section.
+function buildSequencesSection(sequences, allPresets, onReload) {
+  const listContainer = el("div", { style: "display:flex; flex-direction:column; gap:8px" });
+  const editorContainer = el("div", {});
+
+  const stopBtn = el("button", { class: "btn btn-ghost", style: "font-size:12px", text: "⏹ Остановить" });
+  stopBtn.addEventListener("click", async () => {
+    try { await api.post("/api/flora/sequences/stop"); toast("Секвенция остановлена", "ok"); }
+    catch(e) { toast(e.message, "bad"); }
+  });
+
+  function refreshList() {
+    listContainer.innerHTML = "";
+    if (!sequences.length) {
+      listContainer.appendChild(el("div", { class: "muted", style: "font-size:12px" }, "Нет секвенций"));
+    }
+    sequences.forEach((seq) => {
+      const name = seq.name || "?";
+      const steps = seq.steps || [];
+      const runBtn = el("button", { class: "btn", style: "font-size:11px", text: "▶ Запустить" });
+      const delBtn = el("button", { class: "btn btn-ghost bad", style: "font-size:11px", text: "Удалить" });
+
+      runBtn.addEventListener("click", async () => {
+        try { await api.post(`/api/flora/sequences/${encodeURIComponent(name)}/run`); toast(`Запущена: ${name}`, "ok"); }
+        catch(e) { toast(e.message, "bad"); }
+      });
+      delBtn.addEventListener("click", async () => {
+        if (!confirm(`Удалить секвенцию «${name}»?`)) return;
+        try { await api.delete(`/api/flora/sequences/${encodeURIComponent(name)}`); toast(`Удалена: ${name}`, "ok"); onReload(); }
+        catch(e) { toast(e.message, "bad"); }
+      });
+
+      listContainer.appendChild(
+        el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 8px; border:1px solid var(--border); border-radius:6px" }, [
+          el("span", { style: "font-size:13px; font-weight:600; min-width:140px" }, name),
+          el("span", { class: "muted", style: "font-size:11px; flex:1" }, `${steps.length} шаг${steps.length === 1 ? "" : "ов"}`),
+          runBtn, delBtn,
+        ])
+      );
+    });
+  }
+
+  refreshList();
+
+  // Sequence editor
+  function openEditor(initName, initSteps) {
+    editorContainer.innerHTML = "";
+    const stepRows = [];
+    const stepsContainer = el("div", { style: "display:flex; flex-direction:column; gap:4px" });
+
+    function addStep(stepData) {
+      const { row, getValue } = buildStepRow(allPresets, stepData, () => {
+        const idx = stepRows.findIndex((r) => r.row === row);
+        if (idx !== -1) {
+          stepRows.splice(idx, 1);
+          stepsContainer.removeChild(row);
+        }
+      });
+      stepRows.push({ row, getValue });
+      stepsContainer.appendChild(row);
+    }
+
+    (initSteps || [{ preset: allPresets[0] || "breathe", hold_ms: 2000 }]).forEach(addStep);
+
+    const nameInput = el("input", {
+      class: "input", type: "text", placeholder: "имя секвенции",
+      value: initName || "", style: "width:200px",
+    });
+    const addStepBtn = el("button", { class: "btn btn-ghost", style: "font-size:12px", text: "+ Добавить шаг" });
+    const saveBtn    = el("button", { class: "btn",           style: "font-size:12px", text: "Сохранить" });
+    const cancelBtn  = el("button", { class: "btn btn-ghost", style: "font-size:12px", text: "Отмена" });
+
+    addStepBtn.addEventListener("click", () => addStep(null));
+
+    saveBtn.addEventListener("click", async () => {
+      const name = nameInput.value.trim();
+      if (!name) { toast("Введите имя секвенции", "bad"); return; }
+      const steps = stepRows.map((r) => r.getValue());
+      if (!steps.length) { toast("Добавьте хотя бы один шаг", "bad"); return; }
+      try {
+        if (initName) {
+          await api.put(`/api/flora/sequences/${encodeURIComponent(initName)}`, { name, steps });
+          toast(`Секвенция «${name}» обновлена`, "ok");
+        } else {
+          await api.post("/api/flora/sequences", { name, steps });
+          toast(`Секвенция «${name}» создана`, "ok");
+        }
+        onReload();
+      } catch(e) { toast(e.message, "bad"); }
+    });
+    cancelBtn.addEventListener("click", () => { editorContainer.innerHTML = ""; });
+
+    editorContainer.appendChild(
+      el("div", { style: "border:1px solid var(--border); border-radius:8px; padding:12px; background:var(--bg-2,var(--bg)); display:flex; flex-direction:column; gap:8px; margin-top:8px" }, [
+        el("label", { style: "display:flex; flex-direction:column; gap:4px" }, [
+          el("span", { style: "font-size:12px; color:var(--text)" }, "Имя секвенции"),
+          nameInput,
+        ]),
+        el("div", { style: "font-size:12px; color:var(--muted); margin-top:4px" }, "Шаги (выполняются по порядку):"),
+        stepsContainer,
+        addStepBtn,
+        el("div", { style: "display:flex; gap:8px; margin-top:4px" }, [saveBtn, cancelBtn]),
+      ])
+    );
+  }
+
+  const newBtn = el("button", { class: "btn btn-ghost", style: "font-size:12px; align-self:flex-start; margin-top:4px", text: "+ Новая секвенция" });
+  newBtn.addEventListener("click", () => openEditor(null, null));
+
+  return el("section", { class: "card", style: "grid-column:1/-1" }, [
+    el("div", { class: "card-header" }, [
+      el("span", { class: "card-title" }, "Последовательности анимаций"),
+      el("span", { class: "caps mono dim" }, "flora.sequences"),
+    ]),
+    el("div", { class: "card-body" }, [
+      el("div", { style: "display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap" }, [
+        el("span", { style: "font-size:12px; color:var(--muted)" }, "Управление:"),
+        stopBtn,
+      ]),
+      listContainer,
+      newBtn,
+      editorContainer,
+    ]),
+  ]);
+}
+
 // ── Main mount ────────────────────────────────────────────────────────────────
 export function mount(target) {
   const container = el("div", { class: "col" });
@@ -483,6 +836,27 @@ export function mount(target) {
     ]);
     cardGrid.appendChild(vibroCard);
 
+    // ── 5. SmartFlora: эмоции + user presets + sequences ─────────────────────
+
+    // All preset names available for dropdowns (system + user)
+    const userPresetsCfg = flora.user_presets || {};
+    const allPresetNames = [
+      ...STATE_KEYS,
+      ...Object.keys(userPresetsCfg),
+    ];
+
+    // Emotion map card (grid-column: 1/-1 handled by its style)
+    const emotionMapCard = buildEmotionMapCard(flora.emotion_map || {}, allPresetNames);
+    cardGrid.appendChild(emotionMapCard);
+
+    container.appendChild(cardGrid);
+
+    // User presets section (full-width, outside grid)
+    container.appendChild(buildUserPresetsSection(userPresetsCfg, render));
+
+    // Sequences section (full-width, outside grid)
+    container.appendChild(buildSequencesSection(flora.sequences || [], allPresetNames, render));
+
     // ── Save button ───────────────────────────────────────────────────────────
 
     const saveBtn = el("button", {
@@ -533,7 +907,6 @@ export function mount(target) {
       }
     });
 
-    container.appendChild(cardGrid);
     container.appendChild(saveBtn);
   }
 
