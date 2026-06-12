@@ -137,33 +137,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "allowed_scenes": ["boot_idle", "all_on", "alternating"],
         "channels": {"min": 0, "max": 15, "value_min": 0, "value_max": 4095},
     },
-    "flora": {
-        "enabled": True,
-        "light_channels": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-        "vibro_channels": [0, 1, 2, 3],
-        "tick_ms": 20,
-        "crossfade_ms": 200,
-        "external_timeout_ms": 500,
-        "max_duty_pct": 100,
-        "speech": {
-            "frame_interval_ms": 80,
-            "hdmi_latency_offset_ms": 150,
-            "base_duty_pct": 25,
-            "peak_duty_pct": 71,
-            "spark_probability": 0.15,
-        },
-        "vibro": {
-            "intensity_pct": 95,
-            "silent_states": ["attentive"],
-        },
-        "states": {
-            "breathe": {"base_pct": 7, "peak_pct": 71, "period_ms": 4000, "vibro": False},
-            "accent": {"base_pct": 10, "peak_pct": 71, "attack_ms": 250, "vibro": True, "vibro_pulse_ms": 120, "period_ms": 1400},
-            "attentive": {"plateau_pct": 40, "vibro": False},
-            "think_pulse": {"base_pct": 20, "flash_ms": 1750, "vibro": "double_pulse"},
-            "wake_bloom": {"from_dark": True, "settle_to": "breathe", "vibro": True},
-        },
-    },
     "sounds": {
         "enabled": True,
         "success_path": "data/sounds/success.wav",
