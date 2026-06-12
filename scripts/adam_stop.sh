@@ -2,7 +2,6 @@
 # Adam Chip — stop the full agent stack:
 #   - orchestrator (kill PID from data/adam/orchestrator.pid)
 #   - LLM (adam-llm.service) + speech systemd services (TTS + ASR)
-#   - any leftover live-vlm container (best effort)
 #
 # Idempotent. Safe to run when nothing is up.
 
@@ -13,7 +12,6 @@ LOG_DIR="${ROOT_DIR}/data/adam"
 PID_FILE="${LOG_DIR}/orchestrator.pid"
 
 SYSTEMD_SERVICES=(adam-orchestrator.service adam-llm.service adam-tts-silero.service)
-LIVE_VLM_CONTAINER="adam-live-vlm"
 
 STOP_ALL=false
 while [[ $# -gt 0 ]]; do
@@ -75,29 +73,7 @@ else
   echo "  · orchestrator не был запущен"
 fi
 
-# --------- 2. Live VLM (disarm systemd wrapper first, then container) ---------
-# adam-vlm.service is a fg wrapper around adam_live_vlm.sh that owns the container.
-# If we `docker stop` the container without first stopping the unit, systemd's
-# Restart= revives it instantly → adam_stop.sh appears to fail. Disarm the unit first.
-# (The unit is `disabled`, so this only affects the current session — it won't autostart
-#  on reboot; adam_start.sh is the canonical VLM launcher.)
-if systemctl is-active --quiet adam-vlm.service 2>/dev/null; then
-  echo
-  echo "⏵ Разоружаю adam-vlm.service (systemd-обёртка VLM)…"
-  sudo systemctl stop adam-vlm.service || true
-  echo "  ✓ adam-vlm.service остановлен"
-fi
-if command -v docker >/dev/null 2>&1; then
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${LIVE_VLM_CONTAINER}"; then
-    echo
-    echo "⏵ Останавливаю live VLM container…"
-    docker stop "${LIVE_VLM_CONTAINER}" >/dev/null 2>&1 || true
-    docker rm   "${LIVE_VLM_CONTAINER}" >/dev/null 2>&1 || true
-    echo "  ✓ ${LIVE_VLM_CONTAINER} остановлен"
-  fi
-fi
-
-# --------- 2b. ASR (WhisperX — Docker) --------------------------------------
+# --------- 2. ASR (WhisperX — Docker) ---------------------------------------
 if command -v docker >/dev/null 2>&1; then
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "adam-asr-whisperx"; then
     echo

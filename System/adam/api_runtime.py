@@ -668,37 +668,6 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
-    @router.get("/api/live_vlm/status")
-    async def live_vlm_status() -> dict[str, Any]:
-        """Probe the adam-live-vlm Docker container."""
-        return await asyncio.to_thread(_docker_inspect, "adam-live-vlm")
-
-    @router.post("/api/live_vlm/start")
-    async def live_vlm_start() -> dict[str, Any]:
-        """Start the VLM Docker container via adam_live_vlm.sh bg."""
-        import subprocess, pathlib
-        root = pathlib.Path(__file__).resolve().parents[2]
-        script = root / "scripts" / "adam_live_vlm.sh"
-        result = await asyncio.to_thread(
-            subprocess.run, [str(script), "bg"],
-            capture_output=True, text=True, timeout=30,
-        )
-        ok = result.returncode == 0
-        return {"ok": ok, "stdout": result.stdout[-500:], "stderr": result.stderr[-500:]}
-
-    @router.post("/api/live_vlm/stop")
-    async def live_vlm_stop() -> dict[str, Any]:
-        """Stop and remove the VLM Docker container."""
-        import subprocess
-        r1 = await asyncio.to_thread(
-            subprocess.run, ["docker", "stop", "adam-live-vlm"],
-            capture_output=True, text=True, timeout=30,
-        )
-        r2 = await asyncio.to_thread(
-            subprocess.run, ["docker", "rm", "adam-live-vlm"],
-            capture_output=True, text=True, timeout=10,
-        )
-        return {"ok": r1.returncode == 0, "stop_rc": r1.returncode, "rm_rc": r2.returncode}
 
     @router.post("/api/agent/asr/upload")
     async def asr_upload(request: Request, auto_turn: bool = Query(False)) -> dict[str, Any]:
@@ -817,32 +786,6 @@ def build_router(deps: RuntimeDeps) -> APIRouter:
             deps.event_log.append("audio_monitor_disconnected", {"client": str(websocket.client)})
 
     return router
-
-
-def _docker_inspect(name: str) -> dict[str, Any]:
-    docker = shutil.which("docker")
-    if docker is None:
-        return {"running": False, "error": "docker not installed"}
-    try:
-        proc = subprocess.run(
-            [docker, "inspect", "--format", "{{.State.Status}}|{{.State.StartedAt}}|{{.Config.Image}}", name],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"running": False, "error": str(exc)}
-    if proc.returncode != 0:
-        return {"running": False, "error": "container not found"}
-    parts = proc.stdout.decode("utf-8", errors="replace").strip().split("|")
-    status = parts[0] if parts else ""
-    started_at = parts[1] if len(parts) > 1 else ""
-    image = parts[2] if len(parts) > 2 else ""
-    return {
-        "running": status == "running",
-        "status": status,
-        "started_at": started_at,
-        "image": image,
-        "name": name,
-    }
 
 
 def _apply_input_gain_now(card: str, control: str, alsa_pct: int, pulse_pct: int) -> dict[str, str]:
