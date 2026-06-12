@@ -130,6 +130,13 @@ class FloraController:
         # P1/P3 pipeline events (wake_word, listening, standby) and stop_sequence().
         self._sequence_task: asyncio.Task[None] | None = None
 
+        # wake_bloom auto-settle task (bugfix): wake_bloom has no firmware-side
+        # one-shot mechanism — without this, it loops at flora.states.wake_bloom
+        # .period_ms forever until the next P1/P3 event. This task settles to
+        # wake_bloom.settle_to after one animation cycle, cancellable by any
+        # later P1/P3 event so it never overrides a real pipeline state.
+        self._bloom_task: asyncio.Task[None] | None = None
+
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -148,6 +155,7 @@ class FloraController:
     async def stop(self) -> None:
         """Cancel the consumer task, await it, and unsubscribe from the event log."""
         await self._cancel_sequence_task()
+        await self._cancel_bloom_task()
         # Kill any live RMS streamer first so it cannot keep POSTing frames.
         await self._cancel_rms_task()
         self._answer_active = False
@@ -203,6 +211,7 @@ class FloraController:
             # Barge-in (D-09): snap light to accent and kill any live RMS stream.
             # Also cancel any running user sequence (P1 preempts everything).
             await self._cancel_sequence_task()
+            await self._cancel_bloom_task()
             if self._answer_active or self._rms_task is not None:
                 await self._cancel_rms_task()
                 self._answer_active = False
@@ -223,12 +232,24 @@ class FloraController:
                 self._booted = True
                 self._current_priority = FloraPriority.P3_PIPELINE
                 await self._set_state("wake_bloom")  # пробуждение (once)
+                # wake_bloom has no firmware one-shot — schedule auto-settle to
+                # settle_to (default breathe) after one animation cycle so it
+                # doesn't loop forever until the next pipeline event.
+                wake_cfg = (self._live_flora_cfg().get("states") or {}).get("wake_bloom", {}) or {}
+                settle_to = str(wake_cfg.get("settle_to") or "breathe")
+                settle_after_ms = int(wake_cfg.get("period_ms", 3000))
+                await self._cancel_bloom_task()
+                self._bloom_task = asyncio.create_task(
+                    self._schedule_bloom_settle(settle_after_ms, settle_to),
+                    name="flora_bloom_settle",
+                )
                 return
             self._booted = True
             to = payload.get("to")
             if to == "listening":
                 # Barge-in (D-09): cancel RMS stream and any user sequence.
                 await self._cancel_sequence_task()
+                await self._cancel_bloom_task()
                 if self._answer_active or self._rms_task is not None:
                     await self._cancel_rms_task()
                     self._answer_active = False
@@ -238,6 +259,7 @@ class FloraController:
             elif to == "standby":
                 # Barge-in guard: cancel sequence, RMS, then settle to breathe.
                 await self._cancel_sequence_task()
+                await self._cancel_bloom_task()
                 if self._answer_active or self._rms_task is not None:
                     await self._cancel_rms_task()
                     self._answer_active = False
@@ -248,6 +270,10 @@ class FloraController:
                 self._current_priority = None
                 await self._restore_p2()
         elif etype == "llm_thinking_started":
+            # A running SmartFlora sequence (P2) must not keep overriding
+            # think_pulse with its own _set_state calls mid-thought.
+            await self._cancel_sequence_task()
+            await self._cancel_bloom_task()
             self._current_priority = FloraPriority.P3_PIPELINE
             await self._set_state("think_pulse")  # раздумье
         elif etype == "tts_started":
@@ -348,6 +374,52 @@ class FloraController:
                 self._event_log.append("flora_state_change", payload)
             except Exception:
                 pass
+        logger.info(
+            "flora state -> %r (priority=%s, ok=%s)",
+            state,
+            self._current_priority.name if self._current_priority else None,
+            result.ok,
+        )
+
+    # ── wake_bloom auto-settle (bugfix) ────────────────────────────────
+
+    async def _cancel_bloom_task(self) -> None:
+        """Cancel the pending wake_bloom auto-settle task, if any."""
+        task = self._bloom_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        self._bloom_task = None
+
+    async def _schedule_bloom_settle(self, after_ms: int, settle_to: str) -> None:
+        """Auto-transition out of wake_bloom after one animation cycle.
+
+        wake_bloom has no firmware-side one-shot mechanism (settle_to/from_dark
+        are dropped in _build_params — firmware only sees base/peak/period like
+        any looping preset). Without this, wake_bloom loops at period_ms forever
+        until the next P1/P3 pipeline event, which can be minutes away if no one
+        approaches after boot. This task settles to wake_bloom.settle_to
+        (default "breathe") after after_ms, but only if nothing has taken over
+        the lights in the meantime — any later P1/P3 event cancels this task via
+        _cancel_bloom_task() before it fires.
+        """
+        try:
+            await asyncio.sleep(after_ms / 1000.0)
+        except asyncio.CancelledError:
+            raise
+        if self._current_preset != "wake_bloom":
+            # Something else already took the lights — nothing to settle.
+            return
+        logger.info("flora wake_bloom auto-settle -> %r after %dms", settle_to, after_ms)
+        self._current_priority = FloraPriority.P3_PIPELINE
+        await self._set_state(settle_to)
+        self._current_priority = None
+        await self._restore_p2()
 
     def _build_params(self, state: str) -> dict[str, Any]:
         """Translate a config preset into the flat param dict the firmware expects.
@@ -675,13 +747,17 @@ class FloraController:
         self._p2_preset = preset
         self._p2_params = params
 
-        # Defer if P3 pipeline holds the lights in an active (non-breathe) state.
+        # Defer if a higher-priority layer (P3 pipeline or P1 barge-in) holds
+        # the lights in an active (non-breathe) state. P1_BARGE_IN > P3_PIPELINE
+        # > P2_SUBCONSCIOUS, so ">= P3_PIPELINE" covers both.
         if (
-            self._current_priority == FloraPriority.P3_PIPELINE
+            self._current_priority is not None
+            and self._current_priority >= FloraPriority.P3_PIPELINE
             and self._current_preset not in (None, "breathe")
         ):
             logger.debug(
-                "flora P2 preset %r deferred (P3 active at %r)", preset, self._current_preset
+                "flora P2 preset %r deferred (priority=%s active at %r)",
+                preset, self._current_priority.name, self._current_preset,
             )
             return
 
@@ -814,7 +890,8 @@ class FloraController:
         if self._p2_preset is None:
             return
         if (
-            self._current_priority == FloraPriority.P3_PIPELINE
+            self._current_priority is not None
+            and self._current_priority >= FloraPriority.P3_PIPELINE
             and self._current_preset not in (None, "breathe")
         ):
             return

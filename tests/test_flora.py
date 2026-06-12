@@ -167,6 +167,71 @@ def test_wake_bloom_on_boot_exit() -> None:
     assert _states(mcu) == ["wake_bloom", "breathe"]
 
 
+def test_wake_bloom_auto_settles_without_followup_event() -> None:
+    """Bugfix: wake_bloom must not loop forever if no pipeline event follows.
+
+    Without the auto-settle task, _set_state("wake_bloom") followed by
+    `return` (no `to` handling) left _current_preset == "wake_bloom"
+    indefinitely -- the firmware just keeps looping the 71%/period_ms
+    breathing animation until the next wake word, which can be minutes
+    after boot. Verifies the scheduled settle fires on its own and
+    transitions to wake_bloom.settle_to ("breathe").
+    """
+    import asyncio
+
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+    # Short period so the test doesn't sleep for the real 3000ms default.
+    ctrl._live_flora_cfg = lambda: {
+        "states": {"wake_bloom": {"settle_to": "breathe", "period_ms": 20}},
+        "user_presets": {},
+    }
+
+    async def drive() -> None:
+        await ctrl._handle(
+            {"type": "voice_state_change", "payload": {"from": "boot_warmup", "to": "standby"}}
+        )
+        # No further pipeline events arrive (idle after boot) -- only the
+        # scheduled settle task should bring the lights back to breathe.
+        await asyncio.sleep(0.05)
+
+    asyncio.run(drive())
+
+    assert _states(mcu) == ["wake_bloom", "breathe"]
+
+
+def test_wake_bloom_settle_cancelled_by_real_event() -> None:
+    """A real pipeline event before settle_after_ms must win -- no double-set.
+
+    If wake word fires (P1) before the scheduled wake_bloom settle, the
+    settle task is cancelled and must NOT later overwrite accent/attentive
+    with breathe.
+    """
+    import asyncio
+
+    mcu = _FakeMCU()
+    ctrl = _make_controller(mcu)
+    ctrl._live_flora_cfg = lambda: {
+        "states": {"wake_bloom": {"settle_to": "breathe", "period_ms": 1000}},
+        "user_presets": {},
+        "accent_hold_ms": 0,
+    }
+
+    async def drive() -> None:
+        await ctrl._handle(
+            {"type": "voice_state_change", "payload": {"from": "boot_warmup", "to": "standby"}}
+        )
+        # Real interaction arrives well before the 1000ms settle would fire.
+        await ctrl._handle({"type": "wake_word_detected"})
+        # Give the (cancelled) settle task a chance to run if it weren't cancelled.
+        await asyncio.sleep(0.05)
+
+    asyncio.run(drive())
+
+    assert _states(mcu) == ["wake_bloom", "accent"]
+    assert ctrl._bloom_task is None
+
+
 def test_vibro_silent_listening() -> None:
     """FLORA-06: vibro channels muted while in attentive (listening) state."""
     import asyncio
