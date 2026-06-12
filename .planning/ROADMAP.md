@@ -1473,6 +1473,74 @@ Cosmos Reason2-2B — визуальное подсознание симбион
 
 ---
 
+## Phase 41: Audio Pipeline Latency Fix — PipeWire node.max-latency
+
+**Branch:** TBD — фикс не относится к `SmartFlora` (флора), требует отдельной ветки от `main`/`subconscious-symbiont` перед `/commit-push` (branch gap, см. 41-CONTEXT.md)
+
+**Goal:** Восстановить нормальный темп доставки аудио (~50 кадров/сек по 20мс) с USB-микрофона WebCamera, чтобы OpenWakeWord («адам»), VAD-endpointing и ASR-таймауты работали как раньше (06-08/06-09).
+
+**Findings (2026-06-12, диагностика «OWW не детектит ничего»):**
+- Root cause: PipeWire ALSA-узел `alsa_input.usb-WebCamera_*` имеет `node.max-latency=48000/48000` (1с) и `buffer_size=96000` (2с@48kHz) → доставляет аудио пачками ~120мс раз в ~1.1-1.2с (~10% реального throughput) вместо непрерывных 20мс-кадров
+- `oww_score` застывает на 0.001 — `debounce_hits=2` требует двух ПОСЛЕДОВАТЕЛЬНЫХ оценок на временно-непрерывном аудио, но соседние вызовы разделены ~1.1с и не являются соседними кадрами
+- Та же проблема ломает VAD/ASR endpointing-таймеры (`silence_after_speech_ms`, `endpointing_*_debounce_frames`, `*_segment_ms`) — растягиваются в wall-clock на порядок
+- WirePlumber override уже создан (`~/.config/wireplumber/main.lua.d/51-webcamera-latency.lua`, `node.latency=512/48000`), но НЕ активирован — требует `systemctl --user restart wireplumber pipewire pipewire-pulse` с явным подтверждением пользователя (разрывает live mic-стрим оркестратора)
+- Полная диагностика: `.planning/phases/41-audio-pipeline-latency-fix/41-CONTEXT.md`
+
+**Delivers:**
+- Активация и верификация WirePlumber-фикса latency для WebCamera-узла (после явного подтверждения рестарта аудио-стека)
+- `_find_pulse_source` retry-with-backoff в `local_mic_reader.py` (intermittent `None` на холодном старте)
+- Решение по сегодняшнему `_raw_chunk_for_monitor` фиксу в Orchestrator.py (оставить/откатить/доработать) — после верификации throughput-фикса
+- Перекалибровка `wake_word.threshold`/`debounce_hits` и при необходимости VAD/ASR endpointing-таймеров на основе живых замеров после фикса
+- Живая верификация: произнесение «адам» triggers `wake_word_detected`
+
+**Requirements:** APLF-01 (PipeWire/WirePlumber latency override активирован и верифицирован), APLF-02 (`_find_pulse_source` retry-with-backoff), APLF-03 (`_raw_chunk_for_monitor` решение принято и применено), APLF-04 (OWW threshold/debounce перекалиброваны и подтверждены живым тестом), APLF-05 (VAD/ASR endpointing таймеры проверены на нормальном темпе кадров)
+
+**Mode:** standard | **Priority:** P0 | **Effort:** S | **Exhibition:** critical (OWW — основной механизм пробуждения для exhibition mode)
+
+**Plans:** 4 plans in 3 waves
+
+Plans:
+**Wave 1**
+- [ ] 41-01-PLAN.md — Activate + verify WirePlumber latency override (restore ~50 Hz frame cadence) [wave 1]
+- [ ] 41-02-PLAN.md — `_find_pulse_source` retry-with-backoff + finalize `_raw_chunk_for_monitor` OWW-input decision [wave 1]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 41-03-PLAN.md — Live OWW threshold/debounce recalibration + VAD/ASR endpointing timer verification [wave 2]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 41-04-PLAN.md — End-to-end voice loop verification (wake → ASR → LLM → TTS) [wave 3]
+
+---
+
+## Phase 42: WebUI Reorganization — рефакторинг интерфейса оператора
+
+**Branch:** TBD (от `main` или `SmartFlora`)
+
+**Goal:** Убрать дублирование и мёртвый код в операторском интерфейсе, реорганизовать конфигурацию по смысловым разделам, вынести память в отдельный раздел. Результат — интерфейс без дублей, с чёткой структурой, готовый к расширению.
+
+**Delivers:**
+
+- Удаление трёх страниц-дублей/заглушек: скрытая страница тонкой настройки (→ уникальные блоки мигрируют на страницы Личность и Память), скрытая страница промтов (→ уникальный кусок `inlineList(recent_episodic)` переносится на страницу Метрики), мёртвая страница-заглушка Сцена (прямой редирект на флору, без своего контента)
+- Объединение страниц «Сервисы» и «Модели» в одну «Сервисы инференса» — очистка устаревших полей (мёртвая VILA-карточка, несуществующие опции ASR/LLM)
+- Новая страница «Память» как отдельный верхнеуровневый раздел: эпизодическая память + веса, семантическая (дневник), инжекция из прошлых сессий, ночная консолидация
+- Реорганизация страницы «Конфигурация» на разделы: «Как Адам думает и говорит», «Как Адам слышит», «Как Адам видит», «Железо» (переименование «Железо и безопасность»); удаление дублирующих полей ASR и видео
+- AIIM-блок (характер Адама) + индикатор эмоции/режима → страница «Личность агента» под карточкой Identity
+- Страница «Аудио-вход»: исправить oversized блок громкости (`card-full` → нормальный размер), убрать дублирующее поле чувствительности wake-word (остаётся только в калибровочном блоке)
+- Флора: 5 карточек состояний → одна таблица (строки=состояния, столбцы=база/пик(≤71%)/скорость/вибро/«показать сейчас»)
+
+**Out of scope (отдельные фазы):**
+
+- Отображение эмоции и ленты подсознания на чате → Фаза 39
+- Кейфрейм-редактор анимаций → расширение Фазы 36B
+- Страница зрителей → Фаза 37
+- Страница диагностики → будущая фаза
+
+**Requirements:** WEBUI-R01 (дублирующие страницы удалены), WEBUI-R02 (объединены Сервисы+Модели), WEBUI-R03 (новая страница Память в навигации), WEBUI-R04 (Конфигурация реорганизована с удалением дублей), WEBUI-R05 (AIIM-блок на странице Личность), WEBUI-R06 (Аудио-вход: размеры и дубли исправлены), WEBUI-R07 (Флора: таблица состояний вместо 5 карточек)
+
+**Mode:** standard | **Priority:** P1 | **Effort:** M | **Exhibition:** non-blocking
+
+---
+
 ## Direction: Flora Coexistence — логика сосуществования анимаций (обновление Phase 36)
 
 Пункт 5 запроса пользователя (2026-06-11): "продумать логику сосуществования и корректного выполнения задаваемых подсознанием режимов анимации и уже существующих."
@@ -1497,6 +1565,23 @@ Cosmos Reason2-2B — визуальное подсознание симбион
 ## Backlog (неспланированные задачи)
 
 > Сырые идеи и задачи из [ToDo.md](../ToDo.md). Когда задача готова к планированию — переезжает сюда как Phase N с требованиями.
+
+### Режим «Разговор с создателем» (creator_conversation personality preset)
+
+**Решение 2026-06-12:** Система имеет два художественных режима работы — «Выставочный» (exhibition)
+и «Разговор с создателем» (creator_conversation). В текущей ветке SmartFlora разрабатывается
+только **exhibition**. Creator_conversation — в бэклоге до окончания выставочной фазы.
+
+**Что это такое:**
+Не технический `agent.mode` (тот остаётся `exhibition`/`maintenance` в Config.json).
+Это `personality_preset` в `Agent-Adam-Chip/iAdam.json` — набор overrides AIIM-весов и параметров
+поведения для конкретного сценария взаимодействия.
+
+**exhibition_public** (разрабатывается сейчас): Публичная выставка, незнакомые зрители. Ядро se=0.92/co=0.88 без изменений. Default emotion: curious. Decay к curious быстрый.
+
+**creator_conversation** (бэклог): Диалог наедине с создателем; высокий доверительный контекст. Ядро не меняется, но порог warm ниже, calm глубже. Decay медленнее, hysteresis выше. Специфические intention_triggers (candor, reflection). Возможна другая flora emotion map.
+
+**До планирования:** нужно определить точный набор overrides и тестовые сценарии диалога.
 
 ### Memory Wave 2: Neural search
 
