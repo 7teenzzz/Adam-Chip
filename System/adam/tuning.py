@@ -228,6 +228,7 @@ class DiagnosticsTuning(BaseModel):
     log_level: Literal["debug", "info", "warning", "error"] = "info"
     metrics_enabled: bool = True
     trace_prompts: bool = False
+    trace_post_tts_lag: bool = False
 
 
 # ---------- AIIM Identity models ----------

@@ -1,30 +1,55 @@
 [Unit]
-Description=Adam Chip VLM HTTP Service (VILA1.5-3b via nano_llm)
-After=network-online.target docker.service
-Wants=network-online.target docker.service
+Description=Adam Chip · llama-server (VLM inference, Cosmos-Reason2-2B, OpenAI-compatible API :8051)
+Documentation=https://github.com/ggerganov/llama.cpp
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=i17jet
 Group=i17jet
-SupplementaryGroups=render video docker
+SupplementaryGroups=render video
+
 WorkingDirectory=/home/i17jet/Agents/Adam-Chip
 EnvironmentFile=-/etc/adam-chip/adam.env
-Environment=JETSON_CONTAINERS_DIR=/home/i17jet/Agents/jetson-containers
-Environment=ADAM_VLM_MODEL=Efficient-Large-Model/VILA1.5-3b
-Environment=ADAM_VLM_HTTP_PORT=8050
-Environment=ADAM_VLM_MAX_TOKENS=48
-# Pre-stop any leftover container from previous run.
-ExecStartPre=-/usr/bin/docker stop adam-live-vlm
-ExecStartPre=-/usr/bin/docker rm adam-live-vlm
-ExecStart=/home/i17jet/Agents/Adam-Chip/scripts/adam_live_vlm.sh fg
-ExecStop=/usr/bin/docker stop adam-live-vlm
+
+# Defaults — override in /etc/adam-chip/adam.env
+Environment=ADAM_VLM_LLAMACPP_DIR=/home/i17jet/Agents/Adam-Chip/Subsystem/llama.cpp
+Environment=ADAM_VLM_GGUF_PATH=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/gguf/Cosmos-Reason2-2B-Q8_0.gguf
+Environment=ADAM_VLM_MMPROJ_PATH=/home/i17jet/Agents/Adam-Chip/Subsystem/Models/gguf/mmproj-Cosmos-Reason2-2B-F16.gguf
+Environment=ADAM_VLM_PORT=8051
+Environment=ADAM_VLM_CTX=4096
+Environment=ADAM_VLM_GPU_LAYERS=99
+
+ExecStartPre=/usr/bin/test -x ${ADAM_VLM_LLAMACPP_DIR}/build/bin/llama-server
+ExecStartPre=/usr/bin/test -f ${ADAM_VLM_GGUF_PATH}
+ExecStartPre=/usr/bin/test -f ${ADAM_VLM_MMPROJ_PATH}
+
+ExecStart=/bin/bash -c \
+  '"${ADAM_VLM_LLAMACPP_DIR}/build/bin/llama-server" \
+    --model "${ADAM_VLM_GGUF_PATH}" \
+    --mmproj "${ADAM_VLM_MMPROJ_PATH}" \
+    --host 127.0.0.1 \
+    --port "${ADAM_VLM_PORT}" \
+    --n-gpu-layers "${ADAM_VLM_GPU_LAYERS}" \
+    --ctx-size "${ADAM_VLM_CTX}" \
+    --parallel 1 \
+    --flash-attn on \
+    --cache-type-k q8_0 \
+    --cache-type-v q8_0'
+
 Restart=on-failure
 StartLimitIntervalSec=120
 StartLimitBurst=5
-RestartSec=10
-# VILA model load inside container takes 60-120 seconds.
-TimeoutStartSec=300
+RestartSec=5
+TimeoutStartSec=180
+# llama-server loads the model + mmproj into GPU memory on startup — can take 30-120s.
+
+# cgroup limits: Cosmos-Reason2-2B Q8_0 (~2.2 GB) + mmproj F16 (~0.8 GB) is small
+# relative to Gemma 4 E4B (:8081, ~8 GB) — keep a generous ceiling but leave room
+# for the LLM + TTS + ASR to coexist on the 16 GB Jetson.
+MemoryMax=6G
+CPUQuota=90%
 
 [Install]
 WantedBy=multi-user.target

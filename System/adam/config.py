@@ -90,8 +90,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "num_ctx": 8192,
         },
         "vlm": {
-            "base_url": "http://127.0.0.1:8084",
-            "model": "Efficient-Large-Model/VILA1.5-3b",
+            "base_url": "http://127.0.0.1:8051",
+            "model": "Cosmos-Reason2-2B-Q8_0",
             "timeout_sec": 20,
             "max_new_tokens": 48,
             "prompt": "Describe the scene in one brief sentence: people, movements, notable objects. No Chinese characters.",

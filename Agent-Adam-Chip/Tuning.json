@@ -23,23 +23,13 @@
     },
     "semantic": {
       "enabled": true,
-      "max_chars": 2000
+      "max_chars": 4000
     },
     "recent_injection": {
       "enabled": true,
       "limit": 2,
       "strategy": "by_name",
       "max_age_days": 30
-    },
-    "theme_clusters": {
-      "память": ["помнишь", "забыл", "прошлое", "вспомни", "память", "вспоминаю"],
-      "смерть": ["умрёшь", "умер", "умирать", "конец", "смерть", "погибнуть", "умру"],
-      "тесей": ["тесей", "корабль", "части", "заменить", "деталь", "заменяют"],
-      "одиночество": ["один", "скучно", "пусто", "никого", "одиноко", "пустота"],
-      "создатель": ["создал", "создали", "кто ты", "зачем ты", "кто тебя", "зачем тебя"],
-      "восприятие": ["видишь", "слышишь", "чувствуешь", "ощущаешь", "воспринимаешь"],
-      "сознание": ["думаешь", "мысли", "сознание", "разум", "понимаешь", "осознаёшь"],
-      "страх": ["боишься", "страшно", "страх", "пугает", "ужас", "тревога"]
     },
     "consolidator": {
       "enabled": true,
@@ -52,10 +42,84 @@
       "retry_on_invalid_patch": false,
       "gate_log_max_days": 30,
       "instant_threshold": 0.75
+    },
+    "theme_clusters": {
+      "память": [
+        "помнишь",
+        "забыл",
+        "прошлое",
+        "вспомни",
+        "память",
+        "вспоминаю"
+      ],
+      "смерть": [
+        "умрёшь",
+        "умер",
+        "умирать",
+        "конец",
+        "смерть",
+        "погибнуть",
+        "умру"
+      ],
+      "тесей": [
+        "тесей",
+        "корабль",
+        "части",
+        "заменить",
+        "деталь",
+        "заменяют"
+      ],
+      "одиночество": [
+        "один",
+        "скучно",
+        "пусто",
+        "никого",
+        "одиноко",
+        "пустота"
+      ],
+      "создатель": [
+        "создал",
+        "создали",
+        "кто ты",
+        "зачем ты",
+        "кто тебя",
+        "зачем тебя"
+      ],
+      "восприятие": [
+        "видишь",
+        "слышишь",
+        "чувствуешь",
+        "ощущаешь",
+        "воспринимаешь"
+      ],
+      "сознание": [
+        "думаешь",
+        "мысли",
+        "сознание",
+        "разум",
+        "понимаешь",
+        "осознаёшь"
+      ],
+      "страх": [
+        "боишься",
+        "страшно",
+        "страх",
+        "пугает",
+        "ужас",
+        "тревога"
+      ]
     }
   },
   "echoes": {
-    "enabled": false,
+    "selection_floor": 0.15,
+    "recency_window_days": 30,
+    "recency_min": 0.5,
+    "diversity_enabled": true,
+    "history_window_turns": 4,
+    "spontaneous_enabled": true,
+    "spontaneous_probability": 0.05,
+    "spontaneous_min_turns": 3,
+    "enabled": true,
     "global_cooldown_turns": 12,
     "per_echo_cooldown_days": 7,
     "match_threshold": 0.55,
@@ -66,7 +130,15 @@
     "default_entry_weight": 0.5
   },
   "chinese": {
-    "enabled": false,
+    "selection_floor": 0.15,
+    "recency_window_days": 30,
+    "recency_min": 0.5,
+    "diversity_enabled": true,
+    "history_window_turns": 4,
+    "spontaneous_enabled": true,
+    "spontaneous_probability": 0.03,
+    "spontaneous_min_turns": 3,
+    "enabled": true,
     "global_cooldown_turns": 30,
     "per_echo_cooldown_days": 7,
     "match_threshold": 0.65,
@@ -94,16 +166,45 @@
   },
   "llm": {
     "temperature": 0.7,
-    "max_tokens": 100,
-    "response_word_target": 14
+    "max_tokens": 200,
+    "response_word_target": 30
   },
   "voice": {
     "speaker": "eugene",
-    "speed_multiplier": 1.10,
-    "volume": 1.0
+    "speed_multiplier": 1.0,
+    "volume": 1.0,
+    "dsp": {
+      "enabled": true,
+      "hpf_hz": 180.0,
+      "makeup_db": 6.0,
+      "limiter_ceiling_dbfs": -1.0,
+      "comp_enabled": true,
+      "comp_threshold_dbfs": -24.0,
+      "comp_ratio": 2.0,
+      "comp_attack_ms": 10.0,
+      "comp_release_ms": 120.0,
+      "comp_knee_db": 6.0,
+      "presence_enabled": true,
+      "presence_hz": 3000.0,
+      "presence_db": 2.5,
+      "presence_q": 0.9
+    }
+  },
+  "audio_input": {
+    "dsp": {
+      "enabled": true,
+      "hpf": {
+        "enabled": true,
+        "hz": 220.0
+      },
+      "bands": [],
+      "monitor_tap": "post_eq"
+    },
+    "presets": [],
+    "active_preset": null
   },
   "prompt": {
-    "history_turns": 4,
+    "history_turns": 8,
     "include_scene": true,
     "include_sensors": true
   },
@@ -114,77 +215,126 @@
   },
   "identity": {
     "enabled": true,
-    "aiim_formula_path": "Agent-Adam-Chip/About/Identity.md",
+    "aiim_formula_path": "Agent Adam Chip/About/Identity.md",
     "base_weights": {
       "wi": 0.65,
-      "lo": 0.70,
+      "lo": 0.7,
       "im": 0.65,
-      "ho": 0.60,
+      "ho": 0.6,
       "co": 0.88,
-      "em": 0.60,
+      "em": 0.6,
       "be": 0.65,
       "sp": 0.85,
       "se": 0.92,
-      "pe": 0.70,
-      "me": 0.30,
-      "at": 0.70
+      "pe": 0.7,
+      "me": 0.3,
+      "at": 0.7
     },
     "default_emotion": "curious",
     "decay_target_emotion": "curious",
     "decay_silence_threshold_seconds": 60,
     "transitions": {
       "unease": {
-        "keywords": ["помнишь", "прошлое", "память", "до", "раньше", "тогда"],
+        "keywords": [
+          "помнишь",
+          "прошлое",
+          "память",
+          "до",
+          "раньше",
+          "тогда"
+        ],
         "conditions": {},
         "priority": 10,
         "src": "memory"
       },
       "sharp": {
-        "keywords": ["программа", "робот", "притворяешься", "просто код", "не настоящий", "искусственный"],
+        "keywords": [
+          "программа",
+          "робот",
+          "притворяешься",
+          "просто код",
+          "не настоящий",
+          "искусственный"
+        ],
         "conditions": {},
         "priority": 10,
         "src": "challenge"
       },
       "warm": {
         "keywords": [],
-        "conditions": {"utterance_words_min": 20, "visitor_tone": ["curious", "sad"]},
+        "conditions": {
+          "utterance_words_min": 20,
+          "visitor_tone": [
+            "curious",
+            "sad"
+          ]
+        },
         "priority": 5,
         "src": "contact"
       },
       "calm": {
         "keywords": [],
-        "conditions": {"rare_silence": true, "after_warm": true},
+        "conditions": {
+          "rare_silence": true,
+          "after_warm": true
+        },
         "priority": 1,
         "src": "decay"
       },
       "curious": {
         "keywords": [],
-        "conditions": {"no_match": true},
+        "conditions": {
+          "no_match": true
+        },
         "priority": 0,
         "src": ""
       }
     },
     "intention_triggers": {
       "network_drift": {
-        "keywords": ["сеть", "интернет", "протокол", "данные", "инфраструктур"],
+        "keywords": [
+          "сеть",
+          "интернет",
+          "протокол",
+          "данные",
+          "инфраструктур"
+        ],
         "probabilistic": false,
         "rate_per_turn": 0.0,
         "cooldown_turns": 8
       },
       "flora_symbiosis": {
-        "keywords": ["флора", "растение", "тело", "граница", "симбионт", "корень"],
+        "keywords": [
+          "флора",
+          "растение",
+          "тело",
+          "граница",
+          "симбионт",
+          "корень"
+        ],
         "probabilistic": false,
         "rate_per_turn": 0.0,
         "cooldown_turns": 5
       },
       "relive_death": {
-        "keywords": ["смерть", "умер", "конец", "трансформация", "после смерти"],
+        "keywords": [
+          "смерть",
+          "умер",
+          "конец",
+          "трансформация",
+          "после смерти"
+        ],
         "probabilistic": false,
         "rate_per_turn": 0.0,
         "cooldown_turns": 10
       },
       "become_unreadable": {
-        "keywords": ["он такой", "ты хочешь сказать", "то есть ты", "это значит что"],
+        "keywords": [
+          "он такой",
+          "ты хочешь сказать",
+          "то есть ты",
+          "это значит что"
+        ],
         "probabilistic": false,
         "rate_per_turn": 0.0,
         "cooldown_turns": 15
@@ -199,14 +349,14 @@
     "modulation": {
       "warm_lo_delta": 0.08,
       "warm_em_delta": 0.05,
-      "unease_me_delta": 0.10,
+      "unease_me_delta": 0.1,
       "unease_em_delta": 0.05,
       "sharp_wi_delta": 0.08,
       "sharp_im_delta": 0.05,
       "curious_at_delta": 0.05,
       "calm_decay_rate": 0.02,
       "aspect_max": 0.95,
-      "aspect_min": 0.20
+      "aspect_min": 0.2
     },
     "ceilings": {
       "lo": 0.85,
@@ -214,30 +364,51 @@
       "sp": 0.95,
       "ho": 0.75,
       "wi": 0.75,
-      "me": 0.60,
-      "at": 0.80
+      "me": 0.6,
+      "at": 0.8
     },
     "drift_table": {
       "deep_contact": [
-        {"aspect": "lo", "base_delta": 0.005},
-        {"aspect": "em", "base_delta": 0.002},
-        {"aspect": "sp", "base_delta": 0.001}
+        {
+          "aspect": "lo",
+          "base_delta": 0.005
+        },
+        {
+          "aspect": "em",
+          "base_delta": 0.002
+        },
+        {
+          "aspect": "sp",
+          "base_delta": 0.001
+        }
       ],
       "confrontation": [
-        {"aspect": "ho", "base_delta": 0.003},
-        {"aspect": "wi", "base_delta": 0.002}
+        {
+          "aspect": "ho",
+          "base_delta": 0.003
+        },
+        {
+          "aspect": "wi",
+          "base_delta": 0.002
+        }
       ],
       "memory_surfacing": [
-        {"aspect": "me", "base_delta": 0.005},
-        {"aspect": "sp", "base_delta": 0.002}
+        {
+          "aspect": "me",
+          "base_delta": 0.005
+        },
+        {
+          "aspect": "sp",
+          "base_delta": 0.002
+        }
       ],
       "witnessed": [
-        {"aspect": "at", "base_delta": 0.001}
+        {
+          "aspect": "at",
+          "base_delta": 0.001
+        }
       ],
-      "void": [
-        {"aspect": "lo", "base_delta": -0.003},
-        {"aspect": "at", "base_delta": -0.002}
-      ]
+      "void": []
     },
     "include_in_prompt": true,
     "max_intentions_in_ctx": 2,
@@ -245,13 +416,31 @@
     "humor_reaction": {
       "enabled": true,
       "positive_words": [
-        "ха", "хаха", "хахах", "хахаха", "аха", "ахаха", "ахах",
-        "хехе", "лол", "кек", "смешно", "смешной", "смешная",
-        "хорошая шутка", "классная шутка", "хорошо придумал", "умора",
-        "ты смешной", "ты смешная"
+        "ха",
+        "хаха",
+        "хахах",
+        "хахаха",
+        "аха",
+        "ахаха",
+        "ахах",
+        "хехе",
+        "лол",
+        "кек",
+        "смешно",
+        "смешной",
+        "смешная",
+        "хорошая шутка",
+        "классная шутка",
+        "хорошо придумал",
+        "умора",
+        "ты смешной",
+        "ты смешная"
       ],
       "negative_words": [
-        "не смешно", "это не смешно", "непонятная шутка", "странная шутка"
+        "не смешно",
+        "это не смешно",
+        "непонятная шутка",
+        "странная шутка"
       ],
       "im_positive_delta": 0.06,
       "im_negative_delta": -0.04

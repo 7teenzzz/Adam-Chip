@@ -739,9 +739,9 @@ _VLM_PLACEHOLDER_RE = re.compile(
 
 class VLMClient:
     def __init__(self, config: dict[str, Any]) -> None:
-        self.base_url = str(config.get("base_url", "http://127.0.0.1:8084")).rstrip("/")
+        self.base_url = str(config.get("base_url", "http://127.0.0.1:8051")).rstrip("/")
         self.timeout = float(config.get("timeout_sec", 15))
-        self.model = str(config.get("model", "Efficient-Large-Model/VILA1.5-3b"))
+        self.model = str(config.get("model", "Cosmos-Reason2-2B-Q8_0"))
         self.max_new_tokens = int(config.get("max_new_tokens", 48))
         self.prompt = str(config.get("prompt", _VLM_DEFAULT_PROMPT))
         self._session: Any = None

@@ -62,6 +62,18 @@ struct PresetDefaults {
 // Brightness ceiling: 71% of 4095 = 2908. No preset peak exceeds this.
 constexpr uint16_t kFlora71PctDuty = 2908u;
 
+// WakeBloom (D-0X, measured ESP boot ~5s): progressive random-line bloom.
+// [0, kBloomWakeSpread) of the period -> each channel "wakes" at its own
+// random phase threshold, joining progressively.
+// [0, kBloomFlickerEnd) of the period -> awake channels flicker between a
+// low and high duty; amplitude and rate decay toward kBloomFlickerEnd.
+// [kBloomFlickerEnd, 1] -> all channels locked at peak (stabilized) and
+// vibro fades to silence.
+constexpr float kBloomFlickerEnd = 0.75f;
+constexpr float kBloomWakeSpread = 0.55f;
+constexpr uint32_t kBloomIntervalSlowMs = 650;
+constexpr uint32_t kBloomIntervalFastMs = 90;
+
 constexpr PresetDefaults kPresetDefaults[] = {
   // name           base  peak          periodMs  vibro
   // Phase 30 R6/D-08: idle base raised to 400 (~10%) so the resting state is
@@ -71,7 +83,7 @@ constexpr PresetDefaults kPresetDefaults[] = {
   {"accent",        400,  kFlora71PctDuty, 1400,  true },  // peak capped at 71%
   {"attentive",    1228,  kFlora71PctDuty,  450,  false},  // base=30%, peak=71%, wave period 450ms
   {"think_pulse",   819,  2600,          1750,    true },  // base=20%
-  {"wake_bloom",    0,    kFlora71PctDuty, 3000,  true },  // peak capped at 71%
+  {"wake_bloom",    0,    kFlora71PctDuty, 5000,  true },  // base=0, peak=71%, 5s — matches Config flora.states.wake_bloom.period_ms (ESP boot ~5s)
   {"external",      0,    0,               1000,  false},  // suppressed; floraTick yields to HTTP writes
   // Phase 36 P2 AIIM emotion presets. Duties are raw 12-bit linear (no gamma).
   // Values match Config.json flora.states.*_pct (base/peak) × 4095.
@@ -136,6 +148,15 @@ FloraTarget sTarget;
 // over crossfade_ms. Captured from gRuntimeState.pca9685Channels[] on switch.
 uint16_t sCrossfadeFrom[16] = {0};
 
+// WakeBloom per-channel flicker state (D-0X). Reset whenever a fresh
+// wake_bloom activation is detected (sTarget.appliedAtMs changes).
+uint32_t sBloomAppliedAtMs = 0;
+float    sBloomWakeAt[16] = {0};
+uint16_t sBloomFromDuty[16] = {0};
+uint16_t sBloomToDuty[16] = {0};
+uint32_t sBloomSegStartMs[16] = {0};
+uint32_t sBloomSegDurMs[16] = {1};
+
 // PRNG state for random-subset effects (think_pulse / wake_bloom). esp_random()
 // is available but a tiny xorshift keeps the per-frame path allocation-free and
 // deterministic enough for visual flicker.
@@ -199,9 +220,10 @@ uint16_t computeLightLevel(FloraPreset preset, uint16_t base, uint16_t peak,
       return base;
     }
     case FloraPreset::WakeBloom: {
-      // From dark: a single collective inhale up to peak across the period.
-      const float s = constrain(phase, 0.0f, 1.0f);
-      return static_cast<uint16_t>(base + span * s);
+      // Per-channel progressive bloom is computed in floraTick; every
+      // wake_bloom light channel is fully overridden there. Floor reference
+      // only (unused).
+      return base;
     }
     case FloraPreset::External: {
       // Unused — floraTick returns before computing levels for External.
@@ -265,6 +287,20 @@ void floraTick(uint32_t nowMs) {
   const uint32_t sinceApplied = nowMs - t.appliedAtMs;
   const float phase = static_cast<float>(sinceApplied % periodMs) / static_cast<float>(periodMs);
 
+  // WakeBloom (D-0X): a fresh activation (appliedAtMs changed) reseeds each
+  // channel's random wake-up threshold and flicker state so every bloom
+  // plays its own random pattern.
+  if (t.preset == FloraPreset::WakeBloom && t.appliedAtMs != sBloomAppliedAtMs) {
+    sBloomAppliedAtMs = t.appliedAtMs;
+    for (uint8_t ch = 0; ch < 16; ++ch) {
+      sBloomWakeAt[ch] = (static_cast<float>(nextRand() & 0xFF) / 255.0f) * kBloomWakeSpread;
+      sBloomFromDuty[ch] = 0;
+      sBloomToDuty[ch] = 0;
+      sBloomSegStartMs[ch] = 0;
+      sBloomSegDurMs[ch] = 1;
+    }
+  }
+
   // Collective light level (linear, pre-gamma).
   const uint16_t linearLevel =
       computeLightLevel(t.preset, t.baseDuty, t.peakDuty, phase, sinceApplied, periodMs);
@@ -296,11 +332,33 @@ void floraTick(uint32_t nowMs) {
         d = gammaApply(t.peakDuty);
       }
     } else if (t.preset == FloraPreset::WakeBloom) {
-      // D-01: random sprouting from dark — channels light in random order as the
-      // collective inhale rises, so it reads as "blooming" not a directional wave.
-      const float sprout = static_cast<float>(nextRand() & 0xFF) / 255.0f;
-      if (sprout > phase) {
-        d = gammaApply(t.baseDuty);
+      // D-0X: progressive random-line bloom. Each channel stays dark until
+      // its random wake threshold, then flickers between a low and high duty
+      // — wide swings on a slow cadence early, narrowing and speeding up
+      // toward kBloomFlickerEnd, where it locks at peak (stabilized).
+      if (phase >= kBloomFlickerEnd) {
+        d = gammaApply(t.peakDuty);
+      } else if (phase < sBloomWakeAt[ch]) {
+        d = 0;
+      } else {
+        if (sinceApplied >= sBloomSegStartMs[ch] + sBloomSegDurMs[ch]) {
+          const float ampFrac = 1.0f - (phase / kBloomFlickerEnd);  // 1 -> 0
+          const float lo = static_cast<float>(t.peakDuty) * (1.0f - ampFrac);
+          const float hi = static_cast<float>(t.peakDuty);
+          sBloomFromDuty[ch] = sBloomToDuty[ch];
+          const float r = static_cast<float>(nextRand() & 0xFF) / 255.0f;
+          sBloomToDuty[ch] = static_cast<uint16_t>(lo + (hi - lo) * r);
+          sBloomSegStartMs[ch] = sinceApplied;
+          sBloomSegDurMs[ch] = kBloomIntervalFastMs +
+              static_cast<uint32_t>((kBloomIntervalSlowMs - kBloomIntervalFastMs) * ampFrac);
+        }
+        const float segT = constrain(
+            static_cast<float>(sinceApplied - sBloomSegStartMs[ch]) /
+            static_cast<float>(sBloomSegDurMs[ch]),
+            0.0f, 1.0f);
+        const float lerped = static_cast<float>(sBloomFromDuty[ch]) +
+            (static_cast<float>(sBloomToDuty[ch]) - static_cast<float>(sBloomFromDuty[ch])) * segT;
+        d = gammaApply(static_cast<uint16_t>(lerped));
       }
     }
     duties[ch] = d;
@@ -316,7 +374,13 @@ void floraTick(uint32_t nowMs) {
     // flora vibro ceiling (NOT safety.motor_* — D-04/FLORA-06).
     const float s = 0.5f * (1.0f - cosf(phase * 2.0f * static_cast<float>(M_PI)));
     const uint16_t ceiling = min<uint16_t>(kFloraVibroIntensityCeiling, t.vibroDuty);
-    vibroDuty = static_cast<uint16_t>(ceiling * s);
+    // WakeBloom (D-0X): fade vibro to silence over the stabilizing tail,
+    // in step with the lights locking at peak.
+    float fade = 1.0f;
+    if (t.preset == FloraPreset::WakeBloom && phase > kBloomFlickerEnd) {
+      fade = constrain(1.0f - (phase - kBloomFlickerEnd) / (1.0f - kBloomFlickerEnd), 0.0f, 1.0f);
+    }
+    vibroDuty = static_cast<uint16_t>(ceiling * s * fade);
   }
   for (uint8_t ch = kFloraVibroChannelLo; ch <= kFloraVibroChannelHi; ++ch) {
     duties[ch] = vibroDuty;

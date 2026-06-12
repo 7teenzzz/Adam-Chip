@@ -1222,6 +1222,58 @@ Cosmos Reason2-2B — визуальное подсознание симбион
 
 ---
 
+## Phase 36B: SmartFlora — пользовательский уровень управления флорой
+
+**Branch:** `SmartFlora` (from `subconscious-symbiont @ 028bea5`)
+
+**Goal:** Трёхуровневая система управления технофлорой поверх Phase 36 P2-слоя: библиотека пользовательских пресетов (Level 1), именованные последовательности анимаций (Level 2), явная привязка эмоций AIIM к пресетам (Level 3). WebUI-панель управления.
+
+**Requires:** Phase 36 Direction 1 завершена (P2 coexistence priority system — commit `028bea5`)
+
+**Delivers:**
+
+- `flora.user_presets` dict в Config.json — пользовательские пресеты, отдельные от `flora.states`
+- `flora.sequences` list — именованные цепочки `{preset, hold_ms, crossfade_ms?}`
+- `flora.emotion_map` dict — явный маппинг AIIM-эмоций на пресеты (fallback на naming convention)
+- CRUD API: `/api/flora/presets`, `/api/flora/sequences`, `/api/flora/emotion_map`
+- Sequence runner как cancellable asyncio.Task (P2 приоритет, отменяется P1/P3)
+- WebUI: редактор пресетов, step-builder секвенций, emotion map с дропдаунами
+
+**Requirements:** FLORA-UP-01 (user_presets CRUD), FLORA-UP-02 (sequences runner), FLORA-UP-03 (emotion_map binding), FLORA-UP-04 (WebUI management)
+
+**Mode:** standard | **Priority:** P1 | **Effort:** M | **Exhibition:** H
+
+**Plans:** 1 plan
+
+- [x] 36B-01 — реализация (выполнено, ветка SmartFlora)
+
+---
+
+## Phase 36C: SmartFlora Testing — тестирование на железе
+
+**Branch:** `SmartFlora` (continuation)
+
+**Goal:** Живое подтверждение на Jetson + ESP32, что SmartFlora не ломает существующий pipeline и три уровня работают корректно.
+
+**Requires:** Phase 36B завершена
+
+**Delivers:**
+
+- Smoke-тест: wake_word→accent→attentive→breathe цикл не сломан после Phase 36B
+- Тест Level 1: создать пресет через WebUI → применить → убедиться что ESP реагирует
+- Тест Level 2: создать секвенцию 3 шага → запустить → прервать voice_state
+- Тест Level 3: привязать emotion → вызвать `push_preset_p2_emotion` → убедиться что emotion_map используется
+- Тест совместимости: P2-sequence отменяется при wake_word (P1 приоритет)
+- `36C-SUMMARY.md` с результатами тестов и go/no-go решением для мёржа в subconscious-symbiont
+
+**Mode:** standard | **Priority:** P0 (блокер мёржа) | **Effort:** S | **Exhibition:** Critical
+
+**Plans:** 1 plan
+
+- [ ] 36C-01-PLAN.md — live hardware test: smoke + Level 1/2/3 + P2 cancel test + go/no-go
+
+---
+
 ## Phase 37: VisitorRegistry + Notes System
 
 **Branch:** `subconscious-symbiont` (continuation)
@@ -1451,6 +1503,41 @@ Cosmos Reason2-2B — визуальное подсознание симбион
 Заменить TF-IDF векторизацию в `FaissEpisodeIndex` на llama.cpp `/embeddings` endpoint.
 Условие запуска: VRAM ≥ 4 GB свободно при работающем Gemma 4 E4B (Q4_K_XL ≈ 8 GB → остаток ~8 GB на Jetson 16 GB).
 Интерфейс не меняется (`.build()` / `.search()` / `.save()` / `.load()`), только векторизация.
+
+### wake_word_required: maintenance-mode bypass не реализован
+
+`Config.schema.json` (`services.asr.wake_word_required`) и описание `agent.mode="maintenance"` подразумевают,
+что в maintenance режиме ASR не требует wake word "адам" перед активацией.
+Фактически в `Orchestrator.py` (voice loop, ~line 1324) переход STANDBY→LISTENING гейтится только
+`self.wake_word_required` (из `services.asr.wake_word_required`) — проверки `agent.mode` там нет.
+То есть при `wake_word_required=true` wake word требуется даже в maintenance.
+
+Не баг, мешающий текущей работе (OWW буфер уже переведён на post-DSP audio, см. Phase audio fix),
+но расходится с документацией. Решение отложено пользователем — реализовать отдельной задачей:
+либо добавить явный bypass по `agent.mode=="maintenance"`, либо обновить
+`Config.schema.json`, убрав упоминание автоматического bypass (выбрать одно — Config-First, без дублей).
+
+### Config.json: мёртвая секция `tuning.*` — дубликат Agent-Adam-Chip/Tuning.json
+
+Расследование 2026-06-12 (запрос «изучи legacy»): `System/Config.json` и `System/Config.schema.json`
+содержат верхнеуровневую секцию `tuning` (memory/echoes/chinese/session/scene_director/llm/voice/
+audio_input/prompt/diagnostics — ~800 строк схемы), с комментарием в schema "merged here so
+Config.json is the single source of truth, previously lived in Agent-Adam-Chip/Tuning.json".
+
+Фактически это **не так**: `System/adam/tuning.py` (`DEFAULT_TUNING_PATH`, `TuningStore`) и
+`Orchestrator.py` (`tuning_store = get_store()`) читают/пишут **только** `Agent-Adam-Chip/Tuning.json` —
+это реальный hot-reload backing store для `/api/tuning` (WebUI tuning panel), и он жив, активно
+редактируется. Секция `Config.json.tuning.*` была дубликатом, который НИКТО не читал — grep по
+`section("tuning")` нашёл только два места (Orchestrator.py post-TTS lag diag + `/api/diag/lag/toggle`),
+которые в этой сессии переведены на `tuning_store` (теперь единый источник для `diagnostics.trace_post_tts_lag`).
+
+`System/adam/CLAUDE.md` тоже содержал ложное утверждение "Tuning.json удалён в V-S07.2, заменён
+Config.json.tuning" — исправлено в этой сессии на описание реального устройства.
+
+**Выполнено 2026-06-12 (подтверждение получено):**
+Секция `tuning` удалена из `System/Config.json` (744→358 строк) и `System/Config.schema.json`
+(2445→1617 строк) через Python json.load/dump, валидность подтверждена. Grep `section("tuning")` —
+ноль обращений. `System/Config.json` теперь содержит только runtime-параметры инфраструктуры.
 
 ---
 

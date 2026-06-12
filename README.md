@@ -20,7 +20,7 @@ Adam Chip — художественно-исследовательская аг
 Jetson (inference node)             ESP32-S3 (peripheral node)
   FastAPI orchestrator      ←→        10.10.10.171
   llama.cpp LLM                       PCA9685 PWM (motor layer)
-  VILA VLM (scene)                    INMP441 mic uplink
+  llama.cpp VLM (Cosmos, scene)       INMP441 mic uplink
   WhisperX ASR (ru-RU)                PCM5102A speaker  ← POST :81/speaker
   WebRTC VAD (endpointing)            WebSocket telemetry push
   Silero TTS (eugene)                 HTTP API (/api/*)
@@ -41,7 +41,7 @@ Jetson (inference node)             ESP32-S3 (peripheral node)
 | Компонент | Runtime | Модель | Порт |
 |-----------|---------|--------|------|
 | LLM | llama.cpp (OpenAI-compat) | gemma-4-E4B-it-UD-Q4_K_XL | 8081 |
-| VLM | nano_llm (Docker) | VILA 1.5-3b | 8050 |
+| VLM | llama.cpp (OpenAI-compat, --mmproj) | Cosmos-Reason2-2B-Q8_0 | 8051 |
 | ASR | WhisperX (CUDA, Docker) | small (ru-RU) | 8095 |
 | TTS | Silero v5_5_ru | eugene | 8082 |
 | Orchestrator | FastAPI + asyncio | — | 8080 |
@@ -148,6 +148,8 @@ sudo systemctl start adam-logviewer.service   # always-on, до остальны
 sudo systemctl start adam-llm.service
 sudo systemctl start adam-tts-silero.service
 sudo systemctl start adam-asr-whisperx.service
+# adam-vlm.service (Cosmos-Reason2-2B, :8051) — disabled by default, включить вручную:
+# sudo systemctl enable --now adam-vlm.service
 sudo systemctl start adam-orchestrator.service
 
 ./scripts/adam_service_status.sh
@@ -168,6 +170,7 @@ sudo systemctl start adam-orchestrator.service
 ./scripts/adam_service_logs.sh adam-llm.service
 ./scripts/adam_service_logs.sh adam-tts-silero.service
 ./scripts/adam_service_logs.sh adam-asr-whisperx.service
+./scripts/adam_service_logs.sh adam-vlm.service
 ```
 
 ## Диагностика

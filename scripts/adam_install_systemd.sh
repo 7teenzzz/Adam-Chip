@@ -37,8 +37,14 @@ ADAM_ASR_WHISPERX_BASE_URL=http://127.0.0.1:8095
 ADAM_ASR_WHISPERX_MODEL=medium
 ADAM_ASR_LANGUAGE=ru
 ADAM_ASR_DEVICE=cuda
-ADAM_VLM_BASE_URL=http://127.0.0.1:8084
-ADAM_VLM_MODEL=Efficient-Large-Model/VILA1.5-3b
+ADAM_VLM_BASE_URL=http://127.0.0.1:8051
+ADAM_VLM_MODEL=Cosmos-Reason2-2B-Q8_0
+ADAM_VLM_LLAMACPP_DIR=${ROOT_DIR}/Subsystem/llama.cpp
+ADAM_VLM_GGUF_PATH=${ROOT_DIR}/Subsystem/Models/gguf/Cosmos-Reason2-2B-Q8_0.gguf
+ADAM_VLM_MMPROJ_PATH=${ROOT_DIR}/Subsystem/Models/gguf/mmproj-Cosmos-Reason2-2B-F16.gguf
+ADAM_VLM_PORT=8051
+ADAM_VLM_CTX=4096
+ADAM_VLM_GPU_LAYERS=99
 ADAM_VIDEO_DEVICE=/dev/video0
 ADAM_AUDIO_INPUT_DEVICE=pulse
 ADAM_AUDIO_OUTPUT_DEVICE=default
@@ -76,8 +82,14 @@ ensure_env_line "ADAM_ASR_WHISPERX_BASE_URL" "http://127.0.0.1:8095"
 ensure_env_line "ADAM_ASR_WHISPERX_MODEL" "small"
 ensure_env_line "ADAM_ASR_LANGUAGE" "ru"
 ensure_env_line "ADAM_ASR_DEVICE" "cuda"
-ensure_env_line "ADAM_VLM_BASE_URL" "http://127.0.0.1:8084"
-ensure_env_line "ADAM_VLM_MODEL" "Efficient-Large-Model/VILA1.5-3b"
+ensure_env_line "ADAM_VLM_BASE_URL" "http://127.0.0.1:8051"
+ensure_env_line "ADAM_VLM_MODEL" "Cosmos-Reason2-2B-Q8_0"
+ensure_env_line "ADAM_VLM_LLAMACPP_DIR" "${ROOT_DIR}/Subsystem/llama.cpp"
+ensure_env_line "ADAM_VLM_GGUF_PATH" "${ROOT_DIR}/Subsystem/Models/gguf/Cosmos-Reason2-2B-Q8_0.gguf"
+ensure_env_line "ADAM_VLM_MMPROJ_PATH" "${ROOT_DIR}/Subsystem/Models/gguf/mmproj-Cosmos-Reason2-2B-F16.gguf"
+ensure_env_line "ADAM_VLM_PORT" "8051"
+ensure_env_line "ADAM_VLM_CTX" "4096"
+ensure_env_line "ADAM_VLM_GPU_LAYERS" "99"
 ensure_env_line "ADAM_AUDIO_INPUT_DEVICE" "pulse"
 ensure_env_line "ADAM_AUDIO_OUTPUT_DEVICE" "default"
 
@@ -100,8 +112,11 @@ install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-exhibition.target" /etc/systemd
 ensure_env_line "ADAM_LOG_VIEWER_PORT" "8083"
 
 systemctl daemon-reload
-# adam-vlm НЕ авто-стартует: VILA Docker ест ~5.6 GB и OOM-ит llama.cpp на 16 GB
-# Jetson после ребута (Phase 30 durability). Вернуть: sudo systemctl enable --now adam-vlm.service
+# adam-vlm НЕ авто-стартует по умолчанию (Phase 30 durability caution). С Phase 33
+# (Cosmos-Reason2-2B via llama.cpp, :8051) бюджет много меньше старого VILA Docker
+# (~5.6 GB) — Cosmos Q8_0 + mmproj F16 ~3 GB, должен сосуществовать с Gemma 4 E4B
+# (:8081, ~8 GB) на 16 GB Jetson. Включить вручную после проверки:
+# sudo systemctl enable --now adam-vlm.service
 systemctl enable adam-orchestrator.service adam-tts-silero.service adam-llm.service adam-logviewer.service adam-exhibition.target
 systemctl disable adam-vlm.service 2>/dev/null || true
 

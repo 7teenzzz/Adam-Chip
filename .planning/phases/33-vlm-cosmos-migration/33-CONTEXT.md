@@ -3,6 +3,26 @@
 **Gathered:** 2026-06-08
 **Status:** STUB — decisions deferred (обсудить перед планированием)
 
+**Update 2026-06-12:** Базовая инициализация Cosmos восстановлена вне рамок формального
+планирования фазы (срочный bugfix-проход):
+
+- `deploy/systemd/adam-vlm.service` переписан на `llama-server --model Cosmos-Reason2-2B-Q8_0.gguf
+  --mmproj mmproj-Cosmos-Reason2-2B-F16.gguf` (тот же бинарь/паттерн, что и `adam-llm.service`),
+  слушает `:8051`. Юнит **disabled** (как раньше) — ручной старт `sudo systemctl enable --now adam-vlm.service`.
+- Порты сведены к единому значению `8051` везде: `Config.json`, `Config.schema.json`,
+  `System/adam/config.py`, `System/adam/inference.py` (VLMClient default), `/etc/adam-chip/adam.env`,
+  `scripts/adam_install_systemd.sh`, README Inference Stack. Раньше было 3 разных значения
+  (Config.json=8051, schema doc=8084, старый systemd VILA=8050).
+- Проверено живьём: `python3 scripts/test_cosmos_vlm.py --image data/adam/scene_snapshot.jpg` →
+  корректный ответ в формате `Scene: ... Engagement: ...`. RAM-стоимость Cosmos Q8_0 + mmproj F16 ≈ 2.2 GB.
+- **Не сделано (остаётся для планирования этой фазы):** старый VILA/Docker код-путь ещё жив и не убран —
+  `scripts/adam_live_vlm.sh`, `scripts/adam_start.sh` (`--vlm`, `LIVE_VLM_CONTAINER`),
+  `scripts/adam_stop.sh` (`adam-live-vlm`), `System/adam/api_runtime.py` (`_probe_live_vlm`,
+  docker start/stop методы для `adam-live-vlm`) — всё это управляет Docker-контейнером VILA,
+  который больше не запускается новым `adam-vlm.service`. Это "двойное управление", про которое
+  написано в open questions ниже — закрыть явно при планировании Phase 33 (убрать или адаптировать
+  под llama.cpp-юнит).
+
 <domain>
 ## Phase Boundary
 

@@ -38,6 +38,8 @@ except ImportError as exc:  # pragma: no cover - exercised only on missing runti
         "python3 -m pip install -r System/requirements.txt"
     ) from exc
 
+from pydantic import ValidationError
+
 from adam import audio_dsp
 from adam.action import ActionLayer
 from adam.api_runtime import RuntimeDeps, build_router, _load_calibration_profile
@@ -50,6 +52,7 @@ from adam.flora import FloraController
 from adam.camera import CameraReader, SceneDescriptionBuffer
 from adam.inference import WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
 from adam.mic_reader import MicReader
+from adam.local_mic_reader import LocalMicReader
 from adam.media import MediaHealth
 from adam.memory import EpisodicMemory, MemoryStore
 from adam.memory_metrics import MemoryMetrics
@@ -599,6 +602,12 @@ class VoiceLoopController:
         # (Orchestrator.py top-level). For mic_source != "esp32" (maintenance
         # mode without ESP), _run_local still feeds audio via arecord.
         self.mic_reader: Any | None = None
+        # LocalMicReader: created in start() when mic_source=="local".
+        # Single persistent arecord subprocess distributes PCM to all consumers.
+        self.local_mic_reader: LocalMicReader | None = None
+        # Saved for LocalMicReader construction in start() (audio_config not
+        # stored elsewhere as an instance attribute).
+        self._audio_config_snapshot = audio_config
         # Pre-VAD 1-pole high-pass filter — cuts low-frequency hum before RMS,
         # WebRTC VAD, OWW, and ASR see the audio. Set vad_hpf_hz=0 to disable.
         _hpf_fc = float(audio_config.get("vad_hpf_hz", 0.0))
@@ -810,6 +819,12 @@ class VoiceLoopController:
         # in chat.js so pipelineReady waits for the standby transition.
         self._voice_state = "boot_warmup"
         self._set_voice_state("boot_warmup", "voice_loop_started")
+        # LocalMicReader: start once per voice_loop session for the local-mic path.
+        # Must be started before _run() so get_chunk() is ready when _vad_loop fires.
+        if self.mic_source == "local" and self.local_mic_reader is None:
+            self.local_mic_reader = LocalMicReader(self._audio_config_snapshot, event_log)
+            self.local_mic_reader.attach_voice_loop(self)
+            await self.local_mic_reader.start()
         self._task = asyncio.create_task(self._run(), name="adam_voice_loop")
         # Phase 9 (REQ-HEARTBEAT-INDEPENDENT): independent heartbeat ticker.
         # Cancelled in stop(); restarted on every start(). Survives _vad_loop
@@ -874,6 +889,10 @@ class VoiceLoopController:
         if self._wake_engine is not None:
             self._wake_engine.close()
         self._stop_process()
+        # LocalMicReader: stop and clear so start() can create a fresh one.
+        if self.local_mic_reader is not None:
+            await self.local_mic_reader.stop()
+            self.local_mic_reader = None
         self.vad_state = "idle"
         event_log.append("voice_loop_stopped", self.status())
         return {"ok": True, **self.status()}
@@ -894,6 +913,9 @@ class VoiceLoopController:
                 else max(2, int(self.sample_rate * 2 * self.frame_ms / 1000))
             )
             await self._run_via_mic_reader(frame_bytes)
+        elif self.local_mic_reader is not None:
+            # LocalMicReader: single persistent arecord feeds all consumers.
+            await self._run_via_local_mic_reader()
         else:
             frame_bytes = max(2, int(self.sample_rate * self.channels * 2 * self.frame_ms / 1000))
             while self.running:
@@ -914,6 +936,20 @@ class VoiceLoopController:
             raise RuntimeError("mic_reader is None — Orchestrator wiring missing")
         # _vad_loop branches on `self.mic_reader is not None` to pull from
         # MicReader.get_chunk() instead of calling read_fn.
+        await self._vad_loop(read_fn=None, frame_bytes=frame_bytes)
+
+    async def _run_via_local_mic_reader(self) -> None:
+        """Consume chunks from LocalMicReader queue and drive _vad_loop.
+
+        LocalMicReader owns the arecord subprocess lifecycle (start/stop/mute/
+        drain). _vad_loop uses the `self.local_mic_reader is not None` branch
+        to pull from LocalMicReader.get_chunk() — same pattern as MicReader.
+        Reconnect-on-error is handled inside LocalMicReader._open_drain_reconnect_loop;
+        _vad_loop never sees the error, just a momentary None on get_chunk().
+        """
+        if self.local_mic_reader is None:
+            raise RuntimeError("local_mic_reader is None — wiring error")
+        frame_bytes = self.local_mic_reader.frame_bytes
         await self._vad_loop(read_fn=None, frame_bytes=frame_bytes)
 
     async def _run_local(self, frame_bytes: int) -> None:
@@ -1067,9 +1103,13 @@ class VoiceLoopController:
                     chunk = await asyncio.wait_for(bq.get(), timeout=0.05)
                 except asyncio.TimeoutError:
                     continue
-                # OWW must see raw (pre-DSP) audio — the model was trained on
-                # natural speech and aggressive EQ (e.g. highshelf cuts) kills
-                # detection. Chunks pushed from _vad_loop are already pre-DSP.
+                # MicReader and LocalMicReader drain loops push RAW (pre-DSP)
+                # chunks here — audio flows directly from the hardware thread
+                # without going through InputDSP. The legacy arecord path in
+                # _vad_loop (no local_mic_reader) now pushes post-DSP chunks,
+                # but that path is only active as a fallback. In all cases
+                # barge-in detection works — OWW detects "адам" reliably on
+                # both raw and lightly-EQ'd audio.
                 _buf.append(chunk)
                 if len(_buf) < self._ww_frames_needed:
                     continue
@@ -1175,6 +1215,12 @@ class VoiceLoopController:
                         # stream end, not retry).
                         await asyncio.sleep(0.005)
                         continue
+                elif self.local_mic_reader is not None:
+                    chunk = await self.local_mic_reader.get_chunk(timeout=1.0)
+                    if chunk is None:
+                        # Queue starvation — LocalMicReader may be reconnecting.
+                        await asyncio.sleep(0.005)
+                        continue
                 else:
                     chunk = await asyncio.to_thread(_reader[0], frame_bytes)
                 if not chunk:
@@ -1188,10 +1234,12 @@ class VoiceLoopController:
                 _empty_streak = 0
                 if len(chunk) < frame_bytes:
                     continue
-                # Barge-in: for mic_source=="local" there is no MicReader drain
-                # loop feeding _barge_in_q, so push RAW chunk here so OWW sees
-                # audio during TTS playback. Drop-oldest on overflow, never block.
-                if self.mic_source == "local":
+                # Barge-in: for the legacy arecord path (no local_mic_reader)
+                # there is no drain loop feeding _barge_in_q, so push RAW chunk
+                # here so OWW sees audio during TTS playback. LocalMicReader and
+                # MicReader feed _barge_in_q from their own drain loops, so this
+                # block is only needed for the legacy subprocess path.
+                if self.mic_source == "local" and self.local_mic_reader is None:
                     _bq = self._barge_in_q
                     if _bq is not None:
                         try:
@@ -1230,9 +1278,10 @@ class VoiceLoopController:
                 )
 
                 # D-10: MicReader owns audio_level for esp32 path.
-                # For mic_source=="local" (no MicReader running), emit here so
-                # the chat VU-meter and spectrum stay live on the local ALSA path.
-                if self.mic_source == "local":
+                # LocalMicReader owns audio_level for the local path when active.
+                # Only emit here for the legacy arecord path (local + no LocalMicReader),
+                # to avoid double-emitting when LocalMicReader._drain_inner already fires.
+                if self.mic_source == "local" and self.local_mic_reader is None:
                     _local_level_tick = getattr(self, "_local_level_tick", 0) + 1
                     self._local_level_tick = _local_level_tick
                     _emit_every = mic_reader._audio_level_emit_every_n
@@ -1289,7 +1338,11 @@ class VoiceLoopController:
                         # audio uttered before OWW debounce confirmation is not lost.
                         # Uses processed `chunk` (post-EQ) matching what ASR will see.
                         self._pre_wake_buf.append(chunk)
-                        self._ww_buf.append(_raw_chunk_for_monitor)
+                        # OWW runs on the same post-EQ audio as VAD/ASR (was raw
+                        # _raw_chunk_for_monitor) — the active input EQ preset is
+                        # tuned to lift voice above room noise for ASR, and OWW
+                        # benefits from the same correction.
+                        self._ww_buf.append(chunk)
                         if len(self._ww_buf) >= self._ww_frames_needed:
                             pcm_80ms = b"".join(self._ww_buf)
                             self._ww_buf.clear()
@@ -1587,11 +1640,7 @@ class VoiceLoopController:
                             # analyse with scripts/diag_lag_source.py.
                             # Re-read flag LIVE on every turn so PATCH /api/config
                             # toggle takes effect without restart.
-                            _diag_on = bool(
-                                settings.section("tuning")
-                                .get("diagnostics", {})
-                                .get("trace_post_tts_lag", False)
-                            )
+                            _diag_on = tuning_store.current().diagnostics.trace_post_tts_lag
                             if _diag_on:
                                 self.mic_reader.begin_lag_diag(4000.0, "post_transcribe")
                         # Barge-in: wake word fired during TTS → open a short reply window
@@ -2890,16 +2939,14 @@ async def toggle_lag_diag(payload: dict[str, Any] = Body(default=None)) -> dict[
     On enable: next ~3-5 turns will produce mic_lag_diag_chunk events. Run
     `scripts/diag_lag_source.py` to analyse the envelope.
     """
-    diag_section = settings.section("tuning").get("diagnostics", {}) or {}
-    current = bool(diag_section.get("trace_post_tts_lag", False))
+    current = tuning_store.current().diagnostics.trace_post_tts_lag
     if payload and "enabled" in payload:
         new_value = bool(payload.get("enabled"))
     else:
         new_value = not current
     try:
-        settings.apply_patch("tuning.diagnostics", {"trace_post_tts_lag": new_value})
-        settings.save()
-    except ValueError as exc:
+        tuning_store.apply_patch({"diagnostics": {"trace_post_tts_lag": new_value}})
+    except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     event_log.append("lag_diag_toggled", {"from": current, "to": new_value})
     return {"ok": True, "enabled": new_value, "previous": current}
