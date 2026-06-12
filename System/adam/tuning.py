@@ -19,7 +19,7 @@ from .config import PROJECT_ROOT
 
 log = logging.getLogger(__name__)
 
-DEFAULT_TUNING_PATH = PROJECT_ROOT / "Agent-Adam-Chip" / "Tuning.json"
+DEFAULT_TUNING_PATH = PROJECT_ROOT / "Agent-Adam-Chip" / "iAdam.json"
 
 
 # ---------- Pydantic-модели ----------

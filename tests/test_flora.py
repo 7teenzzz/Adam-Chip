@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "System"))
 
 from adam.config import Settings  # noqa: E402
+from adam.flora import get_flora_store  # noqa: E402
 
 
 def _make_sine_wav(
@@ -57,7 +58,7 @@ def _make_sine_wav(
 
 def test_flora_config() -> None:
     """FLORA-05: the flora config section parses with documented defaults."""
-    flora = Settings.load().section("flora")
+    flora = get_flora_store().current()
     assert isinstance(flora, dict) and flora, "flora section must be a non-empty dict"
 
     # Channel masks: vibro = first 4 (0-3), light = next 11 (4-14).
@@ -116,7 +117,7 @@ def _make_controller(mcu) -> "object":
     """
     from adam.flora import FloraController
 
-    flora_cfg = Settings.load().section("flora")
+    flora_cfg = get_flora_store().current()
     return FloraController(flora_cfg, mcu, event_log=None)
 
 
@@ -276,7 +277,7 @@ def test_rms_envelope() -> None:
     assert all(0.0 <= x <= 1.0 for x in levels)
 
     # Count ~= duration / frame_interval (within +-1).
-    flora_cfg = Settings.load().section("flora")
+    flora_cfg = get_flora_store().current()
     frame_interval_ms = int(flora_cfg["speech"]["frame_interval_ms"])
     expected = int((duration_s * 1000) / frame_interval_ms)
     assert abs(len(levels) - expected) <= 1, (len(levels), expected)
@@ -343,7 +344,7 @@ def test_raw_pwm_duty() -> None:
     mcu = _FakeMCU()
     ctrl = _make_controller(mcu)
 
-    flora_cfg = Settings.load().section("flora")
+    flora_cfg = get_flora_store().current()
     peak_pct = flora_cfg["states"]["breathe"]["peak_pct"]
 
     params = ctrl._build_params("breathe")

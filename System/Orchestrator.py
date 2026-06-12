@@ -48,7 +48,7 @@ from adam.device import MCUClient
 from adam.echoes_gate import EchoGate
 from adam.episodic import SessionAccumulator, should_record
 from adam.events import EventLog, utc_now
-from adam.flora import FloraController
+from adam.flora import FloraController, get_flora_store
 from adam.camera import CameraReader, SceneDescriptionBuffer
 from adam.inference import WhisperASRClient, SceneCache, TTSClient, VLMClient, create_llm_client, create_asr_client
 from adam.mic_reader import MicReader
@@ -2062,7 +2062,7 @@ scene_worker = SceneWorker(settings.section("media"), vlm, camera_reader, scene_
 # Technoflora reactive layer (Phase 29, FLORA-03/06): consumes pipeline events
 # and POSTs flora preset transitions to the ESP via the shared MCUClient
 # (_NO_PROXY_OPENER). Shares the same `mcu` + `event_log` singletons.
-flora_controller = FloraController(settings.section("flora"), mcu, event_log)
+flora_controller = FloraController(get_flora_store().current(), mcu, event_log)
 
 
 class SessionWatcher:
@@ -3029,7 +3029,7 @@ async def stop() -> dict[str, Any]:
     # Part C (flora): the legacy idle scene writes boot_idle (all channels 0) to
     # the SAME PCA9685 channels 0-14 the technoflora owns, fighting the flora
     # animation. Only drive the idle scene when flora is disabled.
-    flora_enabled = bool(settings.section("flora").get("enabled", True))
+    flora_enabled = bool(get_flora_store().current().get("enabled", True))
     action = None if flora_enabled else await mcu.idle()
     event_log.append(
         "agent_stop",
@@ -3066,7 +3066,7 @@ async def update_scene(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # which the technoflora owns when flora.enabled=true. Suppress the write so flora
     # animation is not interrupted. Raw /api/pca9685/* endpoints are NOT gated here —
     # the calibration/maintenance scripts need direct access with flora disabled.
-    if bool(settings.section("flora").get("enabled", True)):
+    if bool(get_flora_store().current().get("enabled", True)):
         return {"ok": True, "status": 204, "data": {"action": "suppressed_flora_owns_channels"}, "error": None}
     text = str(payload.get("text", "")).strip()
     meta = payload.get("meta", {})
@@ -3132,7 +3132,7 @@ async def flora_config_preview() -> dict[str, Any]:
     Reflects current Config.json values — useful for verifying a config edit
     before pushing to hardware with POST /api/flora/state.
     """
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     state_names = list((flora_cfg.get("states") or {}).keys())
     preview = {s: flora_controller._build_params(s) for s in state_names}
     return {"ok": True, "presets": preview}
@@ -3154,7 +3154,7 @@ def _flora_all_preset_names(flora_cfg: dict[str, Any]) -> set[str]:
 @app.get("/api/flora/presets")
 async def flora_list_presets() -> dict[str, Any]:
     """List all flora presets: system (flora.states) and user-defined (flora.user_presets)."""
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     system = {k: v for k, v in (flora_cfg.get("states") or {}).items()}
     user = dict(flora_cfg.get("user_presets") or {})
     return {"ok": True, "system": system, "user": user}
@@ -3175,13 +3175,13 @@ async def flora_create_preset(payload: dict[str, Any] = Body(...)) -> dict[str, 
         raise HTTPException(status_code=400, detail="params must be an object")
     if name in _FLORA_SYSTEM_NAMES:
         raise HTTPException(status_code=409, detail=f"'{name}' is a reserved system preset name")
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     user_presets: dict[str, Any] = dict(flora_cfg.get("user_presets") or {})
     if name in user_presets:
         raise HTTPException(status_code=409, detail=f"preset '{name}' already exists")
     user_presets[name] = params
-    settings.apply_patch("flora", {"user_presets": user_presets})
-    settings.save()
+    get_flora_store().apply_patch({"user_presets": user_presets})
+    get_flora_store().save()
     event_log.append("flora_preset_created", {"name": name})
     return {"ok": True, "name": name, "params": params}
 
@@ -3192,7 +3192,7 @@ async def flora_update_preset(name: str, payload: dict[str, Any] = Body(...)) ->
 
     Body: {params: {...}}  or  {name?: str, params: {...}}  (rename supported)
     """
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     user_presets: dict[str, Any] = dict(flora_cfg.get("user_presets") or {})
     if name not in user_presets:
         raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
@@ -3207,8 +3207,8 @@ async def flora_update_preset(name: str, payload: dict[str, Any] = Body(...)) ->
             raise HTTPException(status_code=409, detail=f"preset '{new_name}' already exists")
         del user_presets[name]
     user_presets[new_name] = params
-    settings.apply_patch("flora", {"user_presets": user_presets})
-    settings.save()
+    get_flora_store().apply_patch({"user_presets": user_presets})
+    get_flora_store().save()
     event_log.append("flora_preset_updated", {"old_name": name, "new_name": new_name})
     return {"ok": True, "name": new_name, "params": params}
 
@@ -3216,13 +3216,13 @@ async def flora_update_preset(name: str, payload: dict[str, Any] = Body(...)) ->
 @app.delete("/api/flora/presets/{name}")
 async def flora_delete_preset(name: str) -> dict[str, Any]:
     """Delete a user-defined flora preset."""
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     user_presets: dict[str, Any] = dict(flora_cfg.get("user_presets") or {})
     if name not in user_presets:
         raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
     del user_presets[name]
-    settings.apply_patch("flora", {"user_presets": user_presets})
-    settings.save()
+    get_flora_store().apply_patch({"user_presets": user_presets})
+    get_flora_store().save()
     event_log.append("flora_preset_deleted", {"name": name})
     return {"ok": True, "deleted": name}
 
@@ -3242,7 +3242,7 @@ async def flora_preview_preset(name: str) -> dict[str, Any]:
 @app.get("/api/flora/sequences")
 async def flora_list_sequences() -> dict[str, Any]:
     """List all defined animation sequences from flora.sequences."""
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     sequences = list(flora_cfg.get("sequences") or [])
     return {"ok": True, "sequences": sequences}
 
@@ -3259,13 +3259,13 @@ async def flora_create_sequence(payload: dict[str, Any] = Body(...)) -> dict[str
         raise HTTPException(status_code=400, detail="name is required")
     if not isinstance(steps, list) or not steps:
         raise HTTPException(status_code=400, detail="steps must be a non-empty array")
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     sequences: list[dict[str, Any]] = list(flora_cfg.get("sequences") or [])
     if any(s.get("name") == name for s in sequences):
         raise HTTPException(status_code=409, detail=f"sequence '{name}' already exists")
     sequences.append({"name": name, "steps": steps})
-    settings.apply_patch("flora", {"sequences": sequences})
-    settings.save()
+    get_flora_store().apply_patch({"sequences": sequences})
+    get_flora_store().save()
     event_log.append("flora_sequence_created", {"name": name, "steps": len(steps)})
     return {"ok": True, "name": name, "steps": steps}
 
@@ -3273,7 +3273,7 @@ async def flora_create_sequence(payload: dict[str, Any] = Body(...)) -> dict[str
 @app.put("/api/flora/sequences/{name}")
 async def flora_update_sequence(name: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Update an existing animation sequence (replace steps, optional rename)."""
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     sequences: list[dict[str, Any]] = list(flora_cfg.get("sequences") or [])
     idx = next((i for i, s in enumerate(sequences) if s.get("name") == name), None)
     if idx is None:
@@ -3285,8 +3285,8 @@ async def flora_update_sequence(name: str, payload: dict[str, Any] = Body(...)) 
     if new_name != name and any(s.get("name") == new_name for s in sequences):
         raise HTTPException(status_code=409, detail=f"sequence '{new_name}' already exists")
     sequences[idx] = {"name": new_name, "steps": steps}
-    settings.apply_patch("flora", {"sequences": sequences})
-    settings.save()
+    get_flora_store().apply_patch({"sequences": sequences})
+    get_flora_store().save()
     event_log.append("flora_sequence_updated", {"old_name": name, "new_name": new_name})
     return {"ok": True, "name": new_name, "steps": steps}
 
@@ -3294,13 +3294,13 @@ async def flora_update_sequence(name: str, payload: dict[str, Any] = Body(...)) 
 @app.delete("/api/flora/sequences/{name}")
 async def flora_delete_sequence(name: str) -> dict[str, Any]:
     """Delete an animation sequence."""
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     sequences: list[dict[str, Any]] = list(flora_cfg.get("sequences") or [])
     new_sequences = [s for s in sequences if s.get("name") != name]
     if len(new_sequences) == len(sequences):
         raise HTTPException(status_code=404, detail=f"sequence '{name}' not found")
-    settings.apply_patch("flora", {"sequences": new_sequences})
-    settings.save()
+    get_flora_store().apply_patch({"sequences": new_sequences})
+    get_flora_store().save()
     event_log.append("flora_sequence_deleted", {"name": name})
     return {"ok": True, "deleted": name}
 
@@ -3331,7 +3331,7 @@ _VALID_EMOTIONS: frozenset[str] = frozenset({"curious", "warm", "unease", "sharp
 @app.get("/api/flora/emotion_map")
 async def flora_get_emotion_map() -> dict[str, Any]:
     """Return the current AIIM emotion → flora preset binding."""
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     emotion_map = dict(flora_cfg.get("emotion_map") or {})
     all_presets = sorted(_flora_all_preset_names(flora_cfg))
     return {"ok": True, "emotion_map": emotion_map, "available_presets": all_presets}
@@ -3350,7 +3350,7 @@ async def flora_patch_emotion_map(payload: dict[str, Any] = Body(...)) -> dict[s
     invalid_keys = set(patch_map.keys()) - _VALID_EMOTIONS
     if invalid_keys:
         raise HTTPException(status_code=400, detail=f"invalid emotion keys: {sorted(invalid_keys)}")
-    flora_cfg = settings.section("flora")
+    flora_cfg = get_flora_store().current()
     flora_all_presets = _flora_all_preset_names(flora_cfg)
     # Validate preset values: must be known preset name or empty string.
     for emotion, preset_name in patch_map.items():
@@ -3361,8 +3361,8 @@ async def flora_patch_emotion_map(payload: dict[str, Any] = Body(...)) -> dict[s
             )
     current_map: dict[str, str] = dict(flora_cfg.get("emotion_map") or {})
     current_map.update(patch_map)
-    settings.apply_patch("flora", {"emotion_map": current_map})
-    settings.save()
+    get_flora_store().apply_patch({"emotion_map": current_map})
+    get_flora_store().save()
     event_log.append("flora_emotion_map_updated", {"patch": patch_map})
     return {"ok": True, "emotion_map": current_map}
 
@@ -4359,7 +4359,7 @@ async def _execute_action(action: Any) -> dict[str, Any]:
     # of those channels — suppress legacy scene/channel writes so they do not fight
     # the flora animation (debug/flora-stops-on-state-change Part C). The legacy
     # scene API stays available for maintenance when flora.enabled=false.
-    if bool(settings.section("flora").get("enabled", True)):
+    if bool(get_flora_store().current().get("enabled", True)):
         return {"ok": True, "status": 204, "data": {"action": "suppressed_flora_owns_channels"}, "error": None}
     if action.kind == "scene" and action.scene:
         return (await mcu.set_scene(action.scene)).as_dict()

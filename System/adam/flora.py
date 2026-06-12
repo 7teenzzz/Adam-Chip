@@ -15,7 +15,7 @@ Event -> preset mapping (29-RESEARCH §Pattern 4, VERIFIED names):
     llm_thinking_started                     -> think_pulse  (раздумье)
     tts_started / tts_finished               -> answer boundary (RMS stream is plan 04)
 
-All numbers come from settings.section("flora") (Config-First, D-13) — nothing
+All numbers come from FloraStore / System/Flora.json (Config-First, D-13) — nothing
 hardcoded here. Gamma is applied firmware-side, so this layer sends raw percent
 duties; the firmware converts via its gamma LUT.
 """
@@ -24,15 +24,98 @@ from __future__ import annotations
 import asyncio
 import audioop
 import collections
+import copy
 import io
+import json
 import logging
+import os
 import random
+import threading
 import wave
 from enum import IntEnum
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 logger = logging.getLogger("adam.flora")
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_FLORA_PATH = _PROJECT_ROOT / "System" / "Flora.json"
+
+
+class FloraStore:
+    """Hot-reloadable loader for System/Flora.json.
+
+    Independent from Settings / Config.json so flora tuning can be edited
+    and reloaded without touching the main runtime config. Mirrors the
+    TuningStore pattern: mtime-based reload on every current() call, atomic
+    save via temp-file rename.
+    """
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = Path(path) if path else DEFAULT_FLORA_PATH
+        self._lock = threading.Lock()
+        self._mtime: float = 0.0
+        self._data: dict[str, Any] = {}
+        self._load_locked()
+
+    def _load_locked(self) -> dict[str, Any]:
+        try:
+            mtime = self.path.stat().st_mtime
+            if mtime == self._mtime and self._data:
+                return self._data
+            with self.path.open("r", encoding="utf-8") as fh:
+                self._data = json.load(fh)
+            self._mtime = mtime
+        except Exception:
+            pass
+        return self._data
+
+    def current(self) -> dict[str, Any]:
+        """Return flora config, reloading from disk if the file changed."""
+        with self._lock:
+            return copy.deepcopy(self._load_locked())
+
+    def apply_patch(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """Deep-merge *patch* into the current flora data (in memory + reload first)."""
+        with self._lock:
+            self._load_locked()  # refresh before merge
+            self._data = _deep_merge_flora(self._data, patch)
+            return copy.deepcopy(self._data)
+
+    def save(self) -> Path:
+        """Write current flora data to Flora.json atomically."""
+        with self._lock:
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            with tmp.open("w", encoding="utf-8") as fh:
+                json.dump(self._data, fh, ensure_ascii=False, indent=2, sort_keys=False)
+                fh.write("\n")
+            os.replace(tmp, self.path)
+        return self.path
+
+
+def _deep_merge_flora(base: dict, patch: dict) -> dict:
+    result = dict(base)
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = _deep_merge_flora(result[k], v)
+        else:
+            result[k] = copy.deepcopy(v)
+    return result
+
+
+# Module-level singleton — shared across Orchestrator + FloraController.
+_flora_store: FloraStore | None = None
+
+
+def get_flora_store(path: str | Path | None = None) -> FloraStore:
+    """Return (or lazily create) the module-level FloraStore singleton."""
+    global _flora_store
+    if _flora_store is None:
+        _flora_store = FloraStore(path)
+    return _flora_store
+
 
 # Preset names owned by the pipeline — cannot be used as user_presets keys.
 SYSTEM_PRESET_NAMES: frozenset[str] = frozenset({
@@ -323,15 +406,13 @@ class FloraController:
     # ── State push ─────────────────────────────────────────────────────
 
     def _live_flora_cfg(self) -> dict[str, Any]:
-        """Return current flora config section — re-read from disk for hot-reload.
+        """Return current flora config — re-read from Flora.json for hot-reload.
 
-        Falls back to the snapshot taken at __init__ if Settings.load() fails
-        (e.g. malformed JSON mid-edit). This ensures every _set_state call picks
-        up Config.json edits without an orchestrator restart (Config-First D-13).
+        Falls back to the __init__ snapshot on any load error (e.g. malformed
+        JSON mid-edit). Monkeypatchable in unit tests via assignment.
         """
         try:
-            from adam.config import Settings
-            return Settings.load().section("flora") or self._cfg
+            return get_flora_store().current() or self._cfg
         except Exception:
             return self._cfg
 

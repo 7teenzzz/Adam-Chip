@@ -5,7 +5,7 @@
 - **Config:** только `Settings.load()` или `settings.section("name")` — никогда `DEFAULT_CONFIG` напрямую
 - **Сервисы:** только через `inference.py` — не вызывать LLM/TTS/ASR/VLM из других модулей напрямую
 - **События:** `events.EventBus` — не `print()`, не `logging.getLogger()`
-- **Hot-reload:** `tuning.py` значения читать каждый turn, не кешировать в `__init__`. Backing store — `Agent-Adam-Chip/Tuning.json` (`TuningStore`, `DEFAULT_TUNING_PATH`), редактируется через `/api/tuning` (WebUI). Дублирующая секция `tuning` в `Config.json`/`Config.schema.json` — мёртвый код, ничего её не читает (см. ROADMAP backlog по очистке).
+- **Hot-reload:** `tuning.py` значения читать каждый turn, не кешировать в `__init__`. Backing store — `Agent-Adam-Chip/iAdam.json` (`TuningStore`, `DEFAULT_TUNING_PATH`), редактируется через `/api/tuning` (WebUI). Дублирующая секция `tuning` в `Config.json`/`Config.schema.json` — мёртвый код, ничего её не читает (см. ROADMAP backlog по очистке).
 
 ## Модули (23)
 
