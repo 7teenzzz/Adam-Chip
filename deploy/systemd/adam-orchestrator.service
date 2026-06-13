@@ -33,7 +33,14 @@ Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
 # "device busy" contention. PULSE_SOURCE pins the agent to the WebCamera mic regardless
 # of the system default source (device-specific name — update if the mic is replaced).
 # When migrated to PipeWire (step 2 / Phase 30-03), pipewire-pulse honours the same vars.
-Environment=PULSE_SOURCE=alsa_input.usb-WebCamera_WebCamera_202509021958-02.mono-fallback
+# Phase 36 (audio-pipeline-restoration): WirePlumber rule
+# (~/.config/wireplumber/main.lua.d/51-webcamera-latency.lua) overrides
+# api.alsa.period-size=512 for this card, which drops node.max-latency from
+# 48000/48000 (1s IO-timer wakeup, the root cause of ~1Hz OWW cadence) to
+# 384/48000 (~8ms). Side effect: PipeWire creates a raw ".capture.0.0" node
+# instead of the audioadapter ".mono-fallback" profile node — source name
+# changed accordingly.
+Environment=PULSE_SOURCE=alsa_input.usb-WebCamera_WebCamera_202509021958-02.capture.0.0
 PermissionsStartOnly=true
 ExecStartPre=/home/i17jet/Agents/Adam-Chip/scripts/adam_power_maxn.sh
 # Start PulseAudio for this user session if not already running.
