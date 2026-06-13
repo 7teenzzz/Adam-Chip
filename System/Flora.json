@@ -23,12 +23,13 @@
   "crossfade_ms": 200,
   "accent_hold_ms": 220,
   "external_timeout_ms": 500,
-  "max_duty_pct": 71,
+  "max_duty_pct": 100,
+  "hardware_duty_ceiling_pct": 95,
   "speech": {
     "frame_interval_ms": 80,
     "hdmi_latency_offset_ms": 150,
     "base_duty_pct": 25,
-    "peak_duty_pct": 71,
+    "peak_duty_pct": 100,
     "spark_probability": 0.15
   },
   "vibro": {
@@ -46,7 +47,7 @@
     },
     "accent": {
       "crossfade_ms": 10,
-      "peak_pct": 71,
+      "peak_pct": 100,
       "attack_ms": 250,
       "vibro": true,
       "vibro_pulse_ms": 120,
@@ -56,12 +57,12 @@
     "attentive": {
       "vibro": false,
       "base_pct": 30,
-      "peak_pct": 71,
+      "peak_pct": 100,
       "wave_period_ms": 450
     },
     "think_pulse": {
       "base_pct": 35,
-      "peak_pct": 71,
+      "peak_pct": 100,
       "flash_ms": 200,
       "wave_period_ms": 200,
       "flicker_ms": 80,
@@ -72,7 +73,7 @@
       "settle_to": "breathe",
       "vibro": true,
       "base_pct": 0,
-      "peak_pct": 71,
+      "peak_pct": 100,
       "period_ms": 5000
     },
     "curious_a": {

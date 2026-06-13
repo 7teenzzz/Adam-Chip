@@ -35,7 +35,9 @@ import wave
 from enum import IntEnum
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Dict, List, Literal, Optional, Union
+
+from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger("adam.flora")
 
@@ -43,45 +45,148 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FLORA_PATH = _PROJECT_ROOT / "System" / "Flora.json"
 
 
+# ---------------------------------------------------------------------------
+# FloraConfig pydantic hierarchy — mirrors System/Flora.json schema
+# ---------------------------------------------------------------------------
+
+class FloraPresetConfig(BaseModel):
+    """Animation preset params. Field set varies per preset (system or user).
+
+    extra="allow" keeps forward-compatibility: unknown keys from Flora.json are
+    preserved and round-trip through model_dump() so _build_params sees them.
+    All Optional so model_dump(exclude_none=True) omits fields not in the JSON
+    — prevents default values from silently overriding firmware logic.
+    """
+    model_config = {"extra": "allow"}
+
+    base_pct: Optional[int] = Field(None, ge=0, le=100)
+    peak_pct: Optional[int] = Field(None, ge=0, le=100)
+    period_ms: Optional[int] = Field(None, ge=100, le=30000)
+    vibro: Union[bool, Literal["double_pulse"], None] = None
+    spark_probability: Optional[float] = Field(None, ge=0.0, le=1.0)
+    crossfade_ms: Optional[int] = Field(None, ge=0, le=2000)
+    attack_ms: Optional[int] = None
+    vibro_pulse_ms: Optional[int] = None
+    wave_period_ms: Optional[int] = Field(None, ge=50, le=30000)
+    flash_ms: Optional[int] = None
+    flicker_ms: Optional[int] = None
+    plateau_pct: Optional[int] = Field(None, ge=0, le=100)
+    from_dark: Optional[bool] = None
+    settle_to: Optional[str] = None
+
+
+class FloraSpeechConfig(BaseModel):
+    frame_interval_ms: int = Field(80, ge=33, le=500)
+    hdmi_latency_offset_ms: int = Field(150, ge=0, le=1000)
+    base_duty_pct: int = Field(25, ge=0, le=100)
+    peak_duty_pct: int = Field(100, ge=0, le=100)
+    spark_probability: float = Field(0.15, ge=0.0, le=1.0)
+
+
+class FloraVibroConfig(BaseModel):
+    intensity_pct: int = Field(95, ge=0, le=100)
+    silent_states: List[str] = Field(default_factory=lambda: ["attentive"])
+
+
+class FloraSequenceStep(BaseModel):
+    preset: str
+    hold_ms: int = Field(1000, ge=50, le=60000)
+    crossfade_ms: Optional[int] = Field(None, ge=0, le=2000)
+
+
+class FloraSequenceConfig(BaseModel):
+    name: str
+    steps: List[FloraSequenceStep] = Field(default_factory=list)
+
+
+class FloraConfig(BaseModel):
+    """Parsed representation of System/Flora.json."""
+    enabled: bool = True
+    light_channels: List[int] = Field(default_factory=lambda: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+    vibro_channels: List[int] = Field(default_factory=lambda: [0, 1, 2, 3])
+    tick_ms: int = Field(20, ge=10, le=100)
+    crossfade_ms: int = Field(200, ge=0, le=2000)
+    accent_hold_ms: int = Field(220, ge=0, le=2000)
+    external_timeout_ms: int = Field(500, ge=100, le=5000)
+    # UI-facing global ceiling (0-100, artist-controlled). Individual preset
+    # peak_pct/peak_duty_pct values are clamped to this, then to
+    # hardware_duty_ceiling_pct below — see _effective_max_duty.
+    max_duty_pct: float = Field(100.0, ge=0, le=100)
+    # Fixed hardware safety headroom, applied once on top of max_duty_pct
+    # (_effective_max_duty). Keeps the PCA9685 below true 100% PWM
+    # regardless of max_duty_pct / preset values.
+    hardware_duty_ceiling_pct: float = Field(95.0, ge=0, le=100)
+    speech: FloraSpeechConfig = Field(default_factory=FloraSpeechConfig)
+    vibro: FloraVibroConfig = Field(default_factory=FloraVibroConfig)
+    states: Dict[str, FloraPresetConfig] = Field(default_factory=dict)
+    user_presets: Dict[str, FloraPresetConfig] = Field(default_factory=dict)
+    sequences: List[FloraSequenceConfig] = Field(default_factory=list)
+    emotion_map: Dict[str, str] = Field(default_factory=dict)
+
+
 class FloraStore:
     """Hot-reloadable loader for System/Flora.json.
 
     Independent from Settings / Config.json so flora tuning can be edited
     and reloaded without touching the main runtime config. Mirrors the
-    TuningStore pattern: mtime-based reload on every current() call, atomic
-    save via temp-file rename.
+    TuningStore pattern: mtime-based reload, atomic save, pydantic validation.
+
+    current()      → FloraConfig (typed, for new callers)
+    current_dict() → dict       (raw JSON, used internally by _live_flora_cfg)
+    apply_patch()  → dict       (validates via FloraConfig before writing)
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else DEFAULT_FLORA_PATH
         self._lock = threading.Lock()
         self._mtime: float = 0.0
-        self._data: dict[str, Any] = {}
+        self._raw: dict[str, Any] = {}
+        self._cache: FloraConfig = FloraConfig()
         self._load_locked()
 
     def _load_locked(self) -> dict[str, Any]:
         try:
             mtime = self.path.stat().st_mtime
-            if mtime == self._mtime and self._data:
-                return self._data
+            if mtime == self._mtime and self._raw:
+                return self._raw
             with self.path.open("r", encoding="utf-8") as fh:
-                self._data = json.load(fh)
+                data = json.load(fh)
+            try:
+                self._cache = FloraConfig.model_validate(data)
+            except ValidationError as exc:
+                logger.warning("Flora.json validation warning (using partial data): %s", exc)
+                self._cache = FloraConfig.model_validate(data, strict=False)
+            self._raw = data
             self._mtime = mtime
         except Exception:
             pass
-        return self._data
+        return self._raw
 
-    def current(self) -> dict[str, Any]:
-        """Return flora config, reloading from disk if the file changed."""
+    def current(self) -> FloraConfig:
+        """Return parsed FloraConfig (typed). Reloads from disk if file changed."""
+        with self._lock:
+            self._load_locked()
+            return self._cache
+
+    def current_dict(self) -> dict[str, Any]:
+        """Return raw flora data as dict. Used internally by _live_flora_cfg for
+        backward-compatible dict access across existing FloraController callers."""
         with self._lock:
             return copy.deepcopy(self._load_locked())
 
     def apply_patch(self, patch: dict[str, Any]) -> dict[str, Any]:
-        """Deep-merge *patch* into the current flora data (in memory + reload first)."""
+        """Deep-merge *patch*, validate via FloraConfig, save atomically.
+
+        Raises ValidationError if the merged result fails schema validation —
+        the file is NOT written on validation failure.
+        """
         with self._lock:
-            self._load_locked()  # refresh before merge
-            self._data = _deep_merge_flora(self._data, patch)
-            return copy.deepcopy(self._data)
+            self._load_locked()
+            merged = _deep_merge_flora(self._raw, patch)
+            validated = FloraConfig.model_validate(merged)  # raises on bad data
+            self._raw = merged
+            self._cache = validated
+            return copy.deepcopy(merged)
 
     def save(self) -> Path:
         """Write current flora data to Flora.json atomically."""
@@ -89,7 +194,7 @@ class FloraStore:
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")
             tmp.parent.mkdir(parents=True, exist_ok=True)
             with tmp.open("w", encoding="utf-8") as fh:
-                json.dump(self._data, fh, ensure_ascii=False, indent=2, sort_keys=False)
+                json.dump(self._raw, fh, ensure_ascii=False, indent=2, sort_keys=False)
                 fh.write("\n")
             os.replace(tmp, self.path)
         return self.path
@@ -178,7 +283,7 @@ class FloraController:
         self._frame_interval_ms: int = int(self._speech_cfg.get("frame_interval_ms", 80))
         self._hdmi_offset_ms: int = int(self._speech_cfg.get("hdmi_latency_offset_ms", 150))
         self._base_duty_pct: float = float(self._speech_cfg.get("base_duty_pct", 25))
-        self._peak_duty_pct: float = float(self._speech_cfg.get("peak_duty_pct", 71))
+        self._peak_duty_pct: float = float(self._speech_cfg.get("peak_duty_pct", 100))
         self._spark_probability: float = float(self._speech_cfg.get("spark_probability", 0.15))
 
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
@@ -406,13 +511,14 @@ class FloraController:
     # ── State push ─────────────────────────────────────────────────────
 
     def _live_flora_cfg(self) -> dict[str, Any]:
-        """Return current flora config — re-read from Flora.json for hot-reload.
+        """Return current flora config as raw dict — re-read from Flora.json for hot-reload.
 
-        Falls back to the __init__ snapshot on any load error (e.g. malformed
-        JSON mid-edit). Monkeypatchable in unit tests via assignment.
+        Returns raw dict (not FloraConfig) so all existing callers using .get()
+        continue to work unchanged. Falls back to __init__ snapshot on load error.
+        Monkeypatchable in unit tests via assignment.
         """
         try:
-            return get_flora_store().current() or self._cfg
+            return get_flora_store().current_dict() or self._cfg
         except Exception:
             return self._cfg
 
@@ -434,7 +540,7 @@ class FloraController:
     async def _set_state(self, state: str, **overrides: Any) -> None:
         """Build per-state params from the flora config and POST the transition.
 
-        All numbers come from settings.section("flora") (Config-First). Vibro is
+        All numbers come from FloraStore / System/Flora.json (Config-First). Vibro is
         forced off for any preset in silent_states (belt-and-suspenders mirror of
         the firmware, D-11). Percent duties are sent raw — gamma is firmware-side.
         """
@@ -502,6 +608,19 @@ class FloraController:
         self._current_priority = None
         await self._restore_p2()
 
+    def _effective_max_duty(self, flora: dict[str, Any]) -> int:
+        """Single mapping point: UI ceiling (max_duty_pct, 0-100) -> raw PWM duty.
+
+        max_duty_pct is the artist-controlled global ceiling on a 0-100 logical
+        scale. hardware_duty_ceiling_pct (default 95) is a fixed hardware safety
+        headroom applied once on top, so the PCA9685 never receives a raw duty
+        above that physical margin regardless of max_duty_pct or any preset's
+        own peak_pct/peak_duty_pct.
+        """
+        max_duty_pct: float = float(flora.get("max_duty_pct", 100))
+        hw_ceiling_pct: float = float(flora.get("hardware_duty_ceiling_pct", 95))
+        return int(round(self._value_max * (max_duty_pct / 100.0) * (hw_ceiling_pct / 100.0)))
+
     def _build_params(self, state: str) -> dict[str, Any]:
         """Translate a config preset into the flat param dict the firmware expects.
 
@@ -523,8 +642,7 @@ class FloraController:
         vibro_intensity_pct = int(vibro_cfg.get("intensity_pct", self._vibro_intensity_pct))
         silent_states: set[str] = set(vibro_cfg.get("silent_states", list(self._silent_states)))
         # D-03 safe-ceiling: global raw-PWM cap, hot-reload-aware.
-        max_duty_pct: float = float(flora.get("max_duty_pct", 100))
-        max_duty: int = int(round(self._value_max * max_duty_pct / 100.0))
+        max_duty: int = self._effective_max_duty(flora)
 
         # SmartFlora (Phase 37): fall back to user_presets when state is not a system preset.
         user_presets_cfg: dict[str, Any] = flora.get("user_presets", {}) or {}
@@ -627,8 +745,7 @@ class FloraController:
         D-03: every duty is clamped to max_duty (flora.max_duty_pct, hot-reload).
         """
         flora = self._live_flora_cfg()
-        max_duty_pct: float = float(flora.get("max_duty_pct", 100))
-        max_duty: int = int(round(self._value_max * max_duty_pct / 100.0))
+        max_duty: int = self._effective_max_duty(flora)
 
         base = min(int(round(self._value_max * self._base_duty_pct / 100.0)), max_duty)
         peak = min(int(round(self._value_max * self._peak_duty_pct / 100.0)), max_duty)
@@ -730,8 +847,7 @@ class FloraController:
         spark_probability: float = float(speech_cfg.get("spark_probability", self._spark_probability))
         vibro_intensity_pct: int = int((flora.get("vibro") or {}).get("intensity_pct", self._vibro_intensity_pct))
 
-        max_duty_pct: float = float(flora.get("max_duty_pct", 100))
-        max_duty: int = int(round(self._value_max * max_duty_pct / 100.0))
+        max_duty: int = self._effective_max_duty(flora)
 
         peak_duty = min(
             int(round(self._value_max * peak_duty_pct / 100.0)), max_duty
