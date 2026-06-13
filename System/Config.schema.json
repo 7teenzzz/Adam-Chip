@@ -420,6 +420,11 @@
       "type": "object",
       "description": "External inference service endpoints and parameters.",
       "properties": {
+        "startup_wait_for": {
+          "type": "string",
+          "description": "Comma-separated list of service names that must be healthy before the voice loop starts. Empty string (default) falls back to the built-in default 'llm,tts,asr'. Priority: ADAM_EXPECTED_SERVICES env > this field > built-in default. Set to 'llm,tts,asr,vlm' to require Cosmos/VLM at startup (adds up to 120s wait when VLM is down).",
+          "default": ""
+        },
         "llm": {
           "type": "object",
           "description": "LLM service configuration (llama.cpp via OpenAI-compatible API).",

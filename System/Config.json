@@ -82,6 +82,7 @@
     "scene_context_count": 1
   },
   "services": {
+    "startup_wait_for": "",
     "llm": {
       "provider": "openai",
       "base_url": "http://127.0.0.1:8081/v1",
