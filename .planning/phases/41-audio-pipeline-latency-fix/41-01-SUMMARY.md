@@ -1,15 +1,16 @@
 ---
 phase: 41-audio-pipeline-latency-fix
 plan: 01
-status: partial
+status: resolved (cross-branch, see addendum)
 subsystem: audio/pipewire
-tags: [wireplumber, pipewire, oww, audio-cadence]
+tags: [wireplumber, pipewire, oww, audio-cadence, usb]
 key-files:
   created:
     - "~/.config/wireplumber/main.lua.d/51-webcamera-latency.lua"
 metrics:
   before_oww_hz: 1.5
   after_oww_hz: 3.5
+  after_usb_fix_oww_hz: 12.64
   target_oww_hz: 12.5
 ---
 
@@ -78,10 +79,88 @@ The wave cadence improvement (1.5 → 3.5 Hz) is meaningful — Wave 2 OWW calib
 3. **Restart the orchestrator** (fresh arecord → new PulseAudio stream negotiation):
    The current arecord connection may have negotiated its stream latency before the PipeWire fix was fully in effect. A fresh connection might pick up smaller buffer parameters.
 
-### Self-Check: PARTIAL
+### Self-Check: PARTIAL (at time of writing — see addendum below)
 
 - Override file present with correct content ✓
 - WirePlumber restarted, services active ✓
 - node.latency=512/48000 applied to WebCamera node ✓
 - oww_score cadence improved (1.5→3.5 Hz) but BELOW 8.3 Hz threshold ✗
 - Acceptance criteria NOT fully met (42/12s vs ≥100 required)
+
+---
+
+## Addendum (2026-06-13, cross-branch finding from `audio-pipeline-restoration`)
+
+**The remaining 3.5→12.5 Hz gap was NOT a PipeWire/WirePlumber problem — it was a
+physical USB Full-Speed vs High-Speed negotiation issue on the WebCamera's hub
+port, one layer below everything diagnosed in this plan.**
+
+A parallel branch (`audio-pipeline-restoration`, diverged from `main@37830af`,
+independent capture architecture via `_run_local`/`arecord` instead of
+`LocalMicReader`) ran the same root-cause chase and found:
+
+- `node.max-latency=48000/48000` confirmed stuck (matches this plan's finding) —
+  but even with `api.alsa.period-size=512` applied (Attempt 3, same override as
+  here), raw `arecord -D pulse` throughput stayed at **~8.3%** of nominal at
+  16kHz, 16kHz+`PULSE_LATENCY_MSEC=20`, AND native 48kHz — ruling out resampling,
+  WirePlumber config, and `PULSE_LATENCY_MSEC` (option 2 above) as fixes.
+- `sudo usbreset` on the device → identical re-enumeration, same port, same 8.3%
+  — ruled out stuck-USB-state.
+- **Empirical fix (today)**: `/proc/asound/card0/stream0` showed `full speed`
+  (12 Mbps) on port `1-2.2` — the WebCamera was on a USB hub port negotiating
+  Full-Speed instead of High-Speed (480 Mbps), capping real throughput at ~8%
+  regardless of OS/driver/PipeWire configuration. User moved the physical cable
+  to port `1-2.4`. Device re-enumerated `usb 1-2.4: new HIGH-SPEED USB device
+  number 6`. `/proc/asound/card0/stream0` now shows `high speed`,
+  `Data packet interval: 1000 us`. Throughput jumped to **91.7% (48kHz) / 95.8%
+  (16kHz)**. Live `oww_score` cadence: **12.64 Hz** (target ~12.5 Hz, met).
+- **Caveat**: the user reports having tried other USB ports in past sessions
+  without this fixing the issue. The kernel journal only retains the current
+  boot (today, from 18:05) — no record of those earlier attempts to compare
+  against. So "any High-Speed port permanently fixes this" is NOT confirmed as
+  a general rule; what IS confirmed is that the CURRENT live system, on port
+  `1-2.4` with the Attempt-3 WirePlumber override, measures 91.7-95.8%
+  throughput / 12.64 Hz right now, reproducibly. If cadence regresses again,
+  check `/proc/asound/card0/stream0` for `full speed` vs `high speed` as a fast
+  triage before re-diagnosing PipeWire.
+
+### Verified against THIS branch's exact `LocalMicReader._start_process()`
+
+To confirm this fix carries over to SmartFlora's architecture (not just
+`_run_local`), the exact `_find_pulse_source("webcamera")` + `_start_process()`
+invocation from `local_mic_reader.py` (dynamic PULSE_SOURCE resolution via
+`pactl list short sources`, plus `PULSE_LATENCY_MSEC=20`) was replicated on the
+current (post-USB-fix) hardware:
+
+- `_find_pulse_source("webcamera")` → resolves
+  `alsa_input.usb-WebCamera_WebCamera_202509021958-02.capture.0.0`
+  (the renamed node from the period-size override — substring match on
+  "webcamera" still works, no code change needed)
+- `arecord -D pulse -f S16_LE -r 16000 -c 1 -t raw` with that `PULSE_SOURCE` +
+  `PULSE_LATENCY_MSEC=20` → **95.2% throughput, stable 128ms chunk cadence**
+  (identical to the `_run_local` measurement above)
+
+### Conclusion
+
+Plan 41-01's acceptance criteria (≥8.3 Hz / target 12.5 Hz) are now met **with no
+further code or WirePlumber changes** — the blocker was hardware (USB port
+speed), fixed by the user moving the cable. The existing
+`51-webcamera-latency.lua` override (period-size=512) stays in place, untouched
+— it's a real (if secondary) improvement and the renamed `.capture.0.0` node is
+already handled correctly by `_find_pulse_source`'s substring match.
+
+**Plan 41-02's hardcoded `PULSE_SOURCE=...mono-fallback` in
+`adam-orchestrator.service`** is dead config (overridden by
+`LocalMicReader._start_process()`'s dynamic resolution) — harmless, but could be
+removed/updated for clarity in a future cleanup.
+
+**Plans 41-03 (OWW threshold recalibration) and 41-04 (full e2e voice-loop
+verification) are now unblocked** — cadence precondition is met. As a data
+point: on `audio-pipeline-restoration`, the full wake→listen→reply cycle was
+confirmed working live with the CURRENT (unrecalibrated) `wake_word.threshold=0.01`,
+`debounce_hits=2` — Plan 41-03's recalibration may still be worth doing for
+false-positive safety at the new (correct) cadence, but is not blocking.
+
+Full details: `BRANCH.md` (item 9-10) and
+`.planning/phases/36-audio-pipeline-restoration/36-CONTEXT.md` on
+`audio-pipeline-restoration`.
