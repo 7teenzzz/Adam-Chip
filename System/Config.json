@@ -21,13 +21,13 @@
   "media": {
     "video": {
       "primary": "jetson_gstreamer",
-      "gstreamer_pipeline": "v4l2src device=/dev/video0 ! image/jpeg,framerate=30/1 ! jpegdec ! videoconvert ! video/x-raw,format=RGB ! appsink name=adam_frames drop=true max-buffers=1 sync=false",
+      "gstreamer_pipeline": "v4l2src device=/dev/adam-camera ! image/jpeg,framerate=30/1 ! jpegdec ! videoconvert ! video/x-raw,format=RGB ! appsink name=adam_frames drop=true max-buffers=1 sync=false",
       "remote_rtsp_url": "",
       "preview_enabled": true,
       "esp_mjpeg_url": "http://10.10.10.171:81/stream",
       "esp_fail_threshold": 3,
       "esp_retry_interval_sec": 30.0,
-      "video_device": "/dev/video0",
+      "video_device": "/dev/adam-camera",
       "camera_width": 480,
       "camera_height": 360,
       "camera_quality": 75,

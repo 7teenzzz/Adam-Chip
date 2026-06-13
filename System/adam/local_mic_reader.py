@@ -277,7 +277,7 @@ class LocalMicReader:
             # if the device disappeared and came back, PipeWire creates a new node with
             # the same name — a single probe is enough (outer loop provides retry cadence).
             if self._card_name:
-                new_src = self._find_pulse_source(self._card_name, max_retries=1)
+                new_src = self._find_pulse_source(self._card_name, max_retries=3)
                 if new_src != self._pulse_source:
                     self._emit("local_mic_pulse_source_changed", {
                         "old": self._pulse_source, "new": new_src,

@@ -107,12 +107,35 @@ class MediaHealth:
 
         if arecord:
             if input_device in ("pulse", "pipewire"):
-                # PulseAudio/PipeWire: check daemon is responding and has at least one source.
+                # PulseAudio/PipeWire: check daemon is responding and the target USB mic is present.
                 pactl = shutil.which("pactl")
                 if pactl:
                     code, out = _run([pactl, "list", "sources", "short"])
-                    audio_input_ready = code == 0 and bool(out.strip())
-                    audio_details.append(f"pulse ok ({input_device})" if audio_input_ready else f"pulse: {out[:200]}")
+                    if code == 0 and out.strip():
+                        # Check for the target USB mic specifically, not just any source.
+                        # Falls back to "any source present" if card_name is not configured.
+                        card_name = (
+                            self.config.get("audio", {})
+                            .get("input_gain", {})
+                            .get("card_name", "")
+                            .lower()
+                        )
+                        if card_name:
+                            audio_input_ready = any(
+                                card_name in line.lower()
+                                for line in out.splitlines()
+                                if not line.strip().endswith(".monitor")
+                            )
+                            if not audio_input_ready:
+                                audio_details.append(f"USB mic '{card_name}' not found in PulseAudio sources")
+                            else:
+                                audio_details.append(f"pulse ok: {card_name} found ({input_device})")
+                        else:
+                            audio_input_ready = True
+                            audio_details.append(f"pulse ok ({input_device})")
+                    else:
+                        audio_input_ready = False
+                        audio_details.append(f"pulse: {out[:200]}")
                 else:
                     # pactl not available; fall back to arecord -l listing
                     code, out = _run([arecord, "-l"])
