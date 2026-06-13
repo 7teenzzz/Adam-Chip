@@ -99,11 +99,21 @@ class LocalMicReader:
 
         # PULSE_SOURCE: find PipeWire source by card_name, with retry for cold-start boot races
         card_name = audio_cfg.get("input_gain", {}).get("card_name", "")
+        self._card_name: str = card_name  # kept for hotplug re-resolution on each reconnect
         self._pulse_source_retries = int(audio_cfg.get("pulse_source_retries", 3))
         self._pulse_source_retry_delay_sec = float(audio_cfg.get("pulse_source_retry_delay_sec", 1.0))
         self._pulse_source: str | None = None
         if card_name:
             self._pulse_source = self._find_pulse_source(card_name)
+
+        # Silence watchdog: restart arecord after this many consecutive near-zero frames.
+        # Catches the case where PULSE_SOURCE resolves to a fallback (monitor/disconnected
+        # device) that silently returns zeros instead of failing — so the reconnect loop
+        # never fires.  Config key: mic_silence_watchdog_sec (default 12s).
+        _watchdog_sec = float(audio_cfg.get("mic_silence_watchdog_sec", 12.0))
+        frames_per_sec = 1000.0 / max(1, self._frame_ms)
+        self._silence_watchdog_frames: int = max(50, int(_watchdog_sec * frames_per_sec))
+        self._silence_frames: int = 0
 
         # Consumer asyncio queue (voice_loop reads via get_chunk)
         self._queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=_QUEUE_MAX_CONSUMER)
@@ -148,14 +158,16 @@ class LocalMicReader:
 
     # ── Internal: arecord process management ──────────────────────────
 
-    def _find_pulse_source(self, card_name: str) -> str | None:
+    def _find_pulse_source(self, card_name: str, max_retries: int | None = None) -> str | None:
         """Find a PipeWire/PulseAudio source whose name contains card_name.
 
-        Retries up to self._pulse_source_retries times with a fixed delay between
-        attempts to survive cold-start boot races where PipeWire/USB enumeration
-        lags behind the orchestrator startup.
+        Retries up to max_retries (default: self._pulse_source_retries) times with
+        a fixed delay between attempts.  Pass max_retries=1 for reconnect-time probes
+        where the outer reconnect loop provides the retry cadence; use the default
+        (3 retries + sleep) only at cold-start where the boot race can be long.
         """
-        for attempt in range(self._pulse_source_retries):
+        retries = self._pulse_source_retries if max_retries is None else max_retries
+        for attempt in range(retries):
             try:
                 result = subprocess.run(
                     ["pactl", "list", "short", "sources"],
@@ -170,10 +182,10 @@ class LocalMicReader:
                         return parts[1]
             except Exception as exc:
                 self._emit("local_mic_pulse_source_error", {"error": str(exc), "attempt": attempt})
-            if attempt < self._pulse_source_retries - 1:
+            if attempt < retries - 1:
                 time.sleep(self._pulse_source_retry_delay_sec)
         self._emit("local_mic_pulse_source_unresolved", {
-            "attempts": self._pulse_source_retries, "card_name": card_name,
+            "attempts": retries, "card_name": card_name,
         })
         return None
 
@@ -261,6 +273,19 @@ class LocalMicReader:
     async def _open_drain_reconnect_loop(self) -> None:
         """Outer open/drain/reconnect loop. Runs until _running goes False."""
         while self._running:
+            # Re-resolve PULSE_SOURCE before each attempt so USB hotplug is handled:
+            # if the device disappeared and came back, PipeWire creates a new node with
+            # the same name — a single probe is enough (outer loop provides retry cadence).
+            if self._card_name:
+                new_src = self._find_pulse_source(self._card_name, max_retries=1)
+                if new_src != self._pulse_source:
+                    self._emit("local_mic_pulse_source_changed", {
+                        "old": self._pulse_source, "new": new_src,
+                    })
+                self._pulse_source = new_src
+
+            self._silence_frames = 0  # reset watchdog on each new connection attempt
+
             try:
                 self._process = self._start_process()
                 stdout = self._process.stdout
@@ -322,10 +347,26 @@ class LocalMicReader:
             if len(chunk) < self._frame_bytes:
                 continue
 
-            # Always emit audio level (B-1: even when muted)
+            # Silence watchdog: cheap per-frame RMS (2 bytes per sample, signed 16-bit).
+            # If arecord falls back to a monitor/disconnected source, it returns true zeros
+            # indefinitely rather than failing — this catches that case and forces a restart
+            # so _open_drain_reconnect_loop can re-probe the correct PULSE_SOURCE.
+            rms = audioop.rms(chunk, 2)
+            if rms < 10:
+                self._silence_frames += 1
+                if self._silence_frames >= self._silence_watchdog_frames:
+                    raise RuntimeError(
+                        f"silence watchdog triggered after {self._silence_frames} frames "
+                        f"(~{self._silence_frames * self._frame_ms / 1000:.0f}s of silence) — "
+                        "re-probing PULSE_SOURCE"
+                    )
+            else:
+                self._silence_frames = 0
+
+            # Always emit audio level (B-1: even when muted); pass pre-computed rms
             self._level_tick += 1
             if self._level_tick >= self._audio_level_emit_every_n:
-                self._emit_audio_level(chunk)
+                self._emit_audio_level(chunk, rms=rms)
                 self._level_tick = 0
 
             # Always feed barge-in queue (OWW during TTS)
@@ -384,8 +425,9 @@ class LocalMicReader:
         except Exception:
             pass
 
-    def _emit_audio_level(self, mono_chunk: bytes) -> None:
-        rms = audioop.rms(mono_chunk, 2)
+    def _emit_audio_level(self, mono_chunk: bytes, rms: int | None = None) -> None:
+        if rms is None:
+            rms = audioop.rms(mono_chunk, 2)
         norm = round(min(1.0, (rms / max(1, self._normalize_factor)) ** 0.5), 3)
         payload: dict[str, Any] = {
             "level": norm,

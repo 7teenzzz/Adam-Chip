@@ -379,6 +379,13 @@
               "maximum": 100,
               "description": "Writing-side sampler for high-frequency audio_level events in data/adam/events.jsonl. N means 'write every Nth event to disk' — at default 5 with 25 Hz spectrum cadence and bands[24] payload, on-disk pressure drops from ~36 MB/hour to ~7 MB/hour. SSE subscribers and the in-memory recent-events deque are NOT affected — every audio_level event is still broadcast at full cadence, so the chat-panel EQ widget keeps its 25 Hz responsiveness. Set to 1 to revert to legacy 1:1 logging (full forensic completeness, no disk-side compression). Set to 25 for maximum compression (~1 Hz effective on-disk cadence). Mitigation for RESEARCH §5/§12 (Phase 21A CONTEXT D-04).",
               "default": 5
+            },
+            "mic_silence_watchdog_sec": {
+              "type": "number",
+              "minimum": 3.0,
+              "maximum": 120.0,
+              "description": "LocalMicReader silence watchdog: if the captured audio RMS stays below 10 for this many consecutive seconds, arecord is killed and restarted with a fresh PULSE_SOURCE probe. Catches the case where the USB mic disconnects but PulseAudio/PipeWire silently falls back to a zero-level monitor source instead of failing — without this guard, arecord runs forever reading zeros and the reconnect loop never fires. At frame_ms=20, 12s = 600 consecutive near-zero frames. Lower values may cause false restarts in very quiet rooms (use 20+ for reverberant spaces); higher values delay hotplug recovery.",
+              "default": 12.0
             }
           }
         },
@@ -1098,6 +1105,35 @@
               ]
             }
           }
+        },
+        "scripts": {
+          "type": "array",
+          "description": "Scripts skill — on a matching intent, reads a fixed text file verbatim line-by-line (bypassing LLM). No pool rotation, no cooldown. Each array entry is one script; add new entries to extend without code changes.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "description": "When false, this script entry is ignored by IntentRouter and ScriptGate.",
+                "default": true
+              },
+              "id": {
+                "type": "string",
+                "description": "Unique identifier for this script. Used as the skill_id in events/metrics and to key the ScriptGate internal map."
+              },
+              "intent_keywords": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Lowercase substrings; if any appears in the transcript the turn is routed to this script. Priority: after jokes, before weather."
+              },
+              "text_path": {
+                "type": "string",
+                "description": "Relative path (from PROJECT_ROOT) to a plain-text file. Each non-empty line becomes one TTS paragraph, spoken sequentially."
+              }
+            },
+            "required": ["id", "intent_keywords", "text_path"]
+          },
+          "default": []
         }
       }
     }

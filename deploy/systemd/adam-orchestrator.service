@@ -56,7 +56,7 @@ ExecStart=/home/i17jet/Agents/Adam-Chip/.venv/bin/python /home/i17jet/Agents/Ada
 Restart=on-failure
 RestartSec=3
 TimeoutStartSec=300
-TimeoutStopSec=15
+TimeoutStopSec=30
 KillMode=mixed
 KillSignal=SIGTERM
 
