@@ -198,7 +198,7 @@
         "hz": 220.0
       },
       "bands": [],
-      "monitor_tap": "post_eq"
+      "monitor_tap": "pre_eq"
     },
     "presets": [],
     "active_preset": null
@@ -211,18 +211,19 @@
   "diagnostics": {
     "log_level": "info",
     "metrics_enabled": true,
-    "trace_prompts": false
+    "trace_prompts": false,
+    "trace_post_tts_lag": false
   },
   "identity": {
     "enabled": true,
     "aiim_formula_path": "Agent Adam Chip/About/Identity.md",
     "base_weights": {
-      "wi": 0.65,
+      "wi": 0.72,
       "lo": 0.7,
-      "im": 0.65,
+      "im": 0.72,
       "ho": 0.6,
       "co": 0.88,
-      "em": 0.6,
+      "em": 0.65,
       "be": 0.65,
       "sp": 0.85,
       "se": 0.92,
@@ -445,5 +446,22 @@
       "im_positive_delta": 0.06,
       "im_negative_delta": -0.04
     }
-  }
+  },
+  "personality_presets": {
+    "exhibition_public": {
+      "description": "Публичная выставка. Незнакомые зрители.",
+      "overrides": {
+        "identity.default_emotion": "curious",
+        "identity.decay_silence_threshold_seconds": 60
+      }
+    },
+    "creator_conversation": {
+      "description": "Разговор с создателем. Доверительный контекст.",
+      "overrides": {
+        "identity.default_emotion": "warm",
+        "identity.decay_silence_threshold_seconds": 120
+      }
+    }
+  },
+  "active_preset": "exhibition_public"
 }

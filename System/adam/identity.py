@@ -349,7 +349,7 @@ class IntentionTracker:
                 cooldown = cfg.get("cooldown_turns", 5) if isinstance(cfg, dict) else getattr(cfg, "cooldown_turns", 5)
                 new_state.set_cooldown(intention_name, cooldown)
 
-        # become_unreadable: keyword phrases from tuning (configurable via Tuning.json)
+        # become_unreadable: keyword phrases from tuning (configurable via iAdam.json)
         if not new_state.on_cooldown("become_unreadable"):
             cfg = triggers.get("become_unreadable")
             if cfg is not None:

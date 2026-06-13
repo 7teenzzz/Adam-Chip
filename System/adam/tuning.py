@@ -1,6 +1,6 @@
 """Runtime-настройки персоны Адама.
 
-`Tuning.json` редактируется из WebUI и hot-reloadable.
+`iAdam.json` редактируется из WebUI и hot-reloadable.
 Инфраструктура (камеры, MCU, endpoints LLM/ASR/TTS) — отдельно в Settings/Config.json.
 """
 from __future__ import annotations
@@ -459,6 +459,16 @@ class AudioInputTuning(BaseModel):
     active_preset: Optional[str] = None
 
 
+# ---------- Personality presets ----------
+
+
+class PersonalityPreset(BaseModel):
+    """One named personality preset. overrides uses dot-path keys like 'identity.default_emotion'."""
+
+    description: str = ""
+    overrides: Dict[str, Any] = Field(default_factory=dict)
+
+
 class Tuning(BaseModel):
     """Корневая модель runtime-настроек персоны."""
 
@@ -473,6 +483,8 @@ class Tuning(BaseModel):
     prompt: PromptTuning = Field(default_factory=PromptTuning)
     diagnostics: DiagnosticsTuning = Field(default_factory=DiagnosticsTuning)
     identity: IdentityTuning = Field(default_factory=IdentityTuning)
+    personality_presets: Dict[str, PersonalityPreset] = Field(default_factory=dict)
+    active_preset: Optional[str] = None
 
 
 # ---------- Store с hot-reload ----------
