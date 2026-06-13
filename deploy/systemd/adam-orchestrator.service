@@ -33,7 +33,14 @@ Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
 # "device busy" contention. PULSE_SOURCE pins the agent to the WebCamera mic regardless
 # of the system default source (device-specific name — update if the mic is replaced).
 # When migrated to PipeWire (step 2 / Phase 30-03), pipewire-pulse honours the same vars.
-Environment=PULSE_SOURCE=alsa_input.usb-WebCamera_WebCamera_202509021958-02.mono-fallback
+# Phase 36/41: WirePlumber period-size=512 override renames the source node from
+# .mono-fallback to .capture.0.0. LocalMicReader._find_pulse_source() overrides this
+# dynamically anyway, but pin the correct name here as a defence-in-depth fallback.
+Environment=PULSE_SOURCE=alsa_input.usb-WebCamera_WebCamera_202509021958-02.capture.0.0
+# VLM (Cosmos) is optional and may not be running in maintenance/development. Exclude it
+# from the mandatory startup wait so _orchestrated_startup doesn't block 120s on VLM=down.
+# Exhibition mode ignores this env (services_confirmed=True from the exhibition gate).
+Environment=ADAM_EXPECTED_SERVICES=llm,tts,asr
 PermissionsStartOnly=true
 ExecStartPre=/home/i17jet/Agents/Adam-Chip/scripts/adam_power_maxn.sh
 # Start PulseAudio for this user session if not already running.
