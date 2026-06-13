@@ -52,7 +52,7 @@ Existing system uses an 8-point scale in CSS. All new components MUST use only t
 
 **New exceptions for this phase:**
 - 3rd-level nav indent: `padding-left: 28px` (14px base + 14px additional indent)
-- Flora table cell padding: `8px 10px` (matches `.input` padding, consistent)
+- Flora table cell padding: `8px 12px` (matches `.input` padding, consistent)
 - Identity block textarea min-height: `120px` (content-driven exception, not layout spacing)
 - Markdown rendered view body: `16px` all sides (matches `.card-body`)
 
@@ -70,7 +70,9 @@ All existing font-size tokens are confirmed from `tokens.css`. New components us
 | Body / UI default | `--fs-s` | 13px | 400 | 1.5 | `.nav-link`, `.btn`, `.input`, `.kv` values, table cells |
 | Content | `--fs-m` | 14px | 400 | 1.5 | Rendered markdown body, textarea content |
 | Heading | `--fs-l` | 17px | 500 | 1.2 | Page section headings (if any) |
-| Display | `--fs-xl` | 22px | 400 | 1.2 | Not used in Phase 42 |
+
+> **Note:** `--fs-xl` (22px) is an existing token in tokens.css but is not used in Phase 42.
+> It is excluded from the table above (max 4 sizes per contract).
 
 **New typography deltas for this phase:**
 
@@ -162,7 +164,7 @@ Do NOT add new CSS variables for plan colors — inline styles only to avoid tok
 - Element: `<button class="nav-link">` (existing style, full width)
 - Arrow: `▸` at `color: var(--accent)`, width 14px, text-align center
 - Group label: plain text at `--fs-s`, color `var(--muted)`
-- No extra padding vs current — same `padding: 10px 14px` as `.nav-link`
+- No extra padding vs current — same `padding: 8px 14px` as `.nav-link`
 
 **Visual specification — expanded group body:**
 - Container: `display: flex; flex-direction: column` (existing pattern)
@@ -219,7 +221,7 @@ Decision: use inline `style="padding-left:24px"` on subgroup headers and `style=
 - Card body content: `div.md-render` — marked.js output injected as `innerHTML`
 - `div.md-render` styling: font `--font-sans`, size `--fs-m`, line-height 1.6, color `var(--text)`
 - Rendered `h1/h2/h3`: color `var(--text)`, weight 500
-- Rendered `code`/`pre`: `background: var(--bg-2)`, `font-family: var(--font-mono)`, `font-size: var(--fs-s)`, padding `2px 6px`, border-radius `var(--radius-s)`
+- Rendered `code`/`pre`: `background: var(--bg-2)`, `font-family: var(--font-mono)`, `font-size: var(--fs-s)`, padding `4px 8px`, border-radius `var(--radius-s)`
 - Rendered `p` margin-bottom: `12px`
 - Rendered `ul/ol`: `padding-left: 20px`, `margin-bottom: 8px`
 
@@ -270,7 +272,7 @@ Configure: `marked.setOptions({ breaks: true, gfm: true })` once on startup.
 }
 .flora-table th {
   text-align: left;
-  padding: 8px 10px;
+  padding: 8px 12px;
   font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -278,7 +280,7 @@ Configure: `marked.setOptions({ breaks: true, gfm: true })` once on startup.
   border-bottom: 1px solid var(--line-strong);
 }
 .flora-table td {
-  padding: 10px 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
@@ -292,7 +294,7 @@ Configure: `marked.setOptions({ breaks: true, gfm: true })` once on startup.
   font-size: var(--fs-xs);
   font-family: var(--font-mono);
   color: var(--dim);
-  margin-top: 2px;
+  margin-top: 4px;
 }
 ```
 
@@ -306,7 +308,7 @@ input[type="range"] {
 
 **Attentive row exceptions:**
 - Base column: render `—` as `<span style="color:var(--dim)">—</span>` (no input)
-- Vибро column: render disabled checkbox `<input type="checkbox" disabled>`
+- Вибро column: render disabled checkbox `<input type="checkbox" disabled>`
 
 **Think_pulse row exceptions:**
 - Vibro: value is string `"double_pulse"` not bool → render as `<span class="badge">2×</span>` (read-only badge, not checkbox)
@@ -330,11 +332,11 @@ input[type="range"] {
 └──────────────────────────────────┘
 ```
 
-**Cell CSS:** `border: 1px solid var(--line)`, `border-radius: var(--radius-s)`, `padding: 10px 12px`, `background: var(--bg-2)`. No `.card` wrapper — the grid of cells is within one parent `.card.card-full`.
+**Cell CSS:** `border: 1px solid var(--line)`, `border-radius: var(--radius-s)`, `padding: 8px 12px`, `background: var(--bg-2)`. No `.card` wrapper — the grid of cells is within one parent `.card.card-full`.
 
 **Aspect header row (one line):**
 - Aspect code: `<span style="font-family:var(--font-mono);color:var(--dim);font-size:11px">se</span>`
-- Aspect name: `<span style="color:var(--text);font-size:13px;font-weight:500;margin-left:6px">Самость</span>`
+- Aspect name: `<span style="color:var(--text);font-size:13px;font-weight:500;margin-left:8px">Самость</span>`
 - Plan dot: `<span style="color:{PLAN_META[plan].color};font-size:10px;margin-left:auto">●</span>` (right-aligned)
 
 **Weight row:**
@@ -562,8 +564,8 @@ No third-party component registries used. No additional CDN dependencies beyond 
 
 ### Contract Summary
 
-- Spacing: 8-point scale inherited from existing system; new deltas: 3rd-level nav at 40px indent, flora table cell 10px, identity textarea 120px min-height
-- Typography: 5 existing sizes (11/13/14/17/22px), 2 weights (400 regular / 500 semibold), new delta: markdown rendered view at 14px 1.6 line-height
+- Spacing: 8-point scale inherited from existing system; new deltas: 3rd-level nav at 40px indent, flora table cell `8px 12px`, identity textarea 120px min-height
+- Typography: 4 active sizes (11/13/14/17px), 2 weights (400 regular / 500 semibold); `--fs-xl` (22px) exists in tokens.css but unused in Phase 42; new delta: markdown rendered view at 14px 1.6 line-height
 - Color: existing 60/30/10 token system confirmed; accent reserved for 7 specific element types; AIIM plan-type colors as inline styles (5 colors, no new tokens)
 - Copywriting: 11 nav labels locked, 7 action button labels, 5 flora state labels, 5 empty state messages, 5 error state messages, 0 destructive confirmations
 - Registry: no shadcn; one CDN addition (marked.js, reviewed clean 2026-06-13)
