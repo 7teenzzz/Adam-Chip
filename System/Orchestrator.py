@@ -60,7 +60,7 @@ from adam.metrics import MetricsLog
 from adam.metrics_sessions import SessionsLog
 from adam.power import PowerGate
 from adam.prompt import PromptBuilder, LeadingNoiseFilter, sanitize_reply
-from adam.skills import IntentRouter, JokeGate, WeatherProvider
+from adam.skills import IntentRouter, JokeGate, ScriptGate, WeatherProvider
 from adam.config import PROJECT_ROOT
 from adam.sound import play_local_sound
 from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
@@ -125,21 +125,24 @@ chinese_gate = EchoGate(
     pool="chinese",
 )
 
-# --- Phase 30 skills: intent-gated jokes + weather (pre-LLM providers) ---
+# --- Phase 30 / 42 skills: intent-gated jokes, weather, scripts (pre-LLM providers) ---
 _skills_cfg = settings.section("skills")
 _weather_cfg = _skills_cfg.get("weather", {}) if isinstance(_skills_cfg, dict) else {}
 _jokes_cfg = _skills_cfg.get("jokes", {}) if isinstance(_skills_cfg, dict) else {}
+_scripts_cfg = _skills_cfg.get("scripts", []) if isinstance(_skills_cfg, dict) else []
 # NOTE: keywords loaded once at startup — skills.*.intent_keywords changes in
 # Config.json require an orchestrator restart to take effect (not hot-reload).
 intent_router = IntentRouter(
     joke_keywords=list(_jokes_cfg.get("intent_keywords", [])),
     weather_keywords=list(_weather_cfg.get("intent_keywords", [])),
+    scripts=list(_scripts_cfg),
 )
 weather_provider = WeatherProvider(_weather_cfg)
 joke_gate = JokeGate(
     pool_path=PROJECT_ROOT / str(_jokes_cfg.get("pool_path") or "Agent-Adam-Chip/About/Jokes.md"),
     memory=episodic_memory,
 )
+script_gate = ScriptGate(entries=list(_scripts_cfg), project_root=PROJECT_ROOT)
 
 # Spoken framing for verbatim jokes — keeps the punchline exact while sounding
 # in-character. Empty entries bias toward deadpan (no frame) delivery.
@@ -2465,7 +2468,17 @@ async def _orchestrated_startup(services_confirmed: bool) -> None:
     Keeps the mic off during the entire sequence so OWW cannot fire on TTS audio.
     """
     await _ensure_crossover_link()
-    expected_raw = os.environ.get("ADAM_EXPECTED_SERVICES", "llm,tts,asr,vlm")
+    # VLM (Cosmos / "подсознание") is optional: scene_worker runs independently and
+    # its absence never blocks a voice turn. Exclude from the mandatory wait so cold
+    # starts without Cosmos take ~5s instead of 120s.
+    # Priority: ADAM_EXPECTED_SERVICES env (set by systemd unit or override) >
+    #           Config services.startup_wait_for  >  built-in default (llm,tts,asr).
+    _cfg_wait = settings.section("services").get("startup_wait_for", "")
+    expected_raw = (
+        os.environ.get("ADAM_EXPECTED_SERVICES")
+        or _cfg_wait
+        or "llm,tts,asr"
+    )
     expected = {s.strip() for s in expected_raw.split(",") if s.strip()}
 
     if services_confirmed:
@@ -3543,6 +3556,112 @@ async def _run_joke_turn(
     }
 
 
+async def _run_script_turn(
+    *,
+    transcript: str,
+    source: str,
+    turn_id: str | None,
+    script_id: str,
+    paragraphs: list[str],
+    acc: SessionAccumulator,
+    sensors: dict[str, Any],
+    visitor_name: str | None,
+    t_total: float,
+    asr_ms: float | None,
+) -> dict[str, Any]:
+    """Verbatim multi-paragraph script — speak a fixed text file, bypassing LLM.
+
+    Each paragraph is a separate TTS call so no single request exceeds the
+    timeout budget (long texts would time out in one shot on Jetson Silero).
+    Barge-in mid-story is honoured: the loop checks interrupt_tts between paragraphs.
+    """
+    reply = "\n".join(paragraphs)
+
+    memory.add_dialogue("viewer", transcript)
+    event_log.append(
+        "viewer_transcript",
+        {"text": transcript, "source": source, "sensors": sensors, "visitor_name": visitor_name, "skill": "script"},
+        turn_id=turn_id,
+    )
+
+    t_tts = time.perf_counter()
+    tts_degraded = False
+    tts_chunks = 0
+    for para in paragraphs:
+        if runtime_state.get("interrupt_tts"):
+            break
+        result = await _speak(para, turn_id=turn_id)
+        if result.get("degraded"):
+            tts_degraded = True
+        tts_chunks += int(result.get("chunks") or 0)
+    tts_ms = round((time.perf_counter() - t_tts) * 1000, 1)
+
+    runtime_state["last_tts_text"] = reply.lower()
+    _hist = runtime_state.setdefault("recent_tts_history", [])
+    _hist.append({"text": reply.lower(), "finished_at": time.perf_counter()})
+    if len(_hist) > 5:
+        _hist.pop(0)
+    memory.add_dialogue("adam", reply)
+    acc.note_turn("adam", reply)
+
+    total_ms = round((time.perf_counter() - t_total) * 1000, 1)
+    timings = {"asr_ms": asr_ms, "llm_ms": 0.0, "ttfv_ms": 0.0, "tts_ms": tts_ms, "total_ms": total_ms}
+    action_dict = {
+        "kind": "no_action", "mood": "neutral", "scene": None, "channel": None,
+        "value": None, "duration_ms": 0, "reason": "skill_script",
+    }
+
+    metrics_log.append({
+        "turn_id": turn_id,
+        "source": source,
+        "transcript": transcript,
+        "reply": reply,
+        "voice_degraded": tts_degraded,
+        "asr_ms": asr_ms,
+        "llm_ms": 0.0,
+        "ttfv_ms": 0.0,
+        "tts_ms": tts_ms,
+        "total_ms": total_ms,
+        "tts_chunks": tts_chunks,
+        "llm_error": False,
+        "action": "no_action",
+        "action_kind": "no_action",
+        "action_reason": "skill_script",
+        "session_id": acc.session_id,
+        "session_turn": acc.turn_count,
+        "skill": "script",
+        "skill_id": script_id,
+        "visitor_name": visitor_name,
+        "proactive": False,
+    })
+
+    event_log.append(
+        "adam_reply",
+        {
+            "text": reply,
+            "source": source,
+            "voice_degraded": tts_degraded,
+            "tts": {"ok": not tts_degraded, "degraded": tts_degraded, "chunks": tts_chunks},
+            "skill": "script",
+            "skill_id": script_id,
+            "timings": timings,
+        },
+        turn_id=turn_id,
+    )
+
+    return {
+        "transcript": transcript,
+        "reply": reply,
+        "source": source,
+        "action": action_dict,
+        "mcu": None,
+        "timings": timings,
+        "turn_id": turn_id,
+        "skill": "script",
+        "skill_id": script_id,
+    }
+
+
 async def _run_dialogue_turn(transcript: str, source: str, asr_ms: float | None = None, turn_id: str | None = None) -> dict[str, Any]:
     if turn_id is None:
         turn_id = str(uuid4())[:8]
@@ -3713,6 +3832,22 @@ async def _run_dialogue_turn_locked(transcript: str, source: str, asr_ms: float 
                 source=source,
                 turn_id=turn_id,
                 joke=joke,
+                acc=acc,
+                sensors=sensors,
+                visitor_name=visitor_name,
+                t_total=t_total,
+                asr_ms=asr_ms,
+            )
+    elif intent is not None and intent.startswith("script:"):
+        script_id = intent[7:]
+        paras = script_gate.paragraphs(script_id)
+        if paras:
+            return await _run_script_turn(
+                transcript=transcript,
+                source=source,
+                turn_id=turn_id,
+                script_id=script_id,
+                paragraphs=paras,
                 acc=acc,
                 sensors=sensors,
                 visitor_name=visitor_name,

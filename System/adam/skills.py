@@ -1,13 +1,14 @@
-"""Pre-LLM skill providers — jokes and weather (Phase 30).
+"""Pre-LLM skill providers — jokes, weather, and scripts (Phase 30 / 42).
 
 Both skills run BEFORE the prompt is built, preserving the LLM-purity invariant
 (no tool-calls, pure Russian text). They follow the same shape as echoes_gate:
 intent is detected outside the LLM, then we either inject context (weather) or
-short-circuit to a verbatim spoken reply (jokes).
+short-circuit to a verbatim spoken reply (jokes / scripts).
 
-- IntentRouter   — keyword classifier transcript -> "joke" | "weather" | None.
+- IntentRouter   — keyword classifier transcript -> "joke" | "weather" | "script:<id>" | None.
 - WeatherProvider — background-cached fetch from Open-Meteo (direct egress).
 - JokeGate       — verbatim selector over a curated pool with per-joke cooldown.
+- ScriptGate     — verbatim fixed-text provider keyed by id (no pool, no cooldown).
 """
 from __future__ import annotations
 
@@ -36,19 +37,38 @@ class IntentRouter:
     LLM-based classification would double prefill latency (~9 s/turn on Gemma 4
     E4B SWA cache), so cheap substring matching is used instead. Matching is
     substring (not word-boundary) so stems like "погод" catch all inflections.
-    Joke intent takes priority over weather when both match.
+    Priority: joke > script > weather.
     """
 
-    def __init__(self, *, joke_keywords: list[str], weather_keywords: list[str]) -> None:
+    def __init__(
+        self,
+        *,
+        joke_keywords: list[str],
+        weather_keywords: list[str],
+        scripts: list[dict[str, Any]] | None = None,
+    ) -> None:
         self._joke = [k.lower() for k in joke_keywords if k]
         self._weather = [k.lower() for k in weather_keywords if k]
+        # list of (id, [keywords]) for enabled script entries
+        self._scripts: list[tuple[str, list[str]]] = []
+        for entry in (scripts or []):
+            if not entry.get("enabled", True):
+                continue
+            sid = str(entry.get("id", "")).strip()
+            kws = [k.lower() for k in entry.get("intent_keywords", []) if k]
+            if sid and kws:
+                self._scripts.append((sid, kws))
 
     def classify(self, transcript: str) -> Optional[str]:
+        """Return intent string or None. Scripts return 'script:<id>'."""
         if not transcript or not transcript.strip():
             return None
         text = transcript.lower()
         if any(k in text for k in self._joke):
             return "joke"
+        for sid, kws in self._scripts:
+            if any(k in text for k in kws):
+                return f"script:{sid}"
         if any(k in text for k in self._weather):
             return "weather"
         return None
@@ -278,3 +298,44 @@ class JokeGate:
         chosen = self._rng.choice(eligible)
         self.memory.record_echo_used(chosen.id, pool="jokes")
         return chosen
+
+
+# ---------- Scripts ----------
+
+
+class ScriptGate:
+    """Verbatim fixed-text provider keyed by script id.
+
+    Reads plain text files on demand — no pool rotation, no cooldown.
+    Biographical scripts are always delivered in full on each matching intent.
+    Text is split into paragraphs (non-empty lines) by paragraphs() so the
+    caller can speak each one sequentially within the TTS timeout budget.
+    """
+
+    def __init__(
+        self,
+        entries: list[dict[str, Any]],
+        project_root: Path | str,
+    ) -> None:
+        root = Path(project_root)
+        self._paths: dict[str, Path] = {}
+        for entry in entries:
+            if not entry.get("enabled", True):
+                continue
+            sid = str(entry.get("id", "")).strip()
+            text_path = str(entry.get("text_path", "")).strip()
+            if sid and text_path:
+                self._paths[sid] = root / text_path
+
+    def paragraphs(self, script_id: str) -> list[str]:
+        """Return non-empty lines of the script file. Empty list on any error."""
+        path = self._paths.get(script_id)
+        if path is None:
+            log.warning("script_gate: unknown script id %r", script_id)
+            return []
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("script_gate: cannot read %s: %s", path, exc)
+            return []
+        return [line.strip() for line in text.splitlines() if line.strip()]
