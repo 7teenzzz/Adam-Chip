@@ -174,15 +174,25 @@ class FloraStore:
         with self._lock:
             return copy.deepcopy(self._load_locked())
 
-    def apply_patch(self, patch: dict[str, Any]) -> dict[str, Any]:
+    def apply_patch(
+        self,
+        patch: dict[str, Any],
+        replace_keys: frozenset[str] | None = None,
+    ) -> dict[str, Any]:
         """Deep-merge *patch*, validate via FloraConfig, save atomically.
+
+        *replace_keys* lists top-level keys that should be REPLACED in full
+        rather than deep-merged.  Use this for collection-typed keys like
+        ``user_presets`` where deep-merge would silently preserve deleted entries
+        (merging an empty-or-reduced dict into the existing dict adds nothing and
+        keeps stale keys alive).
 
         Raises ValidationError if the merged result fails schema validation —
         the file is NOT written on validation failure.
         """
         with self._lock:
             self._load_locked()
-            merged = _deep_merge_flora(self._raw, patch)
+            merged = _deep_merge_flora(self._raw, patch, replace_keys=replace_keys)
             validated = FloraConfig.model_validate(merged)  # raises on bad data
             self._raw = merged
             self._cache = validated
@@ -200,10 +210,17 @@ class FloraStore:
         return self.path
 
 
-def _deep_merge_flora(base: dict, patch: dict) -> dict:
+def _deep_merge_flora(
+    base: dict,
+    patch: dict,
+    replace_keys: frozenset[str] | None = None,
+) -> dict:
     result = dict(base)
     for k, v in patch.items():
-        if isinstance(v, dict) and isinstance(result.get(k), dict):
+        if replace_keys and k in replace_keys:
+            # Caller explicitly wants a full replacement — never recurse.
+            result[k] = copy.deepcopy(v)
+        elif isinstance(v, dict) and isinstance(result.get(k), dict):
             result[k] = _deep_merge_flora(result[k], v)
         else:
             result[k] = copy.deepcopy(v)

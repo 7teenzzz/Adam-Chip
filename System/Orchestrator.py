@@ -3209,7 +3209,7 @@ async def flora_create_preset(payload: dict[str, Any] = Body(...)) -> dict[str, 
     if name in user_presets:
         raise HTTPException(status_code=409, detail=f"preset '{name}' already exists")
     user_presets[name] = params
-    get_flora_store().apply_patch({"user_presets": user_presets})
+    get_flora_store().apply_patch({"user_presets": user_presets}, replace_keys=frozenset({"user_presets"}))
     get_flora_store().save()
     event_log.append("flora_preset_created", {"name": name})
     return {"ok": True, "name": name, "params": params}
@@ -3236,7 +3236,7 @@ async def flora_update_preset(name: str, payload: dict[str, Any] = Body(...)) ->
             raise HTTPException(status_code=409, detail=f"preset '{new_name}' already exists")
         del user_presets[name]
     user_presets[new_name] = params
-    get_flora_store().apply_patch({"user_presets": user_presets})
+    get_flora_store().apply_patch({"user_presets": user_presets}, replace_keys=frozenset({"user_presets"}))
     get_flora_store().save()
     event_log.append("flora_preset_updated", {"old_name": name, "new_name": new_name})
     return {"ok": True, "name": new_name, "params": params}
@@ -3250,7 +3250,7 @@ async def flora_delete_preset(name: str) -> dict[str, Any]:
     if name not in user_presets:
         raise HTTPException(status_code=404, detail=f"preset '{name}' not found")
     del user_presets[name]
-    get_flora_store().apply_patch({"user_presets": user_presets})
+    get_flora_store().apply_patch({"user_presets": user_presets}, replace_keys=frozenset({"user_presets"}))
     get_flora_store().save()
     event_log.append("flora_preset_deleted", {"name": name})
     return {"ok": True, "deleted": name}
