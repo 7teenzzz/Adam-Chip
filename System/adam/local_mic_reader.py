@@ -181,6 +181,9 @@ class LocalMicReader:
         env = os.environ.copy()
         if self._pulse_source:
             env["PULSE_SOURCE"] = self._pulse_source
+        # Request 20ms PulseAudio capture latency so the PipeWire-PulseAudio
+        # bridge wakes up every ~20ms instead of the default ~100-300ms.
+        env.setdefault("PULSE_LATENCY_MSEC", "20")
         cmd = [
             "arecord", "-q",
             "-D", "pulse",
