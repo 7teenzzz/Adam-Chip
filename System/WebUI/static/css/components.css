@@ -154,3 +154,39 @@
 .toast.ok   { border-color: var(--accent); }
 .toast.warn { border-color: var(--warn); }
 .toast.bad  { border-color: var(--bad); }
+
+.flora-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-s);
+}
+.flora-table th {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line-strong);
+}
+.flora-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.flora-table tr:last-child td {
+  border-bottom: none;
+}
+.flora-table tr:hover td {
+  background: var(--bg-2);
+}
+.speed-label {
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  color: var(--dim);
+  margin-top: 4px;
+}
+.flora-table input[type="range"] {
+  accent-color: var(--accent);
+  width: 80px;
+}

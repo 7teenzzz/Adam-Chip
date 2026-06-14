@@ -3177,7 +3177,28 @@ async def flora_config_preview() -> dict[str, Any]:
     flora_cfg = get_flora_store().current_dict()
     state_names = list((flora_cfg.get("states") or {}).keys())
     preview = {s: flora_controller._build_params(s) for s in state_names}
-    return {"ok": True, "presets": preview}
+    return {"ok": True, "presets": preview, "raw_states": flora_cfg.get("states") or {}}
+
+
+@app.post("/api/flora/config")
+async def flora_config_write(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Write flora preset params into Flora.json (flora.states section).
+
+    Body: {"states": {stateKey: {base_pct?, peak_pct, <speed_key>, vibro}, ...}}
+
+    Deep-merges into the existing flora.states, so presets not present in the
+    payload (e.g. user_presets, other system states) are left untouched.
+    """
+    states = payload.get("states")
+    if not isinstance(states, dict):
+        raise HTTPException(status_code=400, detail="states must be an object")
+    try:
+        get_flora_store().apply_patch({"states": states})
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    saved_path = get_flora_store().save()
+    event_log.append("flora_states_saved", {"states": list(states.keys())})
+    return {"ok": True, "saved_to": str(saved_path)}
 
 
 # ── SmartFlora: User Preset CRUD (Phase 37) ──────────────────────────────────
