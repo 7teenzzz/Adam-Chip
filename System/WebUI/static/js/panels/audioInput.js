@@ -817,7 +817,7 @@ export function mount(target) {
     const grid = el("div", { class: "card-grid" });
 
     // ── Card 1: Volume ─────────────────────────────────────────────────────
-    grid.appendChild(el("section", { class: "card card-full" }, [
+    grid.appendChild(el("section", { class: "card" }, [
       el("div", { class: "card-header" }, [
         el("span", { class: "card-title" }, "Громкость входа"),
         el("span", { class: "caps mono dim" }, "media.audio.input_gain"),
