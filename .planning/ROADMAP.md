@@ -1539,10 +1539,10 @@ Plans:
 
 **Mode:** standard | **Priority:** P1 | **Effort:** M | **Exhibition:** non-blocking
 
-**Plans:** 8 plans (4 волны)
+**Plans:** 1/8 plans executed
 
 Plans:
-- [ ] 42-01-PLAN.md — Фундамент: router parseHash nested routes + 3-уровневый nav + marked.js (Wave 1)
+- [x] 42-01-PLAN.md — Фундамент: router parseHash nested routes + 3-уровневый nav + marked.js (Wave 1)
 - [ ] 42-02-PLAN.md — Личность: AIIM-матрица + preset + блок-редакторы Интенции/Голос (Wave 2)
 - [ ] 42-03-PLAN.md — Инструкции (markdown render/edit) + Память (Базовая/Дополненная) (Wave 2)
 - [ ] 42-04-PLAN.md — Флора: таблица состояний + backend запись states в Flora.json (Wave 2)
