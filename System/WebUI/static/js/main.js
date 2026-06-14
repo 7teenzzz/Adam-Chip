@@ -72,83 +72,135 @@ function buildTopbar() {
   ]);
 }
 
+// 3-level nav hierarchy: section → (optional subgroup) → page
+// Groups with subgroup children use localStorage key: navGroup_${parentId}_${subId}
+// L2 links (direct group children): padding-left:24px
+// L3 links (inside subgroup): padding-left:40px
 const NAV_STRUCTURE = [
   { key: "chat", label: "Чат" },
   {
-    group: "Настройки",
-    id: "config",
+    group: "Настройки", id: "settings",
     children: [
-      { sectionLabel: "Система" },
-      { key: "settings",   label: "Настройки" },
-      { key: "audioInput", label: "Аудио-вход" },
-      { key: "models",     label: "Модели" },
-      { key: "subsystem",  label: "Подсистема" },
-      { key: "services",   label: "Сервисы" },
-      { key: "flora",      label: "Технофлора" },
-      { separator: true },
-      { key: "persona",    label: "Личность агента" },
+      {
+        subgroup: "Агент", id: "agent",
+        children: [
+          { key: "agent/persona",        label: "Личность" },
+          { key: "agent/instructions",   label: "Инструкции" },
+          { key: "agent/memory",         label: "Память" },
+        ],
+      },
     ],
   },
-  { key: "metrics", label: "Метрики" },
-  { key: "logs",    label: "Логи" },
+  {
+    group: "Система", id: "system",
+    children: [
+      { key: "system/audio",    label: "Аудио и видео" },
+      { key: "system/services", label: "Сервисы и модели" },
+      { key: "system/esp32",    label: "Подсистема ESP32" },
+    ],
+  },
+  { key: "flora", label: "Технофлора" },
+  {
+    group: "Диагностика", id: "diagnostics",
+    children: [
+      { key: "diagnostics/metrics", label: "Метрики и логи" },
+      { key: "diagnostics/system",  label: "Система" },
+      { key: "diagnostics/esp32",   label: "Подсистема" },
+    ],
+  },
 ];
 
-function navLink(key, label, indent = false) {
+// navLink: renders a leaf nav anchor.
+// paddingLeft: CSS value string or empty string for top-level links.
+function navLink(key, label, paddingLeft = "") {
   return el("a", {
     class: "nav-link",
     href: `#/${key}`,
     "data-route": key,
-    style: indent ? "padding-left:24px" : "",
+    style: paddingLeft ? `padding-left:${paddingLeft}` : "",
   }, [
     el("span", { class: "mono", style: "color:var(--accent)" }, "▸"),
     el("span", null, label),
   ]);
 }
 
+// buildCollapsible: creates a collapsible group header + body container.
+// storageKey: localStorage key for open state persistence.
+// label: visible group label text.
+// Returns { header, body } — caller appends both to parent.
+function buildCollapsible(storageKey, label, paddingLeft = "") {
+  const isOpen = localStorage.getItem(storageKey) !== "false";
+
+  const body = el("div", {
+    style: `display:${isOpen ? "flex" : "none"}; flex-direction:column`,
+  });
+
+  const arrowSpan = el("span", {
+    class: "mono",
+    style: "color:var(--dim, var(--accent)); width:14px; text-align:center",
+  }, isOpen ? "▾" : "▸");
+
+  const header = el("button", {
+    class: "nav-link",
+    style: [
+      "width:100%",
+      "text-align:left",
+      "background:none",
+      "border:none",
+      "cursor:pointer",
+      "display:flex",
+      "align-items:center",
+      "gap:8px",
+      "font:inherit",
+      paddingLeft ? `padding-left:${paddingLeft}` : "",
+    ].filter(Boolean).join("; "),
+    onclick: () => {
+      const open = body.style.display !== "none";
+      body.style.display = open ? "none" : "flex";
+      arrowSpan.textContent = open ? "▸" : "▾";
+      localStorage.setItem(storageKey, String(!open));
+    },
+  }, [arrowSpan, el("span", null, label)]);
+
+  return { header, body };
+}
+
 function buildNav() {
   const nav = el("nav", { class: "nav" });
 
   NAV_STRUCTURE.forEach((item) => {
+    // Top-level direct link (e.g. Чат, Технофлора)
     if (item.key) {
       nav.appendChild(navLink(item.key, item.label));
       return;
     }
     if (!item.group) return;
 
-    const storageKey = `navGroup_${item.id}`;
-    const isOpen = localStorage.getItem(storageKey) !== "false";
-
-    const body = el("div", {
-      id: `nav-group-${item.id}`,
-      style: `display:${isOpen ? "flex" : "none"}; flex-direction:column`,
-    });
+    // L1: collapsible group (Настройки, Система, Диагностика)
+    const l1Key = `navGroup_${item.id}`;
+    const { header: l1Header, body: l1Body } = buildCollapsible(l1Key, item.group);
 
     item.children.forEach((child) => {
-      if (child.sectionLabel) {
-        body.appendChild(el("div", {
-          style: "padding:6px 12px 2px 16px; font-size:10px; letter-spacing:0.1em; color:var(--muted); opacity:0.55; text-transform:uppercase",
-        }, child.sectionLabel));
-      } else if (child.separator) {
-        body.appendChild(el("div", { style: "height:1px; background:var(--line); margin:4px 8px" }));
+      if (child.subgroup) {
+        // L2: collapsible subgroup (e.g. Агент under Настройки)
+        const l2Key = `navGroup_${item.id}_${child.id}`;
+        const { header: l2Header, body: l2Body } = buildCollapsible(l2Key, child.subgroup, "24px");
+
+        // L3: leaf links inside subgroup
+        child.children.forEach((leaf) => {
+          l2Body.appendChild(navLink(leaf.key, leaf.label, "40px"));
+        });
+
+        l1Body.appendChild(l2Header);
+        l1Body.appendChild(l2Body);
       } else if (child.key) {
-        body.appendChild(navLink(child.key, child.label, true));
+        // L2: direct leaf link inside group (Система, Диагностика children)
+        l1Body.appendChild(navLink(child.key, child.label, "24px"));
       }
     });
 
-    const arrowSpan = el("span", { class: "mono", style: "color:var(--accent); width:14px; text-align:center" }, isOpen ? "▾" : "▸");
-    const header = el("button", {
-      class: "nav-link",
-      style: "width:100%; text-align:left; background:none; border:none; cursor:pointer; display:flex; align-items:center; gap:8px; font:inherit",
-      onclick: () => {
-        const open = body.style.display !== "none";
-        body.style.display = open ? "none" : "flex";
-        arrowSpan.textContent = open ? "▸" : "▾";
-        localStorage.setItem(storageKey, String(!open));
-      },
-    }, [arrowSpan, el("span", null, item.group)]);
-
-    nav.appendChild(header);
-    nav.appendChild(body);
+    nav.appendChild(l1Header);
+    nav.appendChild(l1Body);
   });
 
   return nav;
