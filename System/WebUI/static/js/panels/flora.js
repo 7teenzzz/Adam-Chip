@@ -166,141 +166,111 @@ const STATE_LABELS = {
 // All preset names in display order
 const STATE_KEYS = ["breathe", "accent", "attentive", "think_pulse", "wake_bloom"];
 
-// ── Build one preset card ─────────────────────────────────────────────────────
-function buildStateCard(stateKey, stateData, draft) {
+// ── Build one state table row ───────────────────────────────────────────────
+function buildStateRow(stateKey, stateData) {
   const speed = STATE_SPEED[stateKey];
   const isAttentive = stateKey === "attentive";
   const isThinkPulse = stateKey === "think_pulse";
 
-  // base_pct: not all presets have it explicitly (accent/wake_bloom may lack it)
-  // but Config.json shows most do; render when available, default 0
-  const hasBase = "base_pct" in stateData || stateKey === "breathe" || stateKey === "think_pulse";
-  const hasPeak = "peak_pct" in stateData;
-
-  // Read the speed value — fall back to midpoint
-  const speedVal = stateData[speed.key] ?? Math.round((speed.min + speed.max) / 2);
-
-  // base_pct slider
-  let basePctCtl = null;
+  // База — every state except attentive has base_pct
+  const hasBase = !isAttentive;
+  let baseCtl = null;
+  let baseCell;
   if (hasBase) {
-    basePctCtl = makeSlider({
-      label: "Яркость: низ, %",
+    baseCtl = makeSlider({
+      label: "Низ, %",
       min: 0, max: 100, step: 1,
       initValue: stateData.base_pct ?? 0,
     });
+    baseCell = el("td", {}, baseCtl.root);
+  } else {
+    baseCell = el("td", {}, el("span", { style: "color:var(--dim)" }, "—"));
   }
 
-  // peak_pct for all states (attentive's stray plateau_pct was removed — it was
-  // overridden by base_pct/peak_pct in flora.py _build_params anyway).
-  const peakKey = "peak_pct";
+  // Пик (≤71%) — hard UI cap; loaded values above 71 clamp to 71 on the slider
   const peakCtl = makeSlider({
-    label: "Яркость: пик, %",
-    min: 0, max: 100, step: 1,
-    initValue: stateData.peak_pct ?? 50,
+    label: "Пик, %",
+    min: 0, max: 71, step: 1,
+    initValue: Math.min(stateData.peak_pct ?? 50, 71),
   });
+  const peakCell = el("td", {}, peakCtl.root);
 
-  // Speed slider
+  // Скорость — slider + sub-label with the real Flora.json field name
+  const speedVal = stateData[speed.key] ?? Math.round((speed.min + speed.max) / 2);
   const speedCtl = makeSlider({
     label: speed.label,
     min: speed.min, max: speed.max, step: 1,
     initValue: speedVal,
   });
+  const speedCell = el("td", {}, [speedCtl.root, el("div", { class: "speed-label" }, speed.key)]);
 
-  // Vibro toggle — special cases:
-  // - attentive: disabled, always false, note shown
-  // - think_pulse: "double_pulse" string <-> bool toggle
-  // - others: plain bool
-  let vibroCtl;
+  // Вибро — attentive: disabled checkbox; think_pulse: read-only "2×" badge; others: toggle
+  let vibroCtl = null;
+  let vibroCell;
   if (isAttentive) {
-    vibroCtl = makeToggle({
-      label: "Вибро",
-      initValue: false,
-      disabled: true,
-      disabledHint: "вибро всегда выкл в слушании (защита микрофона)",
-    });
+    vibroCell = el("td", {}, el("input", { type: "checkbox", disabled: true }));
   } else if (isThinkPulse) {
-    const isOn = stateData.vibro === "double_pulse";
-    vibroCtl = makeToggle({
-      label: "Вибро (double_pulse)",
-      hint: "вкл → строка \"double_pulse\", выкл → false",
-      initValue: isOn,
-    });
+    vibroCell = el("td", {}, el("span", { class: "badge" }, "2×"));
   } else {
     vibroCtl = makeToggle({
       label: "Вибро",
       initValue: stateData.vibro === true,
     });
+    vibroCell = el("td", {}, vibroCtl.root);
   }
 
-  // "Показать сейчас" button
+  // Показать сейчас
   const previewBtn = el("button", {
-    class: "btn btn-ghost",
-    style: "margin-top:8px; font-size:12px; align-self:flex-start",
-    text: "Показать сейчас",
+    class: "btn btn-icon btn-primary",
+    title: "Показать сейчас",
+    text: "▶",
   });
-
-  // Collect children
-  const fieldChildren = [
-    basePctCtl ? basePctCtl.root : null,
-    peakCtl.root,
-    speedCtl.root,
-    vibroCtl.root,
-  ].filter(Boolean);
-
-  const cardBody = el("div", { class: "card-body" }, [
-    el("div", { class: "field-grid" }, fieldChildren),
-    previewBtn,
-  ]);
-
-  const card = el("section", { class: "card" }, [
-    el("div", { class: "card-header" }, [
-      el("span", { class: "card-title" }, STATE_LABELS[stateKey]),
-      el("span", { class: "caps mono dim" }, `flora.states.${stateKey}`),
-    ]),
-    cardBody,
-  ]);
+  const previewCell = el("td", { style: "text-align:center" }, previewBtn);
 
   // Getter — assembles only keys we own (no extra keys touched)
   function getValues() {
     const patch = {};
-    if (basePctCtl) {
-      patch.base_pct = basePctCtl.getValue();
+    if (baseCtl) {
+      patch.base_pct = baseCtl.getValue();
     }
-    patch[peakKey] = peakCtl.getValue();
+    patch.peak_pct = peakCtl.getValue();
     patch[speed.key] = speedCtl.getValue();
 
     // Vibro value: attentive → false (immutable); think_pulse → string or false; others → bool
     if (isAttentive) {
       patch.vibro = false;
     } else if (isThinkPulse) {
-      patch.vibro = vibroCtl.getValue() ? "double_pulse" : false;
+      patch.vibro = "double_pulse";
     } else {
       patch.vibro = vibroCtl.getValue();
     }
     return patch;
   }
 
-  // Wire "Показать сейчас": save current state edits, then POST preview
+  // Wire "Показать сейчас": save this row's edits to Flora.json, then trigger preview
   previewBtn.addEventListener("click", async () => {
     previewBtn.disabled = true;
     try {
-      // Persist current edits for this state first
-      const statePatch = getValues();
-      await api.patch("/api/config", {
-        section: "flora",
-        patch: { states: { [stateKey]: statePatch } },
-      });
-      // Then live-preview
+      await api.post("/api/flora/config", { states: { [stateKey]: getValues() } });
       await api.post("/api/flora/state", { state: stateKey });
       toast(`Показан пресет: ${stateKey}`, "ok");
     } catch (e) {
-      toast(`Ошибка предпросмотра ${stateKey}: ${e.message}`, "bad", 5000);
+      toast(`Ошибка сохранения конфига флоры: ${e.message}`, "bad", 5000);
     } finally {
       previewBtn.disabled = false;
     }
   });
 
-  return { card, getValues };
+  const row = el("tr", {}, [
+    el("td", {}, STATE_LABELS[stateKey]),
+    baseCell,
+    peakCell,
+    speedCell,
+    vibroCell,
+    previewCell,
+  ]);
+
+  return { row, getValues };
 }
 
 // ── SmartFlora helpers ────────────────────────────────────────────────────────
@@ -672,8 +642,11 @@ export function mount(target) {
     container.appendChild(el("div", { class: "muted" }, [el("span", { class: "spinner" }), " загрузка…"]));
 
     let config;
+    let floraStates;
     try {
       config = await api.get("/api/config");
+      const floraConfigResp = await api.get("/api/flora/config");
+      floraStates = floraConfigResp.raw_states || {};
     } catch (e) {
       container.innerHTML = "";
       container.appendChild(el("div", { class: "card" }, [
@@ -736,15 +709,59 @@ export function mount(target) {
     ]);
     cardGrid.appendChild(globalCard);
 
-    // ── 2. Состояния (per-preset cards) ──────────────────────────────────────
+    // ── 2. Состояния (table) ────────────────────────────────────────────────
 
     const stateControllers = {};
+    const statesTbody = el("tbody");
     STATE_KEYS.forEach((key) => {
-      const stateData = (flora.states || {})[key] || {};
-      const { card, getValues } = buildStateCard(key, stateData);
+      const stateData = floraStates[key] || {};
+      const { row, getValues } = buildStateRow(key, stateData);
       stateControllers[key] = getValues;
-      cardGrid.appendChild(card);
+      statesTbody.appendChild(row);
     });
+
+    const statesTable = el("table", { class: "flora-table" }, [
+      el("thead", {}, [
+        el("tr", {}, [
+          el("th", {}, "Состояние"),
+          el("th", {}, "База"),
+          el("th", {}, "Пик (≤71%)"),
+          el("th", {}, "Скорость"),
+          el("th", {}, "Вибро"),
+          el("th", {}, "Показать сейчас"),
+        ]),
+      ]),
+      statesTbody,
+    ]);
+
+    const saveStatesBtn = el("button", {
+      class: "btn btn-primary",
+      style: "margin-top:12px",
+      text: "Сохранить все состояния",
+    });
+
+    saveStatesBtn.addEventListener("click", async () => {
+      saveStatesBtn.disabled = true;
+      try {
+        const states = {};
+        STATE_KEYS.forEach((key) => { states[key] = stateControllers[key](); });
+        await api.post("/api/flora/config", { states });
+        toast("Состояния флоры сохранены", "ok");
+      } catch (e) {
+        toast(`Ошибка сохранения конфига флоры: ${e.message}`, "bad", 5000);
+      } finally {
+        saveStatesBtn.disabled = false;
+      }
+    });
+
+    const statesCard = el("section", { class: "card card-full" }, [
+      el("div", { class: "card-header" }, [
+        el("span", { class: "card-title" }, "Состояния флоры"),
+        el("span", { class: "caps mono dim" }, "flora.states"),
+      ]),
+      el("div", { class: "card-body" }, [statesTable, saveStatesBtn]),
+    ]);
+    cardGrid.appendChild(statesCard);
 
     // ── 3. Речь (RMS) ────────────────────────────────────────────────────────
 
@@ -868,12 +885,6 @@ export function mount(target) {
     saveBtn.addEventListener("click", async () => {
       saveBtn.disabled = true;
       try {
-        // Assemble states patch
-        const statesPatch = {};
-        STATE_KEYS.forEach((key) => {
-          statesPatch[key] = stateControllers[key]();
-        });
-
         // silent_states array (always include "attentive")
         const silentStates = STATE_KEYS.filter((k) => silentCheckboxes[k].getValue());
 
@@ -892,7 +903,6 @@ export function mount(target) {
             intensity_pct:  vibroIntensityCtl.getValue(),
             silent_states:  silentStates,
           },
-          states: statesPatch,
         };
 
         await api.patch("/api/config", {
