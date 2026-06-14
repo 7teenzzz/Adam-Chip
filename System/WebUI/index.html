@@ -31,6 +31,15 @@
       }
     });
   </script>
+  <!-- marked.js: Markdown renderer for agent/instructions and other panel editors -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    // Configure marked once after load. Guard for offline / CDN-blocked environments:
+    // panels using marked.parse() will show raw text instead of crashing.
+    if (window.marked) {
+      marked.setOptions({ breaks: true, gfm: true });
+    }
+  </script>
   <script type="module" src="/ui/static/js/main.js"></script>
 </body>
 </html>
