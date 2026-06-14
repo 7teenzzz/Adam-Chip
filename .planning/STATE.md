@@ -19,6 +19,12 @@ progress:
 
 ## Active Phase
 
+**Phase 42: WebUI Reorganization** — план готов, готово к выполнению
+Branch: `SmartFlora`
+Plan: READY — 8 планов, 4 волны (`/gsd-execute-phase 42`)
+Context: [phases/42-webui-reorganization/42-CONTEXT.md](phases/42-webui-reorganization/42-CONTEXT.md)
+UI-SPEC: [phases/42-webui-reorganization/42-UI-SPEC.md](phases/42-webui-reorganization/42-UI-SPEC.md)
+
 **Phase 30: Echoes/Chinese Gate Activation — реальный инжект пулов About в диалог** — context ready, planning
 Branch: `MemoryFixes`
 Plan: Not started (run `/gsd-plan-phase 30`)

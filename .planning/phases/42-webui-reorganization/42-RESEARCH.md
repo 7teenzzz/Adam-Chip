@@ -633,22 +633,16 @@ Phase 42 is a UI-only reorganization. No automated test suite exists for the Web
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Flora.json vs Config.json for flora config**
-   - What we know: CONTEXT.md mentions `System/Flora.json` as separate file. flora.js save button uses `PATCH /api/config { section: "flora" }`.
-   - What's unclear: Does api_runtime.py route the flora section to Flora.json or Config.json? Was the split complete?
-   - Recommendation: Before implementing flora table save, read `System/adam/api_runtime.py` flora handler section and `System/adam/flora.py` config loader. This is ~15 lines to confirm.
+1. **Flora.json vs Config.json for flora config** — RESOLVED: Plan 42-04
+   - Flora config lives in `System/Flora.json` (separate file). `FloraStore` in `System/adam/flora.py` reads/writes Flora.json directly. The existing `PATCH /api/config { section: "flora" }` in old flora.js wrote to the dead Config.json section — bug. Plan 42-04 Task 1 adds `POST /api/flora/config` endpoint to Orchestrator.py that calls `FloraStore.apply_patch({"states": ...}).save()`.
 
-2. **Markdown library availability**
-   - What we know: Инструкции page needs markdown rendering.
-   - What's unclear: Is any markdown library already loaded in index.html?
-   - Recommendation: `grep -r "marked\|showdown\|markdown" System/WebUI/static/` before Wave 0.
+2. **Markdown library availability** — RESOLVED: Plan 42-01 Task 3
+   - No markdown library exists in `System/WebUI/index.html`. Plan 42-01 Task 3 adds `<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js">` to index.html. Confirmed clean in 42-UI-SPEC.md safety review (2026-06-14).
 
-3. **3rd-level hash route key format**
-   - What we know: `router.js` uses `ROUTES[key]` where key is derived from hash.
-   - What's unclear: Router currently maps keys like `"settings"` — does it handle keys containing `/`?
-   - Recommendation: Read last 20 lines of router.js to confirm `window.location.hash.slice(2)` parsing before adding nested routes.
+3. **3rd-level hash route key format** — RESOLVED: Plan 42-01 Task 1
+   - `router.js parseHash()` currently splits on `/[/?]/` which breaks keys containing `/`. Plan 42-01 Task 1 patches `parseHash()` to split only on `?` (query string delimiter), preserving slashes in route keys like `"agent/persona"`.
 
 ---
 
