@@ -77,6 +77,11 @@ function badge(label, color = "muted") {
   }, label);
 }
 
+function inlineList(items) {
+  if (!items || !items.length) return null;
+  return el("div", { style: "color:var(--muted); font-size:12px; margin-top:4px; font-family:var(--font-mono)" }, items.join(" · "));
+}
+
 function injectionsBadges(item) {
   const out = [];
   if (item.visitor_name) out.push(badge(`name:${item.visitor_name}`, "accent"));
@@ -117,6 +122,7 @@ function promptTurnRow(item, onShow) {
     el("div", { class: "card-body", style: "display:flex; flex-direction:column; gap:8px" }, [
       item.reply ? el("div", { style: "color:var(--accent); font-size:13px; white-space:pre-wrap" }, "→ " + item.reply) : null,
       el("div", { style: "display:flex; flex-wrap:wrap; gap:4px; align-items:center" }, injectionsBadges(item)),
+      inlineList(item.recent_episodic),
       item.llm_error ? el("div", { style: "color:var(--bad); font-family:var(--font-mono); font-size:12px" }, "Ошибка: " + item.llm_error) : null,
     ]),
     detailsBox,
