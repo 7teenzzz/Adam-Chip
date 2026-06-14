@@ -19,9 +19,9 @@ progress:
 
 ## Active Phase
 
-**Phase 42: WebUI Reorganization** — выполняется, план 42-01 завершён
+**Phase 42: WebUI Reorganization** — выполняется, Wave 2 завершена (42-02, 42-03, 42-04)
 Branch: `SmartFlora`
-Plan: IN PROGRESS — 8 планов, 4 волны. Завершён: 42-01 (Navigation Foundation)
+Plan: IN PROGRESS — 8 планов, 4 волны. Завершены: 42-01 (Navigation Foundation), 42-02 (Личность/AIIM), 42-03 (Инструкции+Память), 42-04 (Флора states table)
 Context: [phases/42-webui-reorganization/42-CONTEXT.md](phases/42-webui-reorganization/42-CONTEXT.md)
 UI-SPEC: [phases/42-webui-reorganization/42-UI-SPEC.md](phases/42-webui-reorganization/42-UI-SPEC.md)
 

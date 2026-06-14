@@ -1539,13 +1539,13 @@ Plans:
 
 **Mode:** standard | **Priority:** P1 | **Effort:** M | **Exhibition:** non-blocking
 
-**Plans:** 1/8 plans executed
+**Plans:** 4/8 plans executed
 
 Plans:
 - [x] 42-01-PLAN.md — Фундамент: router parseHash nested routes + 3-уровневый nav + marked.js (Wave 1)
-- [ ] 42-02-PLAN.md — Личность: AIIM-матрица + preset + блок-редакторы Интенции/Голос (Wave 2)
-- [ ] 42-03-PLAN.md — Инструкции (markdown render/edit) + Память (Базовая/Дополненная) (Wave 2)
-- [ ] 42-04-PLAN.md — Флора: таблица состояний + backend запись states в Flora.json (Wave 2)
+- [x] 42-02-PLAN.md — Личность: AIIM-матрица + preset + блок-редакторы Интенции/Голос (Wave 2)
+- [x] 42-03-PLAN.md — Инструкции (markdown render/edit) + Память (Базовая/Дополненная) (Wave 2)
+- [x] 42-04-PLAN.md — Флора: таблица состояний + backend запись states в Flora.json (Wave 2)
 - [ ] 42-05-PLAN.md — Аудио и видео (3.1): объединение audioInput + settings + фикс card-full (Wave 3)
 - [ ] 42-06-PLAN.md — Сервисы и модели (3.2): merge services+models, очистка мёртвых полей (Wave 3)
 - [ ] 42-07-PLAN.md — Подсистема ESP32 (3.3) + Диагностика (5.x) + миграция inlineList (Wave 3)
