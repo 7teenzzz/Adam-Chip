@@ -1,7 +1,7 @@
 [Unit]
 Description=Adam Chip Orchestrator
 After=network-online.target adam-llm.service docker.service
-Wants=network-online.target adam-llm.service docker.service
+Wants=network-online.target adam-llm.service docker.service adam-logviewer.service
 # StartLimit* MUST live in [Unit] — systemd ignores them under [Service], which is
 # why a kill/crash churn previously reached 69 restarts. After 3 failures within
 # 120s the unit enters failed state instead of looping forever.

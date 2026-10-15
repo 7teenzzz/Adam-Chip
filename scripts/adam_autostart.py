@@ -130,7 +130,7 @@ def tui(stdscr, cfg: dict) -> None:
 
         row += 1
         _addstr(stdscr, row, 2, "Переключение действует со следующей загрузки — сейчас ничего не", curses.A_DIM)
-        _addstr(stdscr, row + 1, 2, "запускается и не останавливается. Логвьюер (:8083) работает всегда.", curses.A_DIM)
+        _addstr(stdscr, row + 1, 2, "запускается и не останавливается. Логвьюер (:8083) — в наборе.", curses.A_DIM)
         row += 3
         if not manage:
             _addstr(stdscr, row, 2, "Нет прав sudo для переключения — нажмите i, чтобы установить.", yellow)

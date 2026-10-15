@@ -834,7 +834,7 @@ function buildAutostartCard() {
     input.disabled = busy || canManage === false;
     hint.textContent = canManage === false
       ? "Нет прав на переключение. Один раз выполните на Jetson: scripts/adam_install_systemd.sh"
-      : "Действует со следующей загрузки Jetson — сейчас ничего не запускается и не останавливается. Логвьюер (:8083) работает всегда.";
+      : "Действует со следующей загрузки Jetson — сейчас ничего не запускается и не останавливается. Логвьюер (:8083) включается вместе с Адамом.";
     details.innerHTML = "";
     (st?.items || []).forEach((it) => {
       details.appendChild(el("div", { style: `color:${it.enabled ? "var(--accent)" : "var(--muted)"}` },

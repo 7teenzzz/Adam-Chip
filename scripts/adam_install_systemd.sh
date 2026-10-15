@@ -92,7 +92,8 @@ sed -i '/^ADAM_ASR_WHISPER_/d' "${ENV_FILE}"
 mapfile -t AUTOSTART_UNITS < <(python3 - "${ROOT_DIR}/System/Config.json" <<'PY'
 import json, re, sys
 default = ["adam-llm.service", "adam-tts-silero.service",
-           "adam-orchestrator.service", "adam-exhibition.target"]
+           "adam-orchestrator.service", "adam-exhibition.target",
+           "adam-logviewer.service"]
 try:
     units = json.load(open(sys.argv[1]))["system"]["autostart"]["units"]
 except Exception:
@@ -124,11 +125,13 @@ ensure_env_line "ADAM_LOG_VIEWER_PORT" "8083"
 systemctl daemon-reload
 # adam-vlm НЕ авто-стартует: VILA Docker ест ~5.6 GB и OOM-ит llama.cpp на 16 GB
 # Jetson после ребута (Phase 30 durability). Вернуть: sudo systemctl enable --now adam-vlm.service
-# Logviewer is always-on diagnostics, independent of the autostart switch.
-# reenable drops the stale adam-exhibition.target.wants symlink from older installs.
-systemctl reenable adam-logviewer.service
+# Older installs linked the logviewer into adam-exhibition.target.wants; it is
+# now WantedBy=multi-user.target and toggled with the rest of the autostart set.
+rm -f /etc/systemd/system/adam-exhibition.target.wants/adam-logviewer.service
 if [[ "${AUTOSTART_WAS_OFF}" == true ]]; then
   echo "Autostart was OFF — keeping it off (toggle: scripts/adam_autostart.py)."
+  # Units newly added to the set (e.g. logviewer) may still be enabled from before.
+  systemctl disable "${AUTOSTART_UNITS[@]}" 2>/dev/null || true
 else
   systemctl enable "${AUTOSTART_UNITS[@]}"
 fi

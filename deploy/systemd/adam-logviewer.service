@@ -1,8 +1,9 @@
 [Unit]
 Description=Adam Chip Log Viewer (read-only HTTP :8083)
 After=network.target
-# Always-on diagnostics: not PartOf the exhibition target and started by
-# multi-user.target, so the boot autostart switch never takes the log viewer down.
+# Starts on boot only when the Adam autostart switch is ON (system.autostart.units),
+# and together with Adam via Wants= in adam-orchestrator.service. Deliberately NOT
+# PartOf/BindsTo the orchestrator: it must survive an orchestrator crash to show why.
 
 [Service]
 Type=simple

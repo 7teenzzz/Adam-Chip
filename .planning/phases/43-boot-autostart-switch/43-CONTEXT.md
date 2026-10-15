@@ -13,8 +13,10 @@
   Иначе две правды расходятся после ручного `systemctl enable`.
 - **D-02 Набор:** `adam-llm`, `adam-tts-silero`, `adam-orchestrator`, `adam-exhibition.target` +
   Docker `adam-asr-whisperx` (`unless-stopped` ↔ `no`). VLM уже выключен отдельно.
-- **D-03 Логвьюер вне переключателя.** Переведён на `WantedBy=multi-user.target` и убран `PartOf` —
-  раньше он стартовал только через exhibition.target, выключение target убило бы диагностику.
+- **D-03 Логвьюер — часть Адама (пересмотрено 2026-10-15 по запросу пользователя).** При выключенном
+  автозапуске после загрузки не должно работать ничего от Адама, включая :8083. Логвьюер добавлен в
+  `system.autostart.units` (`WantedBy=multi-user.target`, без `PartOf` к target) и подтягивается
+  оркестратором через `Wants=` — поднимается при любом ручном старте Адама, но переживает падение оркестратора.
 - **D-04 Переключение влияет только на следующую загрузку.** Ничего не стартует/не останавливается сразу.
 - **D-05 Права:** точные NOPASSWD-правила `systemctl enable|disable <unit>` (без wildcard) генерирует
   `adam_install_systemd.sh` в `/etc/sudoers.d/adam-autostart` из списка в конфиге, проверка `visudo -c`.
@@ -23,7 +25,7 @@
 - **D-07 Фикс попутно:** `adam-exhibition.target` требовал замаскированный `adam-asr-whisperx.service` →
   падал с `dependency` на каждой загрузке. Убран из Requires/After; убран и `Wants=adam-vlm` (VLM выключен по OOM).
 - **D-08 Ограничение:** если автозапуск выключен, веб-UI (:8080) после ребута недоступен — включать
-  через TUI или `scripts/adam_start.sh`. Тумблер в логвьюере (:8083) — возможное продолжение.
+  через TUI или `scripts/adam_start.sh`.
 
 ## Files
 
@@ -39,4 +41,4 @@
 
 1. `sudo scripts/adam_install_systemd.sh` → `scripts/adam_autostart.py --status` без предупреждения о правах
 2. Веб → Настройки → выключить → `--status` = ВЫКЛЮЧЕН, `docker inspect` policy = `no`
-3. `sudo reboot` → Адам не поднялся, :8083 живой; TUI → включить → reboot → всё поднялось, target active
+3. `sudo reboot` → не поднялось ничего, включая :8083; TUI → включить → reboot → всё поднялось, target active

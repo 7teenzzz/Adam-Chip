@@ -36,6 +36,7 @@ DEFAULTS: dict[str, Any] = {
         "adam-tts-silero.service",
         "adam-orchestrator.service",
         "adam-exhibition.target",
+        "adam-logviewer.service",
     ],
     "docker_containers": ["adam-asr-whisperx"],
     "docker_restart_policy": "unless-stopped",

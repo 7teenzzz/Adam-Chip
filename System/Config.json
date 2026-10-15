@@ -24,7 +24,8 @@
         "adam-llm.service",
         "adam-tts-silero.service",
         "adam-orchestrator.service",
-        "adam-exhibition.target"
+        "adam-exhibition.target",
+        "adam-logviewer.service"
       ],
       "docker_containers": [
         "adam-asr-whisperx"
