@@ -154,6 +154,13 @@ sudo systemctl start adam-orchestrator.service
 ./scripts/adam_set_mode.sh exhibition
 ```
 
+Автозапуск при загрузке Jetson (вкл/выкл; то же — тумблер в веб-UI → Настройки):
+
+```bash
+./scripts/adam_autostart.py            # TUI
+./scripts/adam_autostart.py --status   # --on / --off
+```
+
 Переключение режима:
 
 ```bash

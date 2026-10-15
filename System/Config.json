@@ -18,6 +18,21 @@
     "require_jetson_clocks": true,
     "enforce_in_exhibition": true
   },
+  "system": {
+    "autostart": {
+      "units": [
+        "adam-llm.service",
+        "adam-tts-silero.service",
+        "adam-orchestrator.service",
+        "adam-exhibition.target"
+      ],
+      "docker_containers": [
+        "adam-asr-whisperx"
+      ],
+      "docker_restart_policy": "unless-stopped",
+      "command_timeout_sec": 15
+    }
+  },
   "media": {
     "video": {
       "primary": "jetson_gstreamer",

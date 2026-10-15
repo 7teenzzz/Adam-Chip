@@ -74,6 +74,43 @@
         }
       }
     },
+    "system": {
+      "type": "object",
+      "description": "Host-level integration settings (systemd, Docker).",
+      "properties": {
+        "autostart": {
+          "type": "object",
+          "description": "Boot autostart switch (System/adam/autostart.py, toggled from the web Settings page and scripts/adam_autostart.py). The actual on/off state lives in systemd (unit enablement) and in the Docker container restart policy — it is NOT stored here; this block only defines which units/containers form the 'Adam starts on boot' set. Toggling never starts/stops anything immediately, it only affects the next boot. adam-logviewer.service is intentionally excluded: it is always-on diagnostics. Web toggle needs NOPASSWD sudoers rules for 'systemctl enable|disable <unit>' — generated from this list by scripts/adam_install_systemd.sh (re-run it after editing the list).",
+          "properties": {
+            "units": {
+              "type": "array",
+              "items": {"type": "string", "pattern": "^adam-[a-z0-9-]+\\.(service|target|timer)$"},
+              "description": "systemd units enabled/disabled together. Only adam-* names are accepted; others are silently dropped as a safety guard.",
+              "default": ["adam-llm.service", "adam-tts-silero.service", "adam-orchestrator.service", "adam-exhibition.target"]
+            },
+            "docker_containers": {
+              "type": "array",
+              "items": {"type": "string", "pattern": "^adam-[a-z0-9-]+$"},
+              "description": "Docker containers whose restart policy is switched between docker_restart_policy (on) and 'no' (off). The ASR container restarts with the Docker daemon on boot, so it is controlled here, not via systemd. Missing containers are skipped and do not affect the overall state.",
+              "default": ["adam-asr-whisperx"]
+            },
+            "docker_restart_policy": {
+              "type": "string",
+              "enum": ["always", "unless-stopped"],
+              "description": "Restart policy applied to docker_containers when autostart is ON. Must match compose.yaml so 'docker compose up' and the switch agree.",
+              "default": "unless-stopped"
+            },
+            "command_timeout_sec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120,
+              "description": "Timeout in seconds for each systemctl/docker/sudo call made by the switch.",
+              "default": 15
+            }
+          }
+        }
+      }
+    },
     "media": {
       "type": "object",
       "description": "Video and audio input settings, including ESP32 fallback behavior and scene analysis cadence.",

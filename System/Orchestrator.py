@@ -60,6 +60,7 @@ from adam.prompt import PromptBuilder, LeadingNoiseFilter, sanitize_reply
 from adam.skills import IntentRouter, JokeGate, WeatherProvider
 from adam.config import PROJECT_ROOT
 from adam.sound import play_local_sound
+from adam import autostart
 from adam.system import docker_health, gate_summary, all_services_status, service_action, ADAM_SERVICES
 from adam.tuning import TuningStore, get_store as _get_tuning_store
 from adam.asr_filter import is_hallucination as _is_hallucination
@@ -3073,6 +3074,35 @@ async def restart_service(name: str) -> dict[str, Any]:
     if not result.ok:
         raise HTTPException(status_code=500, detail=result.detail)
     return {"ok": True, "service": name, "unit": unit, "detail": result.detail}
+
+
+# ---- Boot autostart switch --------------------------------------------------
+
+def _autostart_cfg() -> dict[str, Any]:
+    return autostart.resolve_cfg(settings.section("system").get("autostart"))
+
+
+@app.get("/api/system/autostart")
+async def get_autostart() -> dict[str, Any]:
+    """Whether the Adam stack starts on boot (systemd enablement + docker policy)."""
+    cfg = _autostart_cfg()
+    result = await asyncio.to_thread(autostart.status, cfg)
+    result["can_manage"] = await asyncio.to_thread(autostart.can_manage, cfg)
+    return result
+
+
+@app.post("/api/system/autostart")
+async def set_autostart(payload: dict[str, Any]) -> dict[str, Any]:
+    """Body {"enabled": bool}. Affects next boot only — nothing is started/stopped now."""
+    if not isinstance(payload.get("enabled"), bool):
+        raise HTTPException(status_code=400, detail="'enabled' (bool) is required")
+    result = await asyncio.to_thread(autostart.set_enabled, _autostart_cfg(), payload["enabled"])
+    event_log.append("autostart_changed", {
+        "enabled": payload["enabled"],
+        "ok": result["ok"],
+        "state": result["status"]["state"],
+    })
+    return result
 
 async def _run_joke_turn(
     *,

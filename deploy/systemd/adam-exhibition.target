@@ -1,8 +1,11 @@
 [Unit]
 Description=Adam Chip Exhibition Runtime
-Requires=adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service
-Wants=docker.service adam-logviewer.service adam-vlm.service
-After=adam-orchestrator.service adam-tts-silero.service adam-asr-whisperx.service adam-llm.service docker.service
+# ASR is NOT listed: native adam-asr-whisperx.service is masked (ASR runs in Docker,
+# restart policy managed by system.autostart). Requiring a masked unit made this
+# target fail with 'dependency' on every boot.
+Requires=adam-orchestrator.service adam-tts-silero.service adam-llm.service
+Wants=docker.service adam-logviewer.service
+After=adam-orchestrator.service adam-tts-silero.service adam-llm.service docker.service
 AllowIsolate=yes
 
 [Install]

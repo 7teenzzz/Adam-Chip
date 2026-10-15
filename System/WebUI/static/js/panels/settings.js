@@ -813,6 +813,85 @@ function buildWakeWordExtras() {
 
 // ── Render helpers ────────────────────────────────────────────────────────────
 
+// Boot autostart switch — backed by systemd enablement + docker restart policy
+// (System/adam/autostart.py), not by a Config.json value, so it lives outside SCHEMA.
+const AUTOSTART_STATE_LABEL = { on: "включён", off: "выключен", partial: "частично" };
+
+function buildAutostartCard() {
+  let busy = false;
+  const input = el("input", { type: "checkbox", "aria-label": "Автозапуск Адама при загрузке" });
+  const sw = el("label", { class: "switch" }, [input, el("span", { class: "switch-track" })]);
+  const badge = el("span", { class: "badge" }, "…");
+  const hint = el("div", { class: "muted", style: "font-size:11px; line-height:1.4" });
+  const details = el("div", { class: "mono dim", style: "font-size:11px; line-height:1.5" });
+
+  function paint(st, canManage) {
+    const s = st?.state || "off";
+    input.checked = s === "on";
+    sw.classList.toggle("partial", s === "partial");
+    badge.className = `badge ${s === "on" ? "ok" : s === "partial" ? "warn" : "bad"}`;
+    badge.textContent = AUTOSTART_STATE_LABEL[s] || s;
+    input.disabled = busy || canManage === false;
+    hint.textContent = canManage === false
+      ? "Нет прав на переключение. Один раз выполните на Jetson: scripts/adam_install_systemd.sh"
+      : "Действует со следующей загрузки Jetson — сейчас ничего не запускается и не останавливается. Логвьюер (:8083) работает всегда.";
+    details.innerHTML = "";
+    (st?.items || []).forEach((it) => {
+      details.appendChild(el("div", { style: `color:${it.enabled ? "var(--accent)" : "var(--muted)"}` },
+        `${it.enabled ? "✔" : "✘"} ${it.name} · ${it.state}`));
+    });
+  }
+
+  let lastCanManage = null;
+  async function refresh() {
+    try {
+      const data = await api.get("/api/system/autostart");
+      lastCanManage = data.can_manage;
+      paint(data, data.can_manage);
+    } catch (err) {
+      badge.className = "badge bad";
+      badge.textContent = "ошибка";
+      hint.textContent = `Не удалось получить статус: ${err.message || err}`;
+    }
+  }
+
+  input.addEventListener("change", async () => {
+    const want = input.checked;
+    busy = true;
+    input.disabled = true;
+    badge.textContent = "применяю…";
+    try {
+      const res = await api.post("/api/system/autostart", { enabled: want });
+      paint(res.status, lastCanManage);
+      if (res.ok) {
+        toast(want ? "Автозапуск включён" : "Автозапуск выключен", "ok");
+      } else {
+        const failed = (res.results || []).filter((r) => !r.ok).map((r) => `${r.name}: ${r.detail}`);
+        toast(`Автозапуск: ошибки — ${failed.join("; ")}`, "error");
+      }
+    } catch (err) {
+      toast(`Автозапуск: ${err.message || err}`, "error");
+      await refresh();
+    } finally {
+      busy = false;
+      input.disabled = lastCanManage === false;
+    }
+  });
+
+  refresh();
+  return el("section", { class: "card card-full" }, [
+    el("div", { class: "card-header" }, [
+      el("span", { class: "card-title" }, "Автозапуск Адама при загрузке"),
+      el("span", { class: "caps mono dim" }, "system.autostart"),
+    ]),
+    el("div", { class: "card-body col", style: "gap:8px" }, [
+      el("div", { class: "row", style: "gap:12px; align-items:center" }, [sw, badge]),
+      hint,
+      details,
+    ]),
+  ]);
+}
+
 function renderFieldRow(field, value, buildInput) {
   const status = el("span", { class: "badge", style: "font-size:10px; padding:1px 6px" });
   const input = buildInput(field, status);
@@ -928,6 +1007,7 @@ export function mount(target) {
     container.innerHTML = "";
 
     const cardGrid = el("div", { class: "card-grid" });
+    cardGrid.appendChild(buildAutostartCard());
 
     SCHEMA.forEach((group) => {
       let sectionData;
