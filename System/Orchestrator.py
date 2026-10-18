@@ -73,6 +73,7 @@ settings = Settings.load()
 event_log = EventLog(
     settings.data_dir,
     audio_cfg=settings.section("media").get("audio", {}),
+    events_cfg=settings.section("events"),
 )
 metrics_log = MetricsLog(settings.data_dir)
 sessions_log = SessionsLog(settings.data_dir)

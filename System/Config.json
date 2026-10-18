@@ -12,6 +12,17 @@
     ],
     "prompt_trace_max": 50
   },
+  "events": {
+    "jsonl_sample": {
+      "audio_level": 25,
+      "audio_level_eq": 0,
+      "oww_score": 0
+    },
+    "jsonl_dedupe_window_sec": 60,
+    "jsonl_max_mb": 100,
+    "jsonl_backups": 3,
+    "tail_read_kb": 2048
+  },
   "power": {
     "required_mode_name": "MAXN",
     "required_mode_id": 0,
@@ -85,8 +96,7 @@
       "spectrum_ceiling_db": 0.0,
       "spectrum_cadence_hz": 25.0,
       "spectrum_color_yellow_at": 0.6,
-      "spectrum_color_red_at": 0.85,
-      "events_jsonl_sample_audio_level": 5
+      "spectrum_color_red_at": 0.85
     },
     "scene_worker_enabled": false,
     "scene_interval_sec": 4,

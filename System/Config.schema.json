@@ -48,6 +48,46 @@
         }
       }
     },
+    "events": {
+      "type": "object",
+      "description": "Disk policy for data/adam/events.jsonl (System/adam/events.py EventLog + JsonlWritePolicy). Filters ONLY what is written to disk — SSE subscribers and the in-memory recent-events deque still receive every event, so live UI widgets (EQ, OWW meter) keep full cadence. The same policy is applied offline by scripts/adam_events_compact.py. Before this section existed the file grew unbounded to 9 GB, 99% of it audio_level_eq / oww_score / audio_level telemetry plus hundreds of thousands of identical error repeats.",
+      "properties": {
+        "jsonl_sample": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "description": "Per-event-type disk sampler: 0 = never write this type to disk, N > 1 = write every Nth event, absent or 1 = write all (subject to dedupe). Use for high-frequency telemetry streams. audio_level = 25 gives ~1 record/s at 25 Hz spectrum cadence (~1 MB/hour) — no reader uses the on-disk copy (adam_pull_logs goes through the API / in-memory deque), it is kept only as a coarse forensic trace. Replaces media.audio.events_jsonl_sample_audio_level. Set a type to 1 temporarily to capture it for offline analysis (e.g. oww_score while tuning the wake word).",
+          "default": { "audio_level": 25, "audio_level_eq": 0, "oww_score": 0 }
+        },
+        "jsonl_dedupe_window_sec": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3600,
+          "description": "Repeat suppression for unsampled types: an event whose turn_id+payload equal the previous written event of the same type is not written while within this many seconds of it. The next written event of that type carries suppressed_since_last = number of skipped copies, so persistent errors (camera_error, local_mic_error) appear at most once per window with a repeat count. 0 disables dedupe.",
+          "default": 60
+        },
+        "jsonl_max_mb": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Size-based rotation threshold in MB: when events.jsonl reaches it, the file is rotated to events.jsonl.1 (older ones shift to .2, .3 ...). 0 disables rotation (unbounded growth — not recommended). Total disk ceiling is about jsonl_max_mb * (jsonl_backups + 1).",
+          "default": 100
+        },
+        "jsonl_backups": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50,
+          "description": "Number of rotated files kept (events.jsonl.1 .. .N); the oldest is dropped. 0 = on rotation the current file is simply deleted. Readers (log viewer, metrics dashboard, /api/agent/events) use the live events.jsonl only.",
+          "default": 3
+        },
+        "tail_read_kb": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 65536,
+          "description": "How many KB from the end of events.jsonl EventLog.tail() reads when the in-memory deque is empty (e.g. right after restart). Bounded read — previously the whole file was loaded into RAM.",
+          "default": 2048
+        }
+      }
+    },
     "power": {
       "type": "object",
       "description": "Jetson power management gate. Prevents exhibition startup on under-clocked hardware.",
@@ -379,7 +419,7 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 100,
-              "description": "Writing-side sampler for high-frequency audio_level events in data/adam/events.jsonl. N means 'write every Nth event to disk' — at default 5 with 25 Hz spectrum cadence and bands[24] payload, on-disk pressure drops from ~36 MB/hour to ~7 MB/hour. SSE subscribers and the in-memory recent-events deque are NOT affected — every audio_level event is still broadcast at full cadence, so the chat-panel EQ widget keeps its 25 Hz responsiveness. Set to 1 to revert to legacy 1:1 logging (full forensic completeness, no disk-side compression). Set to 25 for maximum compression (~1 Hz effective on-disk cadence). Mitigation for RESEARCH §5/§12 (Phase 21A CONTEXT D-04).",
+              "description": "DEPRECATED — superseded by events.jsonl_sample.audio_level and removed from Config.json; still honoured by EventLog as a fallback when events.jsonl_sample has no audio_level entry. Writing-side sampler for high-frequency audio_level events in data/adam/events.jsonl. N means 'write every Nth event to disk' — at default 5 with 25 Hz spectrum cadence and bands[24] payload, on-disk pressure drops from ~36 MB/hour to ~7 MB/hour. SSE subscribers and the in-memory recent-events deque are NOT affected — every audio_level event is still broadcast at full cadence, so the chat-panel EQ widget keeps its 25 Hz responsiveness. Set to 1 to revert to legacy 1:1 logging (full forensic completeness, no disk-side compression). Set to 25 for maximum compression (~1 Hz effective on-disk cadence). Mitigation for RESEARCH §5/§12 (Phase 21A CONTEXT D-04).",
               "default": 5
             }
           }
