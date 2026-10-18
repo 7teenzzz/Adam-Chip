@@ -97,8 +97,8 @@
             "docker_restart_policy": {
               "type": "string",
               "enum": ["always", "unless-stopped"],
-              "description": "Restart policy applied to docker_containers when autostart is ON. Must match compose.yaml so 'docker compose up' and the switch agree.",
-              "default": "unless-stopped"
+              "description": "Restart policy applied to docker_containers when autostart is ON. Must be 'always': scripts/adam_stop.sh stops the ASR container manually, and 'unless-stopped' never revives a manually stopped container — so ASR would silently stay down after the next boot. Must match compose.yaml so 'docker compose up' and the switch agree.",
+              "default": "always"
             },
             "command_timeout_sec": {
               "type": "integer",

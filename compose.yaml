@@ -54,7 +54,7 @@ services:
       dockerfile: System/Dockerfile.asr
     container_name: adam-asr-whisperx
     network_mode: host
-    restart: unless-stopped
+    restart: always  # must match system.autostart.docker_restart_policy
     runtime: nvidia
     environment:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility

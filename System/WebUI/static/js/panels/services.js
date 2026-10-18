@@ -23,64 +23,6 @@ const SERVICE_META = {
   asr: { label: "ASR (WhisperX)",         unit: "adam-asr-whisperx.service", desc: "Распознавание речи, порт :8095" },
 };
 
-// ── VLM Docker card (не systemd, управляется через Docker API) ──────────
-
-function buildVlmCard() {
-  let busy = false;
-  const statusDot  = el("span", { class: "dot muted" });
-  const statusText = el("span", { class: "muted", text: "загрузка…" });
-  const btnStart   = el("button", { class: "btn btn-sm",           onclick: () => action("start")   }, "▶ Start");
-  const btnStop    = el("button", { class: "btn btn-sm btn-danger", onclick: () => action("stop")    }, "■ Stop");
-
-  async function action(verb) {
-    if (busy) return;
-    busy = true;
-    btnStart.disabled = true;
-    btnStop.disabled  = true;
-    statusText.textContent = verb === "start" ? "запуск…" : "остановка…";
-    try {
-      await api.post(`/api/live_vlm/${verb}`);
-      toast(`VLM: ${verb}`, "ok");
-    } catch (err) {
-      toast(`VLM: ${err.message || err}`, "error");
-    } finally {
-      busy = false;
-      await refresh();
-    }
-  }
-
-  async function refresh() {
-    try {
-      const data = await api.get("/api/live_vlm/status");
-      const running = !!data.running;
-      statusDot.className  = running ? "dot ok" : "dot bad";
-      statusText.textContent = running ? "running" : "stopped";
-      btnStart.disabled = running || busy;
-      btnStop.disabled  = !running || busy;
-    } catch {
-      statusDot.className = "dot bad";
-      statusText.textContent = "нет связи";
-    }
-  }
-
-  const card = el("div", { class: "card" }, [
-    el("div", { class: "card-header" }, [
-      el("div", { class: "row", style: "gap:8px;align-items:center" }, [
-        statusDot,
-        el("span", { class: "card-title", text: "VLM (VILA1.5-3b)" }),
-        statusText,
-      ]),
-    ]),
-    el("div", { class: "card-body" }, [
-      el("div", { class: "muted", style: "margin-bottom:10px;font-size:12px", text: "adam-live-vlm (Docker)" }),
-      el("div", { class: "muted", style: "margin-bottom:12px", text: "Описание сцены через камеру, порт :8084" }),
-      el("div", { class: "row", style: "gap:8px" }, [btnStart, btnStop]),
-    ]),
-  ]);
-
-  return { card, refresh };
-}
-
 const STATE_STYLE = {
   active:       { dot: "ok",    text: "active" },
   activating:   { dot: "warn",  text: "activating" },
@@ -176,12 +118,11 @@ export function mount(root) {
   const cards = Object.entries(SERVICE_META).map(([name, meta]) =>
     buildServiceCard(name, meta)
   );
-  const vlmCard = buildVlmCard();
 
   const refreshBtn = el("button", { class: "btn btn-sm", style: "margin-bottom:16px" }, "↺ Обновить");
 
   async function refreshAll() {
-    await Promise.all([...cards.map((c) => c.refresh()), vlmCard.refresh()]);
+    await Promise.all(cards.map((c) => c.refresh()));
   }
 
   refreshBtn.addEventListener("click", refreshAll);
@@ -193,7 +134,6 @@ export function mount(root) {
     ])
   );
   cards.forEach((c) => root.appendChild(c.card));
-  root.appendChild(vlmCard.card);
 
   refreshAll();
   const interval = setInterval(refreshAll, 5000);

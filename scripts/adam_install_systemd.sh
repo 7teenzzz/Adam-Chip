@@ -113,18 +113,15 @@ install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-orchestrator.service" /etc/syst
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-tts-silero.service" /etc/systemd/system/adam-tts-silero.service
 # NOTE: adam-asr-whisperx.service (native) is NOT installed — ASR runs via Docker.
 # The native unit uses pip ctranslate2 (CPU-only on aarch64) and blocks port 8095,
-# preventing the Docker container (dustynv/faster-whisper, CUDA ctranslate2) from binding.
+# preventing the Docker container (built FROM dustynv/l4t-pytorch, CUDA ctranslate2) from binding.
 # Canonical start: docker compose up -d adam-asr-whisperx
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-llm.service" /etc/systemd/system/adam-llm.service
-install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-vlm.service" /etc/systemd/system/adam-vlm.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-logviewer.service" /etc/systemd/system/adam-logviewer.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/adam-exhibition.target" /etc/systemd/system/adam-exhibition.target
 
 ensure_env_line "ADAM_LOG_VIEWER_PORT" "8083"
 
 systemctl daemon-reload
-# adam-vlm НЕ авто-стартует: VILA Docker ест ~5.6 GB и OOM-ит llama.cpp на 16 GB
-# Jetson после ребута (Phase 30 durability). Вернуть: sudo systemctl enable --now adam-vlm.service
 # Older installs linked the logviewer into adam-exhibition.target.wants; it is
 # now WantedBy=multi-user.target and toggled with the rest of the autostart set.
 rm -f /etc/systemd/system/adam-exhibition.target.wants/adam-logviewer.service
@@ -135,7 +132,6 @@ if [[ "${AUTOSTART_WAS_OFF}" == true ]]; then
 else
   systemctl enable "${AUTOSTART_UNITS[@]}"
 fi
-systemctl disable adam-vlm.service 2>/dev/null || true
 
 # NOPASSWD rules for the autostart switch (web Settings toggle + TUI). Exact
 # commands only — no wildcards, so the rule can't enable arbitrary units.

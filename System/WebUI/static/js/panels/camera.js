@@ -31,14 +31,10 @@ export function mount(target) {
   const espBody = el("div", { id: "cam-esp-body" });
   const espRefresh = el("button", { class: "btn btn-ghost", onclick: () => loadEsp(true) }, "Перепроверить");
 
-  // ----- Jetson card (snapshot OR live VLM viewer) -----
+  // ----- Jetson card (snapshot) -----
   const jetStatus = el("span", { class: "caps", id: "cam-jet-status", style: "color:var(--muted)" }, "проверка…");
   const jetBody = el("div", { id: "cam-jet-body" });
   const jetRefresh = el("button", { class: "btn btn-ghost", onclick: () => loadJetson(true) }, "Перепроверить");
-  const openLiveVlmBtn = el("a", {
-    class: "btn btn-ghost", id: "cam-vlm-open", style: "display:none",
-  }, "Открыть Live VLM →");
-
   // ----- Scene description from VLM -----
   const sceneText = el("div", { id: "cam-scene-text", style: "white-space:pre-wrap; line-height:1.5" }, "Сцена пока не описана.");
   const sceneMeta = el("span", { class: "caps mono", id: "cam-scene-meta", style: "color:var(--muted)" }, "—");
@@ -55,7 +51,7 @@ export function mount(target) {
       el("section", { class: "card" }, [
         el("div", { class: "card-header" }, [
           el("span", { class: "card-title" }, "Jetson camera"),
-          jetStatus, openLiveVlmBtn, jetRefresh,
+          jetStatus, jetRefresh,
         ]),
         el("div", { class: "card-body" }, [jetBody]),
       ]),
@@ -126,7 +122,7 @@ export function mount(target) {
     }
   }
 
-  // ===== Jetson camera (snapshot or Live VLM viewer) =========================
+  // ===== Jetson camera (snapshot) =========================
   let jetTimer = null;
   let jetInflight = false;
 
@@ -139,29 +135,6 @@ export function mount(target) {
     jetStatus.textContent = "проверка…";
     jetStatus.style.color = "var(--muted)";
     jetBody.innerHTML = "";
-    openLiveVlmBtn.style.display = "none";
-
-    let vlm = null;
-    try { vlm = await api.get("/api/live_vlm/status"); } catch (_) {}
-
-    if (vlm?.running) {
-      // Live VLM holds /dev/video0 exclusively; show viewer link instead of snapshot.
-      const host = window.location.hostname || "127.0.0.1";
-      const viewerUrl = `https://${host}:8050/`;
-      openLiveVlmBtn.href = viewerUrl;
-      openLiveVlmBtn.target = "_blank";
-      openLiveVlmBtn.rel = "noopener";
-      openLiveVlmBtn.style.display = "";
-      jetStatus.textContent = "Live VLM активна";
-      jetStatus.style.color = "var(--accent)";
-      jetBody.appendChild(placeholder(
-        `Камера занята контейнером adam-live-vlm.\nСтрим с подписями: ${viewerUrl}\n(self-signed cert — браузер попросит подтвердить)`,
-        "warn",
-      ));
-      return;
-    }
-
-    // VLM не запущен — пробуем snapshot.
     refreshSnapshot(force);
     jetTimer = setInterval(refreshSnapshot, 1500);
   }

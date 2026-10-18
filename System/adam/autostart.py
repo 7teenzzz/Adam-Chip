@@ -39,7 +39,7 @@ DEFAULTS: dict[str, Any] = {
         "adam-logviewer.service",
     ],
     "docker_containers": ["adam-asr-whisperx"],
-    "docker_restart_policy": "unless-stopped",
+    "docker_restart_policy": "always",
     "command_timeout_sec": 15,
 }
 

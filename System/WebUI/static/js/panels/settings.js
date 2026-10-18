@@ -190,8 +190,8 @@ const SCHEMA = [
     source: "config", section: "services.asr", title: "ASR · WhisperX",
     fields: [
       { key: "model", label: "Модель WhisperX", type: "select",
-        choices: ["tiny", "base", "small", "medium", "large-v2", "large-v3"],
-        hint: "tiny/base — быстро, точность низкая · small — баланс · medium — рекомендуется · large-v2/v3 — максимум точности, 10+ ГБ VRAM" },
+        choices: ["small"],
+        hint: "На Jetson установлена только small (баланс скорости и точности). Другие размеры удалены для экономии диска" },
       { key: "reply_window_sec", label: "Reply window — soft (с)", type: "number",
         hint: "3.75 · soft-окно после ответа Адама — зритель может говорить без wake word; если речи нет → STANDBY",
         min: 1, max: 30, step: 0.25 },
